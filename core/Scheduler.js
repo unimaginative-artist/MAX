@@ -85,8 +85,13 @@ export class Scheduler extends EventEmitter {
     initialize() {
         this._loadState();
 
+        const now = Date.now();
         for (const job of BUILT_IN_JOBS) {
             this.addJob(job);
+            // Don't fire on boot — wait for the full interval first
+            if (!this._lastRun[job.id]) {
+                this._lastRun[job.id] = now;
+            }
         }
 
         console.log(`[Scheduler] ✅ ${this.jobs.size} jobs registered`);
@@ -183,7 +188,7 @@ export class Scheduler extends EventEmitter {
             tier:         'fast'
         });
 
-        this.max?.memory?.store('scheduled', { job: job.label, result }, { importance: 0.7 });
+        this.max?.memory?.remember(`Scheduled job "${job.label}": ${result.slice(0, 200)}`, {}, { importance: 0.7 });
         this.max?.curiosity?.onTaskComplete({ label: job.label }, result);
 
         this.emit('insight', {
@@ -206,7 +211,7 @@ export class Scheduler extends EventEmitter {
             tier:         'fast'
         });
 
-        this.max?.memory?.store('curiosity', { task: task.label, result }, { importance: 0.5 });
+        this.max?.memory?.remember(`Curiosity: "${task.label}": ${result.slice(0, 200)}`, {}, { importance: 0.5 });
         this.max?.drive?.onTaskExecuted();
         this.max?.curiosity?.onTaskComplete(task, result);
 
