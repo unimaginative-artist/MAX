@@ -50,6 +50,7 @@ const INNER     = BOX_WIDTH - 4;
 
 const _insights = [];   // rolling store of last 20 insights
 let   _insightId = 0;
+let   _rl        = null; // set by chatMode so printInsight can redraw the prompt
 
 function stripMarkdown(text) {
     return text
@@ -105,11 +106,17 @@ function printInsight(insight) {
     _insights.push(entry);
     if (_insights.length > 20) _insights.shift();
 
-    // Trim label for the collapsed line
     const label = insight.label.replace(/\n.*/s, '').slice(0, 50);
-    process.stdout.write('\n');
+
+    // Clear readline's current prompt line before writing, then redraw it after.
+    // Without this, async output misaligns readline's cursor on Windows and
+    // the user's next keystrokes get swallowed or ignored.
+    if (_rl) {
+        readline.clearLine(process.stdout, 0);
+        readline.cursorTo(process.stdout, 0);
+    }
     console.log(`  💡 [${insight.source}] ${label}  — /expand ${id}`);
-    process.stdout.write('YOU: ');
+    if (_rl) _rl.prompt(true);
 }
 
 function expandInsight(arg) {
@@ -144,7 +151,8 @@ function startSpinner(label = 'thinking') {
 
 // ─── Chat mode — interactive REPL ────────────────────────────────────────
 async function chatMode(max, opts) {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: 'YOU: ' });
+    _rl = rl;   // give printInsight access so it can clear + redraw the prompt
 
     // ── Wire proactive insights to terminal output ──
     max.heartbeat.on('insight', printInsight);
