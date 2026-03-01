@@ -1,5 +1,9 @@
 # MAX — Autonomous Engineering Agent
 
+<p align="center">
+  <img src="max.gif" alt="MAX" width="400"/>
+</p>
+
 > "M-m-max Headroom. And I'm... I'm always on."
 
 MAX is a standalone autonomous agent built for engineering work. He has drive (tension builds when idle — he wants to act), a heartbeat (background curiosity and self-monitoring), an engineering swarm (parallel workers for big tasks), adversarial debate (he argues both sides before deciding), and six specialist personas he switches between depending on what you need.
