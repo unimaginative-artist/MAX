@@ -179,7 +179,8 @@ export class Scheduler extends EventEmitter {
         const result = await this.max.brain.think(job.prompt, {
             systemPrompt: 'You are MAX, an autonomous AI agent running a scheduled background task.',
             temperature:  0.8,
-            maxTokens:    768
+            maxTokens:    768,
+            tier:         'fast'
         });
 
         this.max?.memory?.store('scheduled', { job: job.label, result }, { importance: 0.7 });
@@ -201,7 +202,8 @@ export class Scheduler extends EventEmitter {
         const result = await this.max.brain.think(task.prompt, {
             systemPrompt: 'You are MAX running an autonomous curiosity exploration. Be insightful and specific.',
             temperature:  0.85,
-            maxTokens:    512
+            maxTokens:    512,
+            tier:         'fast'
         });
 
         this.max?.memory?.store('curiosity', { task: task.label, result }, { importance: 0.5 });
@@ -268,7 +270,8 @@ Be direct. Max Headroom style.`;
         const result = await this.max.brain.think(prompt, {
             systemPrompt: this.max.profile.buildContextBlock(),
             temperature:  0.6,
-            maxTokens:    256
+            maxTokens:    256,
+            tier:         'fast'
         });
 
         this.emit('insight', {

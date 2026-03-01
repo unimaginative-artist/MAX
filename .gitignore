@@ -9,6 +9,9 @@ config/api-keys.env
 # Runtime data
 .max/
 
+# Generated tools (created at runtime by ToolCreator)
+tools/generated/
+
 # Logs
 *.log
 

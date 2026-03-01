@@ -85,6 +85,13 @@ export class MaxMemory {
             CREATE INDEX IF NOT EXISTS idx_importance ON memories(importance DESC);
             CREATE INDEX IF NOT EXISTS idx_accessed   ON memories(accessed_at DESC);
 
+            -- FTS5 virtual table for BM25 full-text search (porter stemmer for better matching)
+            CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                id UNINDEXED,
+                content,
+                tokenize='porter unicode61'
+            );
+
             CREATE TABLE IF NOT EXISTS conversations (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 role       TEXT    NOT NULL,
@@ -129,6 +136,10 @@ export class MaxMemory {
             VALUES (?, ?, ?, ?, ?, ?, ?)
         `).run(id, type, content, JSON.stringify(meta), now, now, importance);
 
+        // FTS5 index (delete old entry first to handle OR REPLACE)
+        this._db.prepare('DELETE FROM memories_fts WHERE id = ?').run(id);
+        this._db.prepare('INSERT INTO memories_fts (id, content) VALUES (?, ?)').run(id, content);
+
         // Warm tier — embed async, don't block
         this._embedAndStore(id, content);
 
@@ -153,66 +164,128 @@ export class MaxMemory {
     async recall(query, { topK = 8, type = null } = {}) {
         if (!query?.trim()) return [];
 
-        // 1. Try warm tier (vector search)
-        if (this.embedder._ready && this._vectors.size > 0) {
-            const results = await this._vectorSearch(query, topK, type);
-            if (results.length > 0) {
-                this.metrics.warm.hits++;
-                this._touchMany(results.map(r => r.id));
-                return results;
-            }
-            this.metrics.warm.misses++;
+        // Run BM25 and vector search in parallel, then fuse scores
+        const [bm25Results, vectorScores] = await Promise.all([
+            this._bm25Search(query, topK * 2, type),
+            this._vectorScores(query)
+        ]);
+
+        if (bm25Results.length === 0 && vectorScores.size === 0) return [];
+
+        // Collect all candidate IDs
+        const candidateIds = new Set([
+            ...bm25Results.map(r => r.id),
+            ...[...vectorScores.keys()].slice(0, topK * 2)
+        ]);
+
+        // Hydrate any IDs not already in bm25Results
+        const hydrated = new Map(bm25Results.map(r => [r.id, r]));
+        const missing  = [...candidateIds].filter(id => !hydrated.has(id));
+        if (missing.length > 0) {
+            const placeholders = missing.map(() => '?').join(',');
+            let rows = this._db.prepare(
+                `SELECT * FROM memories WHERE id IN (${placeholders})`
+            ).all(...missing);
+            if (type) rows = rows.filter(r => r.type === type);
+            for (const r of rows) hydrated.set(r.id, { ...r, metadata: this._parseMeta(r.metadata), bm25: 0 });
         }
 
-        // 2. Fall back to cold tier keyword search
+        // Normalize BM25 scores 0→1 (bm25Results already has .bm25 in range 0-1)
+        // Fuse: 55% vector + 45% BM25 (vector wins when embedder is ready)
+        const embeddingWeight = this.embedder._ready ? 0.55 : 0.0;
+        const bm25Weight      = 1 - embeddingWeight;
+
+        const fused = [];
+        for (const [id, row] of hydrated) {
+            const vecScore  = vectorScores.get(id) || 0;
+            const bm25Score = row.bm25 || 0;
+            const combined  = embeddingWeight * vecScore + bm25Weight * bm25Score;
+            // Boost by importance slightly
+            const final = combined * (0.85 + 0.15 * (row.importance || 0.5));
+            fused.push({ ...row, score: final, vecScore, bm25Score });
+        }
+
+        fused.sort((a, b) => b.score - a.score);
+        const top = fused.slice(0, topK);
+
+        this._touchMany(top.map(r => r.id));
+        this.metrics.warm.hits += vectorScores.size > 0 ? 1 : 0;
         this.metrics.cold.hits++;
-        return this._keywordSearch(query, topK, type);
+        return top;
     }
 
-    async _vectorSearch(query, topK, type) {
-        const queryVec = await this.embedder.embed(query);
-        if (!queryVec) return [];
+    // ── BM25 via SQLite FTS5 ──────────────────────────────────────────────
+    _bm25Search(query, limit, type) {
+        try {
+            // FTS5 bm25() returns negative values — negate and normalize
+            const ftsQuery = query.trim().replace(/['"*]/g, ' ').trim();
+            if (!ftsQuery) return [];
 
-        // Score all vectors
-        const scored = [];
-        for (const [id, vec] of this._vectors) {
-            const score = Embedder.cosine(queryVec, vec);
-            if (score > 0.3) scored.push({ id, score });
+            let rows;
+            if (type) {
+                rows = this._db.prepare(`
+                    SELECT m.*, (-bm25(memories_fts)) as raw_bm25
+                    FROM memories_fts
+                    JOIN memories m ON memories_fts.id = m.id
+                    WHERE memories_fts MATCH ? AND m.type = ?
+                    ORDER BY raw_bm25 DESC
+                    LIMIT ?
+                `).all(ftsQuery, type, limit);
+            } else {
+                rows = this._db.prepare(`
+                    SELECT m.*, (-bm25(memories_fts)) as raw_bm25
+                    FROM memories_fts
+                    JOIN memories m ON memories_fts.id = m.id
+                    WHERE memories_fts MATCH ?
+                    ORDER BY raw_bm25 DESC
+                    LIMIT ?
+                `).all(ftsQuery, limit);
+            }
+
+            if (rows.length === 0) return [];
+
+            // Normalize BM25 to 0-1
+            const maxBm25 = Math.max(...rows.map(r => r.raw_bm25), 1);
+            return rows.map(r => ({
+                ...r,
+                metadata: this._parseMeta(r.metadata),
+                bm25: r.raw_bm25 / maxBm25
+            }));
+        } catch {
+            // FTS query might be invalid — fall back to LIKE
+            return this._likeSearch(query, limit, type);
         }
-
-        scored.sort((a, b) => b.score - a.score);
-        const topIds = scored.slice(0, topK).map(s => s.id);
-        if (topIds.length === 0) return [];
-
-        // Hydrate from cold tier
-        const placeholders = topIds.map(() => '?').join(',');
-        let rows = this._db.prepare(
-            `SELECT * FROM memories WHERE id IN (${placeholders})`
-        ).all(...topIds);
-
-        if (type) rows = rows.filter(r => r.type === type);
-
-        return rows.map(r => ({
-            ...r,
-            metadata: this._parseMeta(r.metadata),
-            score:    scored.find(s => s.id === r.id)?.score || 0
-        })).sort((a, b) => b.score - a.score);
     }
 
-    _keywordSearch(query, topK, type) {
+    // ── Vector cosine scores (returns Map id→score) ───────────────────────
+    async _vectorScores(query) {
+        const scores = new Map();
+        if (!this.embedder._ready || this._vectors.size === 0) return scores;
+
+        try {
+            const queryVec = await this.embedder.embed(query);
+            if (!queryVec) return scores;
+
+            for (const [id, vec] of this._vectors) {
+                const s = Embedder.cosine(queryVec, vec);
+                if (s > 0.25) scores.set(id, s);
+            }
+        } catch { /* non-fatal */ }
+
+        return scores;
+    }
+
+    // ── LIKE fallback (when FTS query is malformed) ───────────────────────
+    _likeSearch(query, limit, type) {
         const q = `%${query.slice(0, 100)}%`;
-        let sql = 'SELECT * FROM memories WHERE content LIKE ? ORDER BY importance DESC, accessed_at DESC LIMIT ?';
-        const params = [q, topK];
-
-        if (type) {
-            sql = 'SELECT * FROM memories WHERE content LIKE ? AND type = ? ORDER BY importance DESC, accessed_at DESC LIMIT ?';
-            params.splice(1, 0, type);
-        }
-
+        const sql = type
+            ? 'SELECT * FROM memories WHERE content LIKE ? AND type = ? ORDER BY importance DESC, accessed_at DESC LIMIT ?'
+            : 'SELECT * FROM memories WHERE content LIKE ? ORDER BY importance DESC, accessed_at DESC LIMIT ?';
+        const params = type ? [q, type, limit] : [q, limit];
         return this._db.prepare(sql).all(...params).map(r => ({
             ...r,
             metadata: this._parseMeta(r.metadata),
-            score: 0
+            bm25: 0
         }));
     }
 
@@ -327,6 +400,7 @@ export class MaxMemory {
         this._hot.delete(id);
         this._vectors.delete(id);
         this._db.prepare('DELETE FROM memories WHERE id = ?').run(id);
+        this._db.prepare('DELETE FROM memories_fts WHERE id = ?').run(id);
         this._vectorsDirty = true;
     }
 

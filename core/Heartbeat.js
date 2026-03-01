@@ -81,8 +81,27 @@ export class Heartbeat extends EventEmitter {
 
     async _runCycle() {
         const drive = this.max?.drive;
+        const driveStatus = drive?.getStatus?.();
 
-        // Ask curiosity engine for something to explore
+        // ── AgentLoop gets priority when tension is high ──────────────────
+        // Tension above 40% = MAX is feeling the urge to DO something
+        const tensionHigh = driveStatus && driveStatus.tension > 0.4;
+
+        if (tensionHigh && this.max?.agentLoop) {
+            console.log(`[Heartbeat] ⚡ Tension ${(driveStatus.tension * 100).toFixed(0)}% — running AgentLoop`);
+            try {
+                const result = await this.max.agentLoop.runCycle();
+                if (result) {
+                    this.stats.tasksExecuted++;
+                    this.stats.lastTask = `goal:${result.goal}`;
+                }
+            } catch (err) {
+                console.error('[Heartbeat] AgentLoop error:', err.message);
+            }
+            return; // AgentLoop ran — skip curiosity this tick
+        }
+
+        // ── Otherwise run a curiosity task ────────────────────────────────
         const curiosityTask = this.max?.curiosity?.getNextTask?.();
 
         if (curiosityTask) {
@@ -93,15 +112,23 @@ export class Heartbeat extends EventEmitter {
             drive?.onTaskExecuted();
             this.emit('task', curiosityTask);
 
-            // Execute via MAX's brain if available
             if (this.max?.brain?._ready && curiosityTask.prompt) {
                 try {
                     const result = await this.max.brain.think(curiosityTask.prompt, {
                         systemPrompt: 'You are MAX, an autonomous AI agent. Think concisely and return useful insights.',
-                        maxTokens: 512
+                        maxTokens: 512,
+                        tier: 'fast'
                     });
-                    this.max?.memory?.store?.('curiosity', { task: curiosityTask.label, result, ts: Date.now() });
-                    this.emit('taskComplete', { task: curiosityTask, result });
+                    this.max?.memory?.remember?.(
+                        JSON.stringify({ task: curiosityTask.label, result, ts: Date.now() }),
+                        { type: 'curiosity' },
+                        { type: 'curiosity', importance: 0.5 }
+                    );
+                    this.emit('insight', {
+                        source: 'curiosity',
+                        label:  `🔍 Explored: ${curiosityTask.label}`,
+                        result: typeof result === 'string' ? result : JSON.stringify(result)
+                    });
                 } catch (err) {
                     console.error('[Heartbeat] Brain error during curiosity task:', err.message);
                 }

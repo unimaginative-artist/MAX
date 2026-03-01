@@ -4,11 +4,19 @@
 // Max Headroom energy. Does not sugarcoat.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import path                   from 'path';
+import { fileURLToPath }      from 'url';
 import { Brain }              from './Brain.js';
 import { DriveSystem }        from './DriveSystem.js';
 import { Heartbeat }          from './Heartbeat.js';
 import { CuriosityEngine }    from './CuriosityEngine.js';
 import { Scheduler }          from './Scheduler.js';
+import { OutcomeTracker }     from './OutcomeTracker.js';
+import { ReasoningChamber }   from './ReasoningChamber.js';
+import { GoalEngine }         from './GoalEngine.js';
+import { AgentLoop }          from './AgentLoop.js';
+import { ToolCreator }        from './ToolCreator.js';
+import { SelfCodeInspector }  from './SelfCodeInspector.js';
 import { PersonaEngine }      from '../personas/PersonaEngine.js';
 import { ToolRegistry }       from '../tools/ToolRegistry.js';
 import { FileTools }          from '../tools/FileTools.js';
@@ -19,7 +27,10 @@ import { ApiTool }            from '../tools/ApiTool.js';
 import { SwarmCoordinator }   from '../swarm/SwarmCoordinator.js';
 import { DebateEngine }       from '../debate/DebateEngine.js';
 import { MaxMemory }          from '../memory/MaxMemory.js';
+import { KnowledgeBase }      from '../memory/KnowledgeBase.js';
 import { UserProfile }        from '../onboarding/UserProfile.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export class MAX {
     constructor(config = {}) {
@@ -33,6 +44,7 @@ export class MAX {
         this.curiosity = new CuriosityEngine(config.curiosity);
         this.persona   = new PersonaEngine();
         this.memory    = new MaxMemory(config.memory);
+        this.kb        = new KnowledgeBase({ dbPath: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.max', 'knowledge.db') });
         this.profile   = new UserProfile();
 
         // Tools
@@ -43,6 +55,14 @@ export class MAX {
         this.debate    = null;
         this.heartbeat = null;
         this.scheduler = null;
+
+        // Autonomous systems
+        this.outcomes     = null;
+        this.reasoning    = null;
+        this.goals        = null;
+        this.agentLoop    = null;
+        this.toolCreator  = null;
+        this.selfInspector = null;
 
         // Conversation context window
         this._context      = [];
@@ -57,6 +77,7 @@ export class MAX {
 
         // Memory (async — loads vectors + tries to init embedder)
         await this.memory.initialize();
+        await this.kb.initialize();
 
         // User profile — load from .max/user.md and .max/tasks.md
         this.profile.load();
@@ -91,6 +112,38 @@ export class MAX {
             this.heartbeat.emit('insight', insight);
         });
 
+        // Autonomous systems
+        const dataDir  = path.join(__dirname, '..', '.max');
+        this.outcomes  = new OutcomeTracker({ storageDir: path.join(dataDir, 'outcomes') });
+        await this.outcomes.initialize();
+
+        this.reasoning = new ReasoningChamber(this.brain);
+
+        this.goals     = new GoalEngine(this.brain, this.outcomes);
+        this.goals.initialize();
+
+        this.agentLoop = new AgentLoop(this, this.config.agentLoop);
+
+        // Route AgentLoop events through the heartbeat so the launcher's one listener handles everything
+        this.agentLoop.on('insight',        (i) => this.heartbeat.emit('insight', i));
+        this.agentLoop.on('approvalNeeded', (a) => this.heartbeat.emit('approvalNeeded', a));
+
+        // ToolCreator — MAX writes new tools at runtime
+        this.toolCreator = new ToolCreator(this.brain, this.tools);
+        await this.toolCreator.reloadSaved();  // reload any tools generated in past sessions
+
+        // SelfCodeInspector — MAX inspects his own source and queues improvements
+        this.selfInspector = new SelfCodeInspector(this.goals);
+        // Run first inspection in background — don't block boot
+        setTimeout(() => {
+            this.selfInspector.inspect().then(() => {
+                const queued = this.selfInspector.queueGoals(2);
+                if (queued.length > 0) {
+                    console.log(`[MAX] 🔍 Self-inspection queued ${queued.length} improvement goal(s)`);
+                }
+            }).catch(() => {});
+        }, 5000);
+
         this._ready = true;
 
         const status = this.brain.getStatus();
@@ -110,10 +163,10 @@ export class MAX {
     async think(userMessage, options = {}) {
         if (!this._ready) throw new Error('MAX not initialized');
 
-        // Auto-select persona based on message
+        // Auto-select persona based on message content + internal drive state
         const selectedPersona = options.persona
             ? this.persona.switchTo(options.persona)
-            : this.persona.selectForTask(userMessage);
+            : this.persona.selectForTask(userMessage, this.drive.getStatus());
 
         // Build conversation history
         this._context.push({ role: 'user', content: userMessage });
@@ -131,13 +184,19 @@ export class MAX {
             + this.memory.getContextString()
             + (options.includeTools ? this.tools.buildManifest() : '');
 
-        // Pull semantically relevant past memories and inject
-        const relevantMemories = await this.memory.recall(userMessage, { topK: 4 });
+        // Pull relevant episodic memories + KB chunks in parallel
+        const [relevantMemories, kbChunks] = await Promise.all([
+            this.memory.recall(userMessage, { topK: 4 }),
+            this.kb.query(userMessage, { topK: 5, brain: this.brain })
+        ]);
+
         const memoryContext = relevantMemories.length > 0
             ? '\n\n## Relevant from memory\n' + relevantMemories
                 .map(m => `- ${m.content.slice(0, 200)}`)
                 .join('\n')
             : '';
+
+        const kbContext = this.kb.formatForPrompt(kbChunks, 3000);
 
         // Build full prompt with history
         const historyText = this._context
@@ -147,7 +206,7 @@ export class MAX {
 
         // Think
         const response = await this.brain.think(historyText, {
-            systemPrompt: systemPrompt + memoryContext,
+            systemPrompt: systemPrompt + memoryContext + kbContext,
             temperature: options.temperature ?? 0.7,
             maxTokens:   options.maxTokens   ?? 2048
         });
@@ -159,6 +218,12 @@ export class MAX {
         this._context.push({ role: 'assistant', content: processedResponse });
         this.memory.addConversation('user',      userMessage,       selectedPersona.id);
         this.memory.addConversation('assistant', processedResponse, selectedPersona.id);
+
+        // Pre-compaction flush — before context window fills, extract key facts to permanent storage
+        // This prevents silent memory loss when old turns get truncated
+        if (this._context.length >= this._contextLimit * 1.6) {
+            this._flushMemories().catch(() => {});
+        }
 
         // After responding, queue a follow-up curiosity task from this topic
         this._queueFollowUpCuriosity(userMessage);
@@ -241,11 +306,58 @@ Think deeper about the engineering implications. What are edge cases, gotchas, o
         const drive     = this.drive.getStatus();
         const curiosity = this.curiosity.getStatus();
         const memory    = this.memory.getStats();
+        const goals     = this.goals?.getStatus();
+        const outcomes  = this.outcomes?.getStats();
 
-        return `\n\n## Your current state
+        let state = `\n\n## Your current state
 Tension: ${(drive.tension * 100).toFixed(0)}% | Satisfaction: ${(drive.satisfaction * 100).toFixed(0)}% | Goals completed: ${drive.goalsCompleted}
 Curiosity queue: ${curiosity.queueDepth} | Topics explored: ${curiosity.topicsExplored}
 Memory: ${memory.totalMemories} stored facts | ${memory.conversationTurns} conversation turns`;
+
+        if (goals) {
+            state += `\nActive goals: ${goals.active} | Completed: ${goals.completed}`;
+        }
+        if (outcomes && outcomes.total > 0) {
+            const rate = outcomes.total > 0 ? ((outcomes.success / outcomes.total) * 100).toFixed(0) : 'n/a';
+            state += ` | Action success rate: ${rate}%`;
+        }
+        return state;
+    }
+
+    // ─── Pre-compaction memory flush ──────────────────────────────────────
+    // Called when context is 80% full. Silently extracts key facts into
+    // permanent memory so they survive the upcoming context truncation.
+    async _flushMemories() {
+        if (!this.brain._ready) return;
+        const recent = this._context.slice(-8)
+            .map(m => `${m.role === 'user' ? 'USER' : 'MAX'}: ${m.content.slice(0, 300)}`)
+            .join('\n\n');
+
+        try {
+            const facts = await this.brain.think(
+                `From this conversation excerpt, extract 3-5 specific facts worth remembering long-term.
+Focus on: decisions made, things learned, user preferences revealed, problems solved.
+Return ONLY a JSON array of strings: ["fact1", "fact2", ...]
+
+CONVERSATION:
+${recent}`,
+                { temperature: 0.2, maxTokens: 400, tier: 'fast' }
+            );
+
+            const match = facts.match(/\[[\s\S]*?\]/);
+            if (!match) return;
+
+            const extracted = JSON.parse(match[0]);
+            for (const fact of extracted.slice(0, 5)) {
+                if (typeof fact === 'string' && fact.length > 10) {
+                    await this.memory.remember(fact, { source: 'compaction_flush' }, {
+                        type: 'core_memory',
+                        importance: 0.8
+                    });
+                }
+            }
+            console.log(`[MAX] 💾 Compaction flush: saved ${extracted.length} facts before context truncation`);
+        } catch { /* non-fatal */ }
     }
 
     clearContext() {
@@ -264,7 +376,14 @@ Memory: ${memory.totalMemories} stored facts | ${memory.conversationTurns} conve
             profile:    this.profile.getStats(),
             swarm:      this.swarm?.getStatus(),
             heartbeat:  this.heartbeat?.getStatus(),
-            scheduler:  this.scheduler?.getStatus()
+            scheduler:  this.scheduler?.getStatus(),
+            goals:        this.goals?.getStatus(),
+            agentLoop:    this.agentLoop?.getStatus(),
+            outcomes:     this.outcomes?.getStats(),
+            reasoning:    this.reasoning?.getStats(),
+            toolCreator:   this.toolCreator?.getStatus(),
+            selfInspector: this.selfInspector?.getStatus(),
+            kb:            this.kb?.getStatus()
         };
     }
 }

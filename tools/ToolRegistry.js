@@ -13,9 +13,8 @@ export class ToolRegistry {
         this._tools.set(tool.name, tool);
     }
 
-    get(name) {
-        return this._tools.get(name);
-    }
+    get(name)  { return this._tools.get(name); }
+    has(name)  { return this._tools.has(name); }
 
     list() {
         return [...this._tools.values()].map(t => ({

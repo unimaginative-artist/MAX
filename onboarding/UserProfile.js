@@ -4,8 +4,9 @@
 // The user can edit these files directly — MAX picks up the changes.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import fs   from 'fs';
-import path from 'path';
+import fs                       from 'fs';
+import path                     from 'path';
+import { COMMUNICATION_STYLES } from './FirstRun.js';
 
 const DATA_DIR  = path.join(process.cwd(), '.max');
 const USER_FILE = path.join(DATA_DIR, 'user.md');
@@ -13,10 +14,11 @@ const TASK_FILE = path.join(DATA_DIR, 'tasks.md');
 
 export class UserProfile {
     constructor() {
-        this._user  = null;
-        this._tasks = null;
-        this._name  = 'User';
-        this._lastRead = 0;
+        this._user      = null;
+        this._tasks     = null;
+        this._name      = 'User';
+        this._styleKey  = 'chill';
+        this._lastRead  = 0;
     }
 
     // ─── Load / reload files from disk ───────────────────────────────────
@@ -24,9 +26,10 @@ export class UserProfile {
         try {
             if (fs.existsSync(USER_FILE)) {
                 this._user = fs.readFileSync(USER_FILE, 'utf8');
-                // Extract name for use elsewhere
-                const nameMatch = this._user.match(/\*\*Name:\*\*\s*(.+)/);
-                if (nameMatch) this._name = nameMatch[1].trim();
+                const nameMatch  = this._user.match(/\*\*Name:\*\*\s*(.+)/);
+                const styleMatch = this._user.match(/\*\*Communication Style:\*\*\s*(.+)/);
+                if (nameMatch)  this._name     = nameMatch[1].trim();
+                if (styleMatch) this._styleKey = styleMatch[1].trim().toLowerCase();
             }
         } catch { /* non-fatal */ }
 
@@ -63,27 +66,34 @@ export class UserProfile {
         const parts = ['\n\n## Who you\'re working with'];
 
         if (this._user) {
-            // Pull out the most useful sections — don't dump the whole file
+            // Pull out the most useful fields — skip the style line (handled separately below)
             const lines = this._user.split('\n').filter(l => l.trim());
             const relevant = lines.filter(l =>
-                l.startsWith('**') ||
+                (l.startsWith('**') && !l.includes('Communication Style')) ||
                 l.startsWith('##') ||
-                (l.length > 5 && !l.startsWith('#'))
+                (l.length > 5 && !l.startsWith('#') && !l.startsWith('>'))
             ).slice(0, 20);
             parts.push(relevant.join('\n'));
         }
 
         if (this._tasks) {
             parts.push('\n## Their current tasks');
-            // Only active/in-progress tasks
             const activeLines = this._tasks.split('\n').filter(l =>
                 l.includes('- [ ]') || l.includes('- [~]') || l.startsWith('## Active') || l.startsWith('## Goals')
             ).slice(0, 15);
             if (activeLines.length > 0) parts.push(activeLines.join('\n'));
         }
 
+        // ── Communication style instruction ──
+        // Inject the full personality instruction so it shapes every response
+        const style = COMMUNICATION_STYLES[this._styleKey] || COMMUNICATION_STYLES.chill;
+        parts.push(`\n## How to talk to this person\n${style.instruction}`);
+
         return parts.join('\n');
     }
+
+    get styleKey() { return this._styleKey; }
+    get styleName() { return (COMMUNICATION_STYLES[this._styleKey] || COMMUNICATION_STYLES.chill).label; }
 
     // ─── Get just the active task list as an array ────────────────────────
     getActiveTasks() {
