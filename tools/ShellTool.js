@@ -5,10 +5,37 @@
 // Security: regex-based blocklist (not substring) + chaining detection.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
+
+// ─── Virtual Shell (Stateful) ──────────────────────────────────────────────
+let _shell     = null;
+let _shellCwd  = process.cwd();
+let _shellOut  = '';
+const SHELL_END_MARKER = '---END_OF_CMD_MAX---';
+
+function getShell() {
+    if (_shell) return _shell;
+
+    const shellCmd = process.platform === 'win32' ? 'powershell.exe' : 'bash';
+    _shell = spawn(shellCmd, ['-NoProfile'], {
+        cwd:   _shellCwd,
+        env:   process.env,
+        shell: true
+    });
+
+    _shell.stdout.on('data', (d) => { _shellOut += d.toString(); });
+    _shell.stderr.on('data', (d) => { _shellOut += d.toString(); });
+
+    _shell.on('exit', () => { 
+        _shell = null; 
+        console.log('[Shell] Persistent shell exited.');
+    });
+
+    return _shell;
+}
 
 // Patterns that are never allowed — uses word boundaries / anchors to prevent
 // bypass tricks like "rm -rf / # comment" or "/home/user/shutdown-script.sh"
@@ -85,6 +112,35 @@ export const ShellTool = {
                     code:    err.code
                 };
             }
+        },
+
+        async runStateful({ command, timeoutMs = 30000 }) {
+            const check = checkCommand(command);
+            if (check.blocked) return { success: false, error: `Blocked: ${check.reason}` };
+
+            const shell = getShell();
+            _shellOut = '';
+
+            const endCommand = process.platform === 'win32' 
+                ? `echo "${SHELL_END_MARKER}"` 
+                : `echo "${SHELL_END_MARKER}"`;
+
+            shell.stdin.write(`${command}\n${endCommand}\n`);
+
+            return new Promise((resolve) => {
+                const start = Date.now();
+                const interval = setInterval(() => {
+                    if (_shellOut.includes(SHELL_END_MARKER)) {
+                        clearInterval(interval);
+                        const cleanOutput = _shellOut.replace(SHELL_END_MARKER, '').trim();
+                        resolve({ success: true, command, stdout: cleanOutput });
+                    }
+                    if (Date.now() - start > timeoutMs) {
+                        clearInterval(interval);
+                        resolve({ success: false, error: 'Stateful command timed out' });
+                    }
+                }, 100);
+            });
         },
 
         async which({ program }) {

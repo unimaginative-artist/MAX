@@ -28,8 +28,8 @@ import fetch from 'node-fetch';
 export class Brain {
     constructor(config = {}) {
         this.ollamaUrl    = config.ollamaUrl || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-        this.timeout      = config.timeout     || 120_000;  // smart tier
-        this.fastTimeout  = config.fastTimeout || 45_000;   // fast tier — fail quickly, don't block
+        this.timeout      = config.timeout     || 180_000;  // smart tier — 3 mins
+        this.fastTimeout  = config.fastTimeout || 120_000;  // fast tier — 2 mins (enough for large model load)
 
         // ── Fast tier config ─────────────────────────────────────────────
         // Small local model — low latency, used for background tasks
@@ -110,10 +110,15 @@ export class Brain {
     async think(prompt, { systemPrompt = '', temperature = 0.7, maxTokens = 2048, tier = 'smart' } = {}) {
         if (!this._ready) throw new Error('Brain not initialized — call initialize() first');
 
+        let result;
         if (tier === 'fast') {
-            return this._runFast(prompt, systemPrompt, temperature, maxTokens);
+            result = await this._runFast(prompt, systemPrompt, temperature, maxTokens);
+        } else {
+            result = await this._runSmart(prompt, systemPrompt, temperature, maxTokens);
         }
-        return this._runSmart(prompt, systemPrompt, temperature, maxTokens);
+
+        // Return object with text and performance metadata
+        return result;
     }
 
     // ─── Fast tier execution ──────────────────────────────────────────────
@@ -169,6 +174,7 @@ export class Brain {
 
     // ─── Backend implementations ──────────────────────────────────────────
     async _ollama(model, prompt, systemPrompt, temperature, maxTokens, timeoutMs = null) {
+        const start = Date.now();
         const body = {
             model,
             prompt: systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt,
@@ -183,10 +189,20 @@ export class Brain {
         });
         if (!res.ok) throw new Error(`Ollama ${res.status}`);
         const data = await res.json();
-        return data.response?.trim() || '';
+        
+        return {
+            text: data.response?.trim() || '',
+            metadata: {
+                model,
+                tokens:  data.eval_count || 0,
+                latency: Date.now() - start,
+                backend: 'ollama'
+            }
+        };
     }
 
     async _gemini(prompt, systemPrompt, temperature, maxTokens) {
+        const start = Date.now();
         const combined = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
         const body = {
             contents: [{ parts: [{ text: combined }] }],
@@ -204,10 +220,19 @@ export class Brain {
             throw new Error(`Gemini ${res.status}: ${err}`);
         }
         const data = await res.json();
-        return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+        return {
+            text: data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '',
+            metadata: {
+                model:   this._smart.geminiModel,
+                tokens:  0, // Gemini API doesn't return usage in simple form here
+                latency: Date.now() - start,
+                backend: 'gemini'
+            }
+        };
     }
 
     async _openai(prompt, systemPrompt, temperature, maxTokens) {
+        const start = Date.now();
         const messages = [];
         if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
         messages.push({ role: 'user', content: prompt });
@@ -226,7 +251,15 @@ export class Brain {
             throw new Error(`OpenAI ${res.status}: ${err}`);
         }
         const data = await res.json();
-        return data.choices?.[0]?.message?.content?.trim() || '';
+        return {
+            text: data.choices?.[0]?.message?.content?.trim() || '',
+            metadata: {
+                model:   data.model,
+                tokens:  data.usage?.total_tokens || 0,
+                latency: Date.now() - start,
+                backend: 'openai'
+            }
+        };
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────

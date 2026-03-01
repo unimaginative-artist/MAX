@@ -106,8 +106,9 @@ Return a JSON array of step objects:
 Return ONLY the JSON array.`;
 
         try {
-            const raw   = await this.brain.think(prompt, { temperature: 0.3, maxTokens: 512 });
-            const match = raw.match(/\[[\s\S]*\]/);
+            const result = await this.brain.think(prompt, { temperature: 0.3, maxTokens: 512 });
+            const raw    = result.text;
+            const match  = raw.match(/\[[\s\S]*\]/);
             if (match) {
                 const steps = JSON.parse(match[0]);
                 this._active.get(goal.id).steps = steps;
@@ -212,8 +213,9 @@ Return JSON array:
 Return ONLY the JSON array.`;
 
         try {
-            const raw   = await this.brain.think(prompt, { temperature: 0.8, maxTokens: 512 });
-            const match = raw.match(/\[[\s\S]*\]/);
+            const result = await this.brain.think(prompt, { temperature: 0.8, maxTokens: 512 });
+            const raw    = result.text;
+            const match  = raw.match(/\[[\s\S]*\]/);
             if (!match) return [];
 
             const goals = JSON.parse(match[0]);

@@ -79,12 +79,13 @@ Return ONLY a JSON object:
   "note": "one sentence"
 }`;
 
-        const raw = await this.brain.think(prompt, {
+        const result = await this.brain.think(prompt, {
             temperature: 0.1,
             maxTokens:   80,
             tier:        'fast'
         });
 
+        const raw = result.text;
         const match = raw.match(/\{[\s\S]*?\}/);
         if (!match) return;
 
@@ -155,12 +156,13 @@ Return ONLY a JSON object:
 Return null for improvementGoal if no clear goal is identified.`;
 
         try {
-            const raw = await this.brain.think(prompt, {
+            const result = await this.brain.think(prompt, {
                 temperature: 0.3,
                 maxTokens:   600,
                 tier:        'smart'
             });
 
+            const raw   = result.text;
             const match = raw.match(/\{[\s\S]*\}/);
             if (!match) return;
 
@@ -179,6 +181,16 @@ Return null for improvementGoal if no clear goal is identified.`;
             this._selfModel.lastDeepReflect  = new Date().toISOString();
             this._selfModel.totalReflections++;
             this._save();
+
+            // Record outcome
+            this.outcomes?.record({
+                agent:    'ReflectionEngine',
+                action:   'deep_reflect',
+                result:   `Reflection #${this._selfModel.totalReflections}`,
+                success:  true,
+                tokens:   result.metadata?.tokens || 0,
+                duration: result.metadata?.latency || 0
+            });
 
             console.log(`[ReflectionEngine] ✅ Reflection #${this._selfModel.totalReflections} — `
                 + `${this._selfModel.weaknesses.length} weaknesses, `
@@ -286,5 +298,62 @@ Return null for improvementGoal if no clear goal is identified.`;
             weaknessesCount: this._selfModel.weaknesses.length,
             patchesCount:    this._selfModel.promptPatches.length
         };
+    }
+
+    // ─── Dreaming: long-term consolidation of outcomes into KB ────────────
+    // Called during low-activity periods or on /reflect
+    async dream(kb = null) {
+        if (!this.brain?._ready || !this.outcomes) return null;
+
+        console.log('[ReflectionEngine] 🌙 Dreaming... consolidating outcomes');
+
+        const recentOutcomes = this.outcomes.query({ limit: 20 });
+        if (recentOutcomes.length === 0) return null;
+
+        const outcomeSummary = recentOutcomes
+            .map(o => `${o.action}: ${o.success ? 'SUCCESS' : 'FAIL'} — ${o.result.slice(0, 150)}`)
+            .join('\n\n---\n\n');
+
+        const prompt = `Review these recent outcomes and distill 3-5 high-level "Engineering Lessons" worth remembering.
+Focus on: what failed and why, what patterns actually work, specific project quirks discovered.
+
+OUTCOMES:
+${outcomeSummary}
+
+Return ONLY a JSON array of strings:
+["Lesson 1: When doing X, always check Y because...", "Lesson 2: ..."]`;
+
+        try {
+            const result = await this.brain.think(prompt, { temperature: 0.3, tier: 'smart' });
+            const raw = result.text;
+            const match = raw.match(/\[[\s\S]*?\]/);
+            if (!match) return null;
+
+            const lessons = JSON.parse(match[0]);
+            let stored = 0;
+
+            if (kb && lessons.length > 0) {
+                for (const lesson of lessons) {
+                    await kb.remember(lesson, { source: 'dreaming_consolidation' });
+                    stored++;
+                }
+            }
+
+            // Record outcome
+            this.outcomes?.record({
+                agent:    'ReflectionEngine',
+                action:   'dream',
+                result:   `Consolidated ${stored} lessons`,
+                success:  true,
+                tokens:   result.metadata?.tokens || 0,
+                duration: result.metadata?.latency || 0
+            });
+
+            console.log(`[ReflectionEngine] 💤 Consolidated ${stored} lessons into knowledge base`);
+            return lessons;
+        } catch (err) {
+            console.error('[ReflectionEngine] Dream error:', err.message);
+            return null;
+        }
     }
 }

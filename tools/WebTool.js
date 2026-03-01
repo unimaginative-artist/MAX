@@ -85,6 +85,32 @@ export const WebTool = {
             return _cached(`search:${query}`, async () => {
                 const encoded = encodeURIComponent(query);
 
+                // ── AgenticSeek style: Private SearxNG search ────────────────
+                // If SEARXNG_BASE_URL is set, use it for private, high-quality search
+                if (process.env.SEARXNG_BASE_URL) {
+                    try {
+                        const res = await fetch(`${process.env.SEARXNG_BASE_URL}/search`, {
+                            method:  'POST',
+                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                            body:    `q=${encoded}&format=json&categories=general&language=auto`,
+                            signal:  AbortSignal.timeout(10000)
+                        });
+                        if (res.ok) {
+                            const data = await res.json();
+                            const results = (data.results || []).slice(0, maxResults).map(r => ({
+                                title:   r.title,
+                                snippet: r.content || r.snippet,
+                                url:     r.url
+                            }));
+                            if (results.length > 0) {
+                                return { success: true, query, source: 'searxng', results };
+                            }
+                        }
+                    } catch (err) {
+                        console.warn(`[WebTool] SearxNG search failed: ${err.message}`);
+                    }
+                }
+
                 // Try DuckDuckGo HTML (real results, not instant API)
                 try {
                     const res = await fetch(

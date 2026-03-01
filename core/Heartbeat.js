@@ -51,7 +51,18 @@ export class Heartbeat extends EventEmitter {
 
     _schedule() {
         if (!this._running) return;
-        this._timer = setTimeout(() => this._tick(), this.config.intervalMs);
+
+        // Dynamic interval based on drive tension
+        // 100% tension = 30s pulse
+        // 0% tension = 5m pulse
+        const drive = this.max?.drive?.getStatus?.();
+        const tension = drive?.tension || 0;
+
+        const minInterval = 30 * 1000;
+        const maxInterval = 5 * 60 * 1000;
+        const interval = maxInterval - (tension * (maxInterval - minInterval));
+
+        this._timer = setTimeout(() => this._tick(), interval);
     }
 
     async _tick() {
@@ -136,6 +147,12 @@ export class Heartbeat extends EventEmitter {
         } else {
             drive?.onIdleTick();
             this.emit('idle');
+
+            // ── Occasional Dreaming ──
+            // If idle and in a good mood, consolidate memory (5% chance per idle tick)
+            if (this.max?.reflection && Math.random() < 0.05) {
+                this.max.reflection.dream(this.max.kb).catch(() => {});
+            }
         }
     }
 

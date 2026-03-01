@@ -23,7 +23,9 @@ export class OutcomeTracker extends EventEmitter {
         this.stats = {
             total: 0, success: 0, failed: 0,
             avgReward: 0,
-            byAction: {},   // action → { count, successRate, avgReward }
+            totalTokens: 0,
+            avgLatency: 0,
+            byAction: {},   // action → { count, successRate, avgReward, avgTokens, avgLatency }
             byAgent:  {}    // agent  → { count, successRate, avgReward }
         };
 
@@ -40,7 +42,7 @@ export class OutcomeTracker extends EventEmitter {
     }
 
     // ─── Record an outcome ────────────────────────────────────────────────
-    record({ agent, action, context = {}, result, success, reward, duration, metadata = {} }) {
+    record({ agent, action, context = {}, result, success, reward, duration, tokens = 0, metadata = {} }) {
         if (!agent || !action) throw new Error('agent and action required');
 
         const id  = `out_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -48,7 +50,7 @@ export class OutcomeTracker extends EventEmitter {
         const r   = reward ?? (success ? 1.0 : -1.0);
         const ok  = success ?? (r > 0);
 
-        const entry = { id, agent, action, context, result, success: ok, reward: r, duration, metadata, ts };
+        const entry = { id, agent, action, context, result, success: ok, reward: r, duration, tokens, metadata, ts };
 
         // Store + index
         this._outcomes.set(id, entry);
@@ -58,10 +60,16 @@ export class OutcomeTracker extends EventEmitter {
 
         // Stats
         this.stats.total++;
+        this.stats.totalTokens += tokens;
         ok ? this.stats.success++ : this.stats.failed++;
         const n = this.stats.total;
         this.stats.avgReward = ((this.stats.avgReward * (n - 1)) + r) / n;
-        this._updateBucket(this.stats.byAction, action, ok, r);
+        
+        if (duration) {
+            this.stats.avgLatency = ((this.stats.avgLatency * (this.stats.total - 1)) + duration) / this.stats.total;
+        }
+
+        this._updateBucket(this.stats.byAction, action, ok, r, tokens, duration);
         this._updateBucket(this.stats.byAgent,  agent,  ok, r);
 
         // Evict if too large
@@ -117,12 +125,17 @@ export class OutcomeTracker extends EventEmitter {
         map.get(key).add(id);
     }
 
-    _updateBucket(obj, key, success, reward) {
-        if (!obj[key]) obj[key] = { count: 0, successRate: 0, avgReward: 0 };
+    _updateBucket(obj, key, success, reward, tokens = 0, duration = 0) {
+        if (!obj[key]) obj[key] = { count: 0, successRate: 0, avgReward: 0, avgTokens: 0, avgLatency: 0 };
         const b = obj[key];
-        b.count++;
-        b.successRate = (b.successRate * (b.count - 1) + (success ? 1 : 0)) / b.count;
-        b.avgReward   = (b.avgReward   * (b.count - 1) + reward)            / b.count;
+        const n = b.count + 1;
+        b.successRate = (b.successRate * b.count + (success ? 1 : 0)) / n;
+        b.avgReward   = (b.avgReward   * b.count + reward)            / n;
+        b.avgTokens   = (b.avgTokens   * b.count + tokens)            / n;
+        if (duration) {
+            b.avgLatency  = (b.avgLatency  * b.count + duration)          / n;
+        }
+        b.count = n;
     }
 
     _evict(n) {
