@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# API keys — NEVER commit
+config/api-keys.env
+*.env
+!config/api-keys.env.example
+
+# Runtime data
+.max/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea/
