@@ -41,65 +41,105 @@ function parseArgs() {
     return result;
 }
 
-// ─── Proactive insight printer ────────────────────────────────────────────
-// Prints background insights without destroying the readline prompt.
-// Handles markdown stripping, newlines, and word-wrap cleanly.
-const BOX_WIDTH = 60;  // inner content width
-const INNER     = BOX_WIDTH - 4;  // after '║  ' prefix and trailing space
+// ─── Insight store + printer ──────────────────────────────────────────────
+// Insights arrive from background tasks. They print as a collapsed one-liner
+// so they don't spam the screen. User types /expand [N] to read the full content.
+
+const BOX_WIDTH = 60;
+const INNER     = BOX_WIDTH - 4;
+
+const _insights = [];   // rolling store of last 20 insights
+let   _insightId = 0;
 
 function stripMarkdown(text) {
     return text
-        .replace(/\*\*(.+?)\*\*/g, '$1')   // **bold**
-        .replace(/\*(.+?)\*/g,     '$1')   // *italic*
-        .replace(/`(.+?)`/g,       '$1')   // `code`
-        .replace(/^#{1,6}\s+/gm,   '')     // ## headings
-        .replace(/^\s*[-*]\s+/gm,  '• ')  // bullet points → •
-        .replace(/\[(.+?)\]\(.+?\)/g, '$1') // [link](url) → text
+        .replace(/\*\*(.+?)\*\*/g, '$1')
+        .replace(/\*(.+?)\*/g,     '$1')
+        .replace(/`(.+?)`/g,       '$1')
+        .replace(/^#{1,6}\s+/gm,   '')
+        .replace(/^\s*[-*]\s+/gm,  '• ')
+        .replace(/\[(.+?)\]\(.+?\)/g, '$1')
         .trim();
 }
 
 function boxLine(text) {
-    // Word-wrap a single paragraph into box lines
     const words = text.split(' ').filter(Boolean);
     const lines = [];
-    let current = '';
+    let cur = '';
     for (const word of words) {
-        if (current.length + word.length + 1 > INNER) {
-            if (current) lines.push(`║  ${current}`);
-            current = word;
+        if (cur.length + word.length + 1 > INNER) {
+            if (cur) lines.push(`║  ${cur}`);
+            cur = word;
         } else {
-            current = current ? `${current} ${word}` : word;
+            cur = cur ? `${cur} ${word}` : word;
         }
     }
-    if (current) lines.push(`║  ${current}`);
+    if (cur) lines.push(`║  ${cur}`);
     return lines;
 }
 
-function printInsight(insight) {
-    process.stdout.write('\n');
-
+function printFullInsight(insight, id) {
     const border = '═'.repeat(BOX_WIDTH);
     const div    = '─'.repeat(BOX_WIDTH);
+    process.stdout.write('\n');
     console.log(`╔${border}╗`);
-    console.log(`║  💡 MAX [${insight.source}]`);
+    console.log(`║  💡 MAX [${insight.source}]${id != null ? `  #${id}` : ''}`);
     console.log(`║  ${insight.label}`);
     console.log(`╟${div}╢`);
 
-    // Clean and split the result into paragraphs
     const cleaned    = stripMarkdown(insight.result || '');
     const paragraphs = cleaned.split(/\n+/).map(p => p.trim()).filter(Boolean);
-
     for (const para of paragraphs) {
-        // Blank line between paragraphs (but not before the first)
-        const isFirst = para === paragraphs[0];
-        if (!isFirst) console.log('║');
-        for (const line of boxLine(para)) {
-            console.log(line);
-        }
+        if (para !== paragraphs[0]) console.log('║');
+        for (const line of boxLine(para)) console.log(line);
     }
 
     console.log(`╚${border}╝`);
+}
+
+// Collapsed one-liner — user types /expand to read full content
+function printInsight(insight) {
+    _insightId++;
+    const id    = _insightId;
+    const entry = { id, insight };
+    _insights.push(entry);
+    if (_insights.length > 20) _insights.shift();
+
+    // Trim label for the collapsed line
+    const label = insight.label.replace(/\n.*/s, '').slice(0, 50);
+    process.stdout.write('\n');
+    console.log(`  💡 [${insight.source}] ${label}  — /expand ${id}`);
     process.stdout.write('YOU: ');
+}
+
+function expandInsight(arg) {
+    let entry;
+    if (!arg || arg === 'last') {
+        entry = _insights[_insights.length - 1];
+    } else {
+        const id = parseInt(arg);
+        entry = _insights.find(e => e.id === id);
+    }
+    if (!entry) {
+        console.log(`[MAX] No insight #${arg || 'last'} found. Recent IDs: ${_insights.map(e => e.id).join(', ') || 'none'}\n`);
+        return;
+    }
+    printFullInsight(entry.insight, entry.id);
+}
+
+// ─── Thinking spinner ─────────────────────────────────────────────────────
+// Shows an animated spinner while MAX is processing. Clears itself when done.
+const SPINNER = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+
+function startSpinner(label = 'thinking') {
+    let i = 0;
+    const timer = setInterval(() => {
+        process.stdout.write(`\r  ${SPINNER[i++ % SPINNER.length]}  MAX is ${label}...`);
+    }, 80);
+    return function stop() {
+        clearInterval(timer);
+        process.stdout.write('\r' + ' '.repeat(30) + '\r');
+    };
 }
 
 // ─── Chat mode — interactive REPL ────────────────────────────────────────
@@ -138,6 +178,7 @@ async function chatMode(max, opts) {
     console.log('  /createtool  — ask MAX to write a new tool at runtime');
     console.log('  /inspect     — MAX reads his own source and queues improvements');
   console.log('  /reflect     — force a deep self-reflection right now');
+    console.log('  /expand [N]  — expand a collapsed insight (or /expand last)');
     console.log('  /approve     — approve a pending destructive action');
     console.log('  /deny        — deny a pending destructive action');
     console.log('  /swarm       — next message runs as parallel swarm');
@@ -422,12 +463,20 @@ async function chatMode(max, opts) {
                 ask(); return;
             }
 
+            if (line.startsWith('/expand')) {
+                const arg = line.slice(7).trim() || 'last';
+                expandInsight(arg);
+                console.log();
+                ask(); return;
+            }
+
             // ── Swarm ─────────────────────────────────────────────────────
             if (swarmNext) {
                 swarmNext = false;
                 try {
-                    console.log('\n[MAX] 🐝 Swarm starting...\n');
+                    const stopSpinner = startSpinner('swarming');
                     const result = await max.swarmThink(line);
+                    stopSpinner();
                     console.log('\n' + '═'.repeat(60));
                     console.log('MAX (Swarm synthesis):');
                     console.log(result.synthesis || 'No synthesis produced.');
@@ -440,8 +489,9 @@ async function chatMode(max, opts) {
             if (debateNext) {
                 debateNext = false;
                 try {
-                    console.log('\n[MAX] ⚔️  Debating...\n');
+                    const stopSpinner = startSpinner('debating');
                     const result = await max.debateDecision({ title: line, description: '', stakes: 'medium' });
+                    stopSpinner();
                     console.log('\n' + '═'.repeat(60));
                     console.log(`Verdict: ${result.verdict?.recommendation} (${((result.verdict?.confidence || 0) * 100).toFixed(0)}% confidence)`);
                     console.log(`Reasoning: ${result.verdict?.reasoning}`);
@@ -453,9 +503,10 @@ async function chatMode(max, opts) {
 
             // ── Normal chat ───────────────────────────────────────────────
             try {
-                process.stdout.write('\nMAX: ');
+                const stopSpinner = startSpinner('thinking');
                 const result = await max.think(line, { persona: activePersona });
-                console.log(result.response);
+                stopSpinner();
+                console.log('\nMAX: ' + result.response);
                 console.log(`\n[${result.persona} | tension ${(result.drive.tension * 100).toFixed(0)}%]\n`);
             } catch (err) {
                 console.error('[MAX] Error:', err.message);
