@@ -18,6 +18,15 @@ import { EventEmitter } from 'events';
 // Actions that require human approval before running
 const REQUIRES_APPROVAL = ['shell', 'git.commit', 'git.push', 'file.delete', 'file.write'];
 
+// Wrap any promise with a hard timeout — prevents tool hangs from freezing the loop
+function withTimeout(promise, ms, label = 'operation') {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 export class AgentLoop extends EventEmitter {
     constructor(max, config = {}) {
         super();
@@ -191,16 +200,22 @@ export class AgentLoop extends EventEmitter {
         try {
             let result = '';
 
+            const timeoutMs = this.config.stepTimeoutMs;
+
             if (toolName === 'brain') {
-                // Think through this step
-                result = await this.max.brain.think(
-                    `Complete this step concisely:\n\nGOAL: ${goal.title}\nSTEP: ${action}`,
-                    {
-                        systemPrompt: `You are MAX completing an autonomous task step. Be concrete and brief.`,
-                        temperature:  0.4,
-                        maxTokens:    512,
-                        tier:         'fast'
-                    }
+                // Think through this step — enforced timeout
+                result = await withTimeout(
+                    this.max.brain.think(
+                        `Complete this step concisely:\n\nGOAL: ${goal.title}\nSTEP: ${action}`,
+                        {
+                            systemPrompt: `You are MAX completing an autonomous task step. Be concrete and brief.`,
+                            temperature:  0.4,
+                            maxTokens:    512,
+                            tier:         'fast'
+                        }
+                    ),
+                    timeoutMs,
+                    'brain step'
                 );
             } else {
                 // Parse tool and action from step.tool (format: "tool" or "tool.action")
@@ -208,19 +223,27 @@ export class AgentLoop extends EventEmitter {
                 const tool = this.max.tools.get(tName);
 
                 if (tool) {
-                    const toolResult = await this.max.tools.execute(tName, tAction, {
-                        command:  action,  // for shell
-                        filePath: step.path || step.file,
-                        content:  step.content,
-                        query:    action,  // for web
-                        cwd:      process.cwd()
-                    });
+                    const toolResult = await withTimeout(
+                        this.max.tools.execute(tName, tAction, {
+                            command:  action,  // for shell
+                            filePath: step.path || step.file,
+                            content:  step.content,
+                            query:    action,  // for web
+                            cwd:      process.cwd()
+                        }),
+                        timeoutMs,
+                        `${tName}.${tAction}`
+                    );
                     result = JSON.stringify(toolResult).slice(0, 500);
                 } else {
                     // Unknown tool — fall back to brain
-                    result = await this.max.brain.think(
-                        `Complete this step: ${action}`,
-                        { temperature: 0.4, maxTokens: 512, tier: 'fast' }
+                    result = await withTimeout(
+                        this.max.brain.think(
+                            `Complete this step: ${action}`,
+                            { temperature: 0.4, maxTokens: 512, tier: 'fast' }
+                        ),
+                        timeoutMs,
+                        'brain fallback'
                     );
                 }
             }
