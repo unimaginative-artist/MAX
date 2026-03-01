@@ -137,6 +137,7 @@ async function chatMode(max, opts) {
     console.log('  /kbdrop <id> — remove a source from the knowledge base');
     console.log('  /createtool  — ask MAX to write a new tool at runtime');
     console.log('  /inspect     — MAX reads his own source and queues improvements');
+  console.log('  /reflect     — force a deep self-reflection right now');
     console.log('  /approve     — approve a pending destructive action');
     console.log('  /deny        — deny a pending destructive action');
     console.log('  /swarm       — next message runs as parallel swarm');
@@ -241,6 +242,19 @@ async function chatMode(max, opts) {
                 } catch (err) {
                     console.error(`[MAX] Tool creation failed: ${err.message}\n`);
                 }
+                ask(); return;
+            }
+
+            if (line === '/reflect') {
+                if (!max.reflection) { console.log('[MAX] ReflectionEngine not initialized.\n'); ask(); return; }
+                console.log('[MAX] 🧠 Running deep self-reflection...');
+                const summary = await max.reflection.forceReflect();
+                console.log(`\n[MAX] Reflection complete:`);
+                console.log(`  Total reflections : ${summary.reflections}`);
+                console.log(`  Strengths (${summary.strengths.length}): ${summary.strengths.join('; ') || 'none yet'}`);
+                console.log(`  Weaknesses (${summary.weaknesses.length}): ${summary.weaknesses.join('; ') || 'none yet'}`);
+                console.log(`  Prompt patches: ${summary.promptPatches.length > 0 ? summary.promptPatches.join(' | ') : 'none yet'}`);
+                console.log(`  Patterns: ${summary.patterns.join(', ') || 'none yet'}\n`);
                 ask(); return;
             }
 
