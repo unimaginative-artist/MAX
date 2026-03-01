@@ -119,9 +119,9 @@ export class Heartbeat extends EventEmitter {
                         maxTokens: 512,
                         tier: 'fast'
                     });
-                    this.max?.memory?.remember?.(
-                        JSON.stringify({ task: curiosityTask.label, result, ts: Date.now() }),
-                        { type: 'curiosity' },
+                    await this.max?.memory?.remember?.(
+                        `Curiosity: "${curiosityTask.label}": ${result.slice(0, 200)}`,
+                        {},
                         { type: 'curiosity', importance: 0.5 }
                     );
                     this.emit('insight', {
