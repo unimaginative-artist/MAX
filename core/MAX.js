@@ -25,6 +25,8 @@ import { ShellTool }          from '../tools/ShellTool.js';
 import { WebTool }            from '../tools/WebTool.js';
 import { GitTool }            from '../tools/GitTool.js';
 import { ApiTool }            from '../tools/ApiTool.js';
+import { DiscordTool, autoConnectDiscord } from '../tools/DiscordTool.js';
+import { EmailTool,   autoConnectEmail   } from '../tools/EmailTool.js';
 import { SwarmCoordinator }   from '../swarm/SwarmCoordinator.js';
 import { DebateEngine }       from '../debate/DebateEngine.js';
 import { MaxMemory }          from '../memory/MaxMemory.js';
@@ -102,6 +104,28 @@ export class MAX {
         this.tools.register(WebTool);
         this.tools.register(GitTool);
         this.tools.register(ApiTool);
+        this.tools.register(DiscordTool);
+        this.tools.register(EmailTool);
+
+        // Wire integration callbacks → heartbeat insights
+        DiscordTool.onMessage = (msg) => {
+            this.heartbeat.emit('insight', {
+                source: 'discord',
+                label:  `Discord — ${msg.author} in #${msg.channel}`,
+                result: msg.content
+            });
+        };
+        EmailTool.onMessage = (email) => {
+            this.heartbeat.emit('insight', {
+                source: 'email',
+                label:  `Email from ${email.from}`,
+                result: `Subject: ${email.subject}\nDate: ${email.date}`
+            });
+        };
+
+        // Auto-connect integrations if credentials already saved
+        autoConnectDiscord().catch(() => {});
+        autoConnectEmail().catch(() => {});
 
         // Higher systems
         this.swarm     = new SwarmCoordinator(this.brain, this.tools);
@@ -182,13 +206,14 @@ export class MAX {
         // Refresh profile if user edited the files since last read
         this.profile.refresh();
 
-        // Build system prompt — persona + state + user profile + workspace + self-model
+        // Build system prompt — persona + state + user profile + workspace + self-model + tools
+        // Tools always included — MAX is an agent and should always know his capabilities
         const systemPrompt = this.persona.buildSystemPrompt(selectedPersona)
             + this._buildStateContext()
             + this.profile.buildContextBlock()
             + this.memory.getContextString()
             + (this.reflection?.getSelfModelContext() || '')
-            + (options.includeTools ? this.tools.buildManifest() : '');
+            + this.tools.buildManifest();
 
         // Pull relevant episodic memories + KB chunks in parallel
         const [relevantMemories, kbChunks] = await Promise.all([
