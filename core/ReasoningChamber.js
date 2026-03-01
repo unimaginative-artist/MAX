@@ -17,7 +17,8 @@ export class ReasoningChamber {
 
         const type     = this._detectType(query);
         const strategy = this._pickStrategy(type);
-        const result   = await this._execute(strategy, query, context);
+        const resObj   = await this._execute(strategy, query, context);
+        const result   = resObj.text;
         const conf     = this._confidence(result, context);
 
         this.stats.byType[type]         = (this.stats.byType[type]         || 0) + 1;
@@ -25,7 +26,7 @@ export class ReasoningChamber {
         const n = this.stats.total;
         this.stats.avgConfidence = ((this.stats.avgConfidence * (n - 1)) + conf) / n;
 
-        return { result, confidence: conf, type, strategy };
+        return { result, confidence: conf, type, strategy, telemetry: resObj.metadata };
     }
 
     // ─── Detect reasoning type from query keywords ────────────────────────
@@ -135,7 +136,7 @@ You are in ${strategy} mode. Be precise, opinionated, and concrete. No filler.`;
 
     // ─── Estimate confidence from response quality ────────────────────────
     _confidence(result, context) {
-        if (!result) return 0.2;
+        if (!result || typeof result !== 'string') return 0.2;
         let conf = 0.65;
         if (result.length > 300)   conf += 0.10;
         if (result.includes('1.')) conf += 0.05;  // structured

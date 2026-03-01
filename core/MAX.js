@@ -25,6 +25,7 @@ import { ShellTool }          from '../tools/ShellTool.js';
 import { WebTool }            from '../tools/WebTool.js';
 import { GitTool }            from '../tools/GitTool.js';
 import { ApiTool }            from '../tools/ApiTool.js';
+import { CodeRunnerTool }     from '../tools/CodeRunnerTool.js';
 import { DiscordTool, autoConnectDiscord } from '../tools/DiscordTool.js';
 import { EmailTool,   autoConnectEmail   } from '../tools/EmailTool.js';
 import { SwarmCoordinator }   from '../swarm/SwarmCoordinator.js';
@@ -104,6 +105,7 @@ export class MAX {
         this.tools.register(WebTool);
         this.tools.register(GitTool);
         this.tools.register(ApiTool);
+        this.tools.register(CodeRunnerTool);
         this.tools.register(DiscordTool);
         this.tools.register(EmailTool);
 
@@ -156,6 +158,7 @@ export class MAX {
 
         // ToolCreator — MAX writes new tools at runtime
         this.toolCreator = new ToolCreator(this.brain, this.tools);
+        this.tools.register(this.toolCreator.asTool());
         await this.toolCreator.reloadSaved();  // reload any tools generated in past sessions
 
         // SelfCodeInspector — MAX inspects his own source and queues improvements
@@ -236,19 +239,49 @@ export class MAX {
             .join('\n\n');
 
         // Think
-        const response = await this.brain.think(historyText, {
+        let result = await this.brain.think(historyText, {
             systemPrompt: systemPrompt + memoryContext + kbContext,
             temperature: options.temperature ?? 0.7,
             maxTokens:   options.maxTokens   ?? 2048
         });
 
-        // Check for tool calls in response
-        const processedResponse = await this._processToolCalls(response);
+        let response = result.text;
+
+        // ── Agentic loop: if response contains tool calls, execute and re-think ──
+        let toolTurns = 0;
+        const maxToolTurns = 15; // OpenHands style: allow deep multi-step loops
+        const turnResults = [];
+
+        while (response.includes('TOOL:') && toolTurns < maxToolTurns) {
+            toolTurns++;
+            const processed = await this._processToolCalls(response);
+            turnResults.push(processed);
+            
+            // Add this intermediate turn to context so the next "think" sees the results
+            this._context.push({ role: 'assistant', content: processed });
+
+            // Re-build history text with the new tool results
+            const updatedHistory = this._context
+                .slice(-this._contextLimit)
+                .map(m => `${m.role === 'user' ? 'USER' : 'MAX'}: ${m.content}`)
+                .join('\n\n');
+
+            // Think again with the results
+            result = await this.brain.think(updatedHistory, {
+                systemPrompt: systemPrompt + memoryContext + kbContext,
+                temperature: 0.4, // lower temp for reasoning
+                maxTokens:   2048
+            });
+            response = result.text;
+        }
+
+        turnResults.push(response);
+        const finalResponse = turnResults.join('\n\n');
 
         // Update context and memory (MaxMemory also extracts workspace signals)
-        this._context.push({ role: 'assistant', content: processedResponse });
+        this._context.push({ role: 'assistant', content: response }); // only push the final text to context to avoid double tool results next time
         this.memory.addConversation('user',      userMessage,       selectedPersona.id);
-        this.memory.addConversation('assistant', processedResponse, selectedPersona.id);
+        this.memory.addConversation('assistant', finalResponse, selectedPersona.id);
 
         // Pre-compaction flush — before context window fills, extract key facts to permanent storage
         // This prevents silent memory loss when old turns get truncated
@@ -260,7 +293,7 @@ export class MAX {
         this._queueFollowUpCuriosity(userMessage);
 
         // Fire-and-forget reflection — scores this turn, runs deep analysis every N turns
-        this.reflection?.reflectOnTurn(userMessage, processedResponse, {
+        this.reflection?.reflectOnTurn(userMessage, finalResponse, {
             persona: selectedPersona.id,
             drive:   this.drive.getStatus()
         }).catch(() => {});
@@ -268,10 +301,23 @@ export class MAX {
         // Drive reward
         this.drive.onTaskExecuted();
 
+        // Record high-level outcome with telemetry
+        this.outcomes?.record({
+            agent:    'MAX',
+            action:   'chat_turn',
+            context:  { persona: selectedPersona.id, historyLength: this._context.length },
+            result:   'completed_turn',
+            success:  true,
+            tokens:   result.metadata?.tokens || 0,
+            duration: result.metadata?.latency || 0,
+            metadata: result.metadata
+        });
+
         return {
-            response:  processedResponse,
+            response:  finalResponse,
             persona:   selectedPersona.id,
-            drive:     this.drive.getStatus()
+            drive:     this.drive.getStatus(),
+            telemetry: result.metadata
         };
     }
 
@@ -371,7 +417,7 @@ Memory: ${memory.totalMemories} stored facts | ${memory.conversationTurns} conve
             .join('\n\n');
 
         try {
-            const facts = await this.brain.think(
+            const result = await this.brain.think(
                 `From this conversation excerpt, extract 3-5 specific facts worth remembering long-term.
 Focus on: decisions made, things learned, user preferences revealed, problems solved.
 Return ONLY a JSON array of strings: ["fact1", "fact2", ...]
@@ -381,6 +427,7 @@ ${recent}`,
                 { temperature: 0.2, maxTokens: 400, tier: 'fast' }
             );
 
+            const facts = result.text;
             const match = facts.match(/\[[\s\S]*?\]/);
             if (!match) return;
 

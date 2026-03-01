@@ -105,7 +105,7 @@ export class SwarmCoordinator extends EventEmitter {
             }
 
             // Run the brain on this subtask
-            const result = await this.brain.think(
+            const resultObj = await this.brain.think(
                 subtask.prompt + context,
                 {
                     systemPrompt: `You are a specialized worker in MAX's engineering swarm.
@@ -117,6 +117,7 @@ Focus ONLY on your assigned subtask. Be precise and concrete.`,
                 }
             );
 
+            const result = resultObj.text;
             subtask.status = 'complete';
             subtask.result = result;
             subtask.endedAt = Date.now();
@@ -142,7 +143,7 @@ Focus ONLY on your assigned subtask. Be precise and concrete.`,
             .map((r, i) => `## ${job.subtasks[i]?.id || `Task ${i+1}`}\n${r.result || r.error || JSON.stringify(r)}`)
             .join('\n\n');
 
-        return this.brain.think(
+        const synthesisResult = await this.brain.think(
             `You coordinated a swarm of agents on the task: "${job.name}"\n\nEach worker's output:\n\n${resultText}\n\nSynthesize these into a single, coherent final answer. Be concrete. Eliminate redundancy.`,
             {
                 systemPrompt: 'You are MAX synthesizing swarm worker outputs. Be concise and actionable.',
@@ -150,6 +151,8 @@ Focus ONLY on your assigned subtask. Be precise and concrete.`,
                 maxTokens:    2048
             }
         );
+
+        return synthesisResult.text;
     }
 
     _chunk(arr, size) {
@@ -172,7 +175,8 @@ Return a JSON array of subtask objects:
 
 Return ONLY the JSON array. No explanation.`;
 
-        const raw = await this.brain.think(prompt, { temperature: 0.3, maxTokens: 1024 });
+        const result = await this.brain.think(prompt, { temperature: 0.3, maxTokens: 1024 });
+        const raw    = result.text;
 
         try {
             const jsonMatch = raw.match(/\[[\s\S]*\]/);

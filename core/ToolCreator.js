@@ -113,11 +113,13 @@ Rules:
 
 Return ONLY the JavaScript code. No explanation.`;
 
-        const raw = await this.brain.think(prompt, {
+        const result = await this.brain.think(prompt, {
             temperature: 0.3,
             maxTokens:   1500,
             tier:        'smart'  // needs a capable model to write good code
         });
+
+        const raw = result.text;
 
         // Extract code block
         const codeMatch = raw.match(/```(?:js|javascript)?\n?([\s\S]+?)```/) || raw.match(/(export const \w+Tool[\s\S]+)/);
@@ -192,5 +194,48 @@ Return ONLY the JavaScript code. No explanation.`;
 
     getStatus() {
         return { generated: this._created.length, tools: this._created.map(t => t.name) };
+    }
+
+    // ─── Registration as a tool ───────────────────────────────────────────
+    asTool() {
+        return {
+            name: 'meta',
+            description: 'Generate and register NEW tools and capabilities at runtime.',
+            actions: {
+                create: async ({ description, context }) => {
+                    return await this.create(description, context);
+                }
+            }
+        };
+    }
+
+    // ─── Proactive identification: what tools are we missing? ─────────────
+    // Called by ReflectionEngine/AgentLoop when it sees repeated blocks
+    async autoSuggest(recentFailures = []) {
+        if (!this.brain._ready) return null;
+
+        const prompt = `You are MAX, an autonomous engineering agent. Review these recent tool failures and suggest ONE new tool that would solve the underlying problem.
+
+RECENT FAILURES:
+${recentFailures.join('\n')}
+
+CURRENT TOOLS:
+${this.tools.list().map(t => t.name).join(', ')}
+
+Return ONLY a JSON object:
+{
+  "name": "ToolName",
+  "description": "What the tool does",
+  "reason": "Why this tool is needed now"
+}
+Return ONLY the JSON.`;
+
+        try {
+            const result = await this.brain.think(prompt, { temperature: 0.2, tier: 'smart' });
+            const raw = result.text;
+            const match = raw.match(/\{[\s\S]*?\}/);
+            if (!match) return null;
+            return JSON.parse(match[0]);
+        } catch { return null; }
     }
 }

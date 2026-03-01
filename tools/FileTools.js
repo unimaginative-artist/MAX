@@ -55,6 +55,27 @@ export const FileTools = {
             return { success: true, path: filePath, bytes: Buffer.byteLength(content) };
         },
 
+        async replace({ filePath, oldText, newText, all = false }) {
+            const content = await fs.readFile(filePath, 'utf8').catch(() => null);
+            if (content === null) return { success: false, error: `File not found: ${filePath}` };
+
+            if (!content.includes(oldText)) {
+                return { success: false, error: "Target text not found in file. Ensure whitespace and indentation match exactly." };
+            }
+
+            const updated = all 
+                ? content.split(oldText).join(newText)
+                : content.replace(oldText, newText);
+
+            await fs.writeFile(filePath, updated, 'utf8');
+            return { 
+                success: true, 
+                path: filePath, 
+                replaced: all ? "all occurrences" : "first occurrence",
+                delta: newText.length - oldText.length
+            };
+        },
+
         async list({ dir = '.', pattern = null, recursive = false }) {
             async function walk(d, depth = 0) {
                 const entries = await fs.readdir(d, { withFileTypes: true });
