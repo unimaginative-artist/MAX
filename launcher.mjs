@@ -9,6 +9,7 @@ import { fileURLToPath }            from 'url';
 import { dirname, join }            from 'path';
 import readline                     from 'readline';
 import { MAX }                      from './core/MAX.js';
+import { isFirstRun, runOnboarding } from './onboarding/FirstRun.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -87,6 +88,9 @@ async function chatMode(max, opts) {
     console.log('  /persona     — switch: architect/grinder/paranoid/breaker/explainer/devil');
   console.log('  /memory      — show recent background discoveries');
     console.log('  /recall <q>  — semantic search across everything MAX knows');
+    console.log('  /tasks       — show active tasks from tasks.md');
+    console.log('  /addtask <t> — add a task to tasks.md');
+    console.log('  /done <t>    — mark a task complete');
     console.log('  /clear       — wipe conversation context');
     console.log('  /quit        — exit');
     console.log('─'.repeat(60) + '\n');
@@ -166,6 +170,31 @@ async function chatMode(max, opts) {
                         console.log();
                     }
                 } catch (err) { console.error('[MAX] Recall error:', err.message); }
+                ask(); return;
+            }
+
+            if (line === '/tasks') {
+                const tasks = max.profile.getActiveTasks();
+                console.log(`\n[MAX] Active tasks (${tasks.length}):`);
+                if (tasks.length === 0) console.log('  None. Add some with /addtask');
+                tasks.forEach((t, i) => console.log(`  ${i+1}. ${t}`));
+                console.log();
+                ask(); return;
+            }
+
+            if (line.startsWith('/addtask ')) {
+                const t = line.slice(9).trim();
+                if (t) {
+                    max.profile.addTask(t);
+                    console.log(`[MAX] Added: "${t}"\n`);
+                }
+                ask(); return;
+            }
+
+            if (line.startsWith('/done ')) {
+                const t = line.slice(6).trim();
+                const ok = max.profile.completeTask(t);
+                console.log(ok ? `[MAX] Done: "${t}" ✓\n` : `[MAX] Couldn't find that task.\n`);
                 ask(); return;
             }
 
@@ -292,6 +321,20 @@ async function main() {
 
     await max.initialize();
     if (!max._ready) process.exit(1);
+
+    // First-run onboarding — runs before chat, only once
+    if (isFirstRun() && opts.mode === 'chat') {
+        await runOnboarding();
+        // Reload profile now that onboarding saved the files
+        max.profile.load();
+    }
+
+    // Returning user greeting
+    if (!isFirstRun() && opts.mode === 'chat' && max.profile.hasProfile) {
+        const tasks = max.profile.getActiveTasks();
+        const name  = max.profile.name;
+        console.log(`\n[MAX] Back, ${name}.${tasks.length > 0 ? ` You have ${tasks.length} active task${tasks.length > 1 ? 's' : ''}.` : ''}\n`);
+    }
 
     switch (opts.mode) {
         case 'swarm': await swarmMode(max, opts); break;

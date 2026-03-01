@@ -19,6 +19,7 @@ import { ApiTool }            from '../tools/ApiTool.js';
 import { SwarmCoordinator }   from '../swarm/SwarmCoordinator.js';
 import { DebateEngine }       from '../debate/DebateEngine.js';
 import { MaxMemory }          from '../memory/MaxMemory.js';
+import { UserProfile }        from '../onboarding/UserProfile.js';
 
 export class MAX {
     constructor(config = {}) {
@@ -32,6 +33,7 @@ export class MAX {
         this.curiosity = new CuriosityEngine(config.curiosity);
         this.persona   = new PersonaEngine();
         this.memory    = new MaxMemory(config.memory);
+        this.profile   = new UserProfile();
 
         // Tools
         this.tools     = new ToolRegistry();
@@ -55,6 +57,12 @@ export class MAX {
 
         // Memory (async — loads vectors + tries to init embedder)
         await this.memory.initialize();
+
+        // User profile — load from .max/user.md and .max/tasks.md
+        this.profile.load();
+        if (this.profile.hasProfile) {
+            console.log(`[MAX] 👤 Profile: ${this.profile.name}`);
+        }
 
         // Brain
         await this.brain.initialize();
@@ -113,9 +121,13 @@ export class MAX {
             this._context = this._context.slice(-this._contextLimit * 2);
         }
 
-        // Build system prompt — includes drive state + workspace context
+        // Refresh profile if user edited the files since last read
+        this.profile.refresh();
+
+        // Build system prompt — persona + state + user profile + workspace
         const systemPrompt = this.persona.buildSystemPrompt(selectedPersona)
             + this._buildStateContext()
+            + this.profile.buildContextBlock()
             + this.memory.getContextString()
             + (options.includeTools ? this.tools.buildManifest() : '');
 
@@ -249,6 +261,7 @@ Memory: ${memory.totalMemories} stored facts | ${memory.conversationTurns} conve
             curiosity:  this.curiosity.getStatus(),
             persona:    this.persona.getStatus(),
             memory:     this.memory.getStats(),
+            profile:    this.profile.getStats(),
             swarm:      this.swarm?.getStatus(),
             heartbeat:  this.heartbeat?.getStatus(),
             scheduler:  this.scheduler?.getStatus()

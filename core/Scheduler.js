@@ -45,6 +45,13 @@ Be concrete, not philosophical. Max Headroom style — sharp, direct.`
         prompt:   `You are MAX. Based on your curiosity and drive, generate 5 new engineering topics worth exploring.
 For each: topic name, why it matters right now, one specific question to investigate.
 Be concrete. No fluff.`
+    },
+    {
+        id:    'task-check',
+        label: 'Task file check',
+        every: '30m',
+        type:  'task-check'
+        // Reads .max/tasks.md and surfaces reminders if tasks are stale
     }
 ];
 
@@ -153,6 +160,10 @@ export class Scheduler extends EventEmitter {
                 await this._runInternalJob(job);
                 break;
 
+            case 'task-check':
+                await this._runTaskCheck();
+                break;
+
             default:
                 if (typeof job.handler === 'function') {
                     await job.handler(this.max);
@@ -223,6 +234,48 @@ export class Scheduler extends EventEmitter {
                 );
             }
         }
+    }
+
+    async _runTaskCheck() {
+        const profile = this.max?.profile;
+        if (!profile) return;
+
+        const updated = profile.refresh();
+        const tasks   = profile.getActiveTasks();
+        if (tasks.length === 0) return;
+
+        const changed = updated ? ' (tasks.md was updated)' : '';
+
+        // Ask brain to surface anything worth reminding the user about
+        if (!this.max?.brain?._ready) {
+            // No brain yet — just emit the task list as-is
+            this.emit('insight', {
+                source: 'tasks',
+                label:  `Active tasks${changed}`,
+                result: tasks.map((t, i) => `${i+1}. ${t}`).join('\n')
+            });
+            return;
+        }
+
+        const prompt = `You are MAX checking the user's task list.
+
+Active tasks:
+${tasks.map(t => `- ${t}`).join('\n')}
+
+In 2-3 sentences: which task looks most important right now, and is there anything that seems stuck or forgotten?
+Be direct. Max Headroom style.`;
+
+        const result = await this.max.brain.think(prompt, {
+            systemPrompt: this.max.profile.buildContextBlock(),
+            temperature:  0.6,
+            maxTokens:    256
+        });
+
+        this.emit('insight', {
+            source: 'tasks',
+            label:  `Task check${changed}`,
+            result
+        });
     }
 
     // ─── Persist last-run timestamps ──────────────────────────────────────
