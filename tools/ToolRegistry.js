@@ -3,6 +3,26 @@
 // Tools are what MAX uses to actually DO things, not just think about them.
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ─── Tolerant JSON parser ─────────────────────────────────────────────────
+// LLMs (especially smaller ones) often emit malformed JSON in tool calls:
+//   • Unquoted keys:   {path: "./foo"}   → {"path": "./foo"}
+//   • Single quotes:   {'key': 'val'}    → {"key": "val"}
+//   • Trailing commas: {"a":1,}          → {"a":1}
+// Try strict parse first; if it fails apply fixes and retry.
+function parseLooseJson(str) {
+    try { return JSON.parse(str); } catch {}
+
+    let s = str;
+    // Single quotes → double quotes (simple values only, no nested single quotes)
+    s = s.replace(/'([^'\\]*(\\.[^'\\]*)*)'/g, '"$1"');
+    // Quote unquoted object keys: { key: → { "key":
+    s = s.replace(/([{,]\s*)([A-Za-z_$][A-Za-z0-9_$]*)\s*:/g, '$1"$2":');
+    // Remove trailing commas before } or ]
+    s = s.replace(/,(\s*[}\]])/g, '$1');
+
+    return JSON.parse(s); // let the outer catch surface any remaining error
+}
+
 export class ToolRegistry {
     constructor() {
         this._tools = new Map();
@@ -37,14 +57,15 @@ export class ToolRegistry {
     }
 
     // ─── Parse and execute a tool call from LLM output ───────────────────
-    // LLM can output: TOOL:file.read:{"path":"./foo.js"}
+    // LLM can output: TOOL:file:read:{"path":"./foo.js"}
+    // Small models often emit unquoted keys or single quotes — parseLooseJson handles it.
     async executeLLMToolCall(rawText) {
-        const match = rawText.match(/TOOL:([^:]+):([^:]+):(.+)/);
+        const match = rawText.match(/TOOL:([^:]+):([^:]+):(.+)/s);
         if (!match) return null;
 
         const [, toolName, action, paramsJson] = match;
         try {
-            const params = JSON.parse(paramsJson);
+            const params = parseLooseJson(paramsJson.trim());
             return await this.execute(toolName, action, params);
         } catch (err) {
             return { success: false, error: `Tool call parse error: ${err.message}` };
