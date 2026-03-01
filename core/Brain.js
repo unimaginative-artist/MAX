@@ -123,17 +123,19 @@ export class Brain {
                 return await this._ollama(this._fast.ollamaModel, prompt, systemPrompt, temperature, maxTokens, this.fastTimeout);
             } catch (err) {
                 console.warn(`[Brain] Fast tier error: ${err.message} — falling back to smart`);
+                // skipOllama=true: Ollama just failed, don't try it again in smart's fallback chain
+                return this._runSmart(prompt, systemPrompt, temperature, Math.min(maxTokens, 512), true);
             }
         }
-        // Fallback to smart
         return this._runSmart(prompt, systemPrompt, temperature, Math.min(maxTokens, 512));
     }
 
     // ─── Smart tier execution ─────────────────────────────────────────────
-    async _runSmart(prompt, systemPrompt, temperature, maxTokens) {
+    // skipOllama: true when called as fallback from _runFast (Ollama already failed)
+    async _runSmart(prompt, systemPrompt, temperature, maxTokens, skipOllama = false) {
         const t = this._smart;
 
-        if (t.ready && t.backend === 'ollama' && t.ollamaModel) {
+        if (!skipOllama && t.ready && t.backend === 'ollama' && t.ollamaModel) {
             try {
                 return await this._ollama(t.ollamaModel, prompt, systemPrompt, temperature, maxTokens);
             } catch (err) {
@@ -157,8 +159,8 @@ export class Brain {
             }
         }
 
-        // Last resort: fast tier
-        if (this._fast.ready) {
+        // Last resort: fast Ollama — but only if it hasn't already failed this request
+        if (!skipOllama && this._fast.ready) {
             return this._ollama(this._fast.ollamaModel, prompt, systemPrompt, temperature, Math.min(maxTokens, 512));
         }
 

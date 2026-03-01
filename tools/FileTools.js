@@ -10,9 +10,30 @@ export const FileTools = {
     description: 'Read, write, list, and search files on disk',
 
     actions: {
-        async read({ filePath, maxLines = 500 }) {
+        async read({ filePath, maxLines = 500, maxBytes = 10 * 1024 * 1024 }) {
+            const stat = await fs.stat(filePath).catch(() => null);
+            if (!stat) return { success: false, error: `File not found: ${filePath}` };
+
+            // For large files: read only first maxBytes to avoid memory exhaustion
+            if (stat.size > maxBytes) {
+                const fd  = await fs.open(filePath, 'r');
+                const buf = Buffer.alloc(maxBytes);
+                const { bytesRead } = await fd.read(buf, 0, maxBytes, 0);
+                await fd.close();
+                const partial = buf.slice(0, bytesRead).toString('utf8');
+                const lines   = partial.split('\n').slice(0, maxLines);
+                return {
+                    success:   true,
+                    path:      filePath,
+                    content:   lines.join('\n') + `\n... (file truncated — ${(stat.size / 1024 / 1024).toFixed(1)}MB exceeds ${maxBytes / 1024 / 1024}MB limit)`,
+                    lines:     lines.length,
+                    truncated: true,
+                    sizeMB:    (stat.size / 1024 / 1024).toFixed(1)
+                };
+            }
+
             const content = await fs.readFile(filePath, 'utf8');
-            const lines = content.split('\n');
+            const lines   = content.split('\n');
             const truncated = lines.length > maxLines;
             return {
                 success:   true,
@@ -67,6 +88,9 @@ export const FileTools = {
                     } else if (e.isFile()) {
                         if (filePattern && !fullPath.endsWith(filePattern)) continue;
                         try {
+                            // Skip large files in search — they'd flood results and eat memory
+                            const fileStat = await fs.stat(fullPath).catch(() => null);
+                            if (!fileStat || fileStat.size > 5 * 1024 * 1024) continue;
                             const content = await fs.readFile(fullPath, 'utf8');
                             const lines = content.split('\n');
                             lines.forEach((line, i) => {

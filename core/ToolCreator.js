@@ -18,14 +18,46 @@ const TOOLS_DIR  = path.join(__dirname, '..', 'tools', 'generated');
 // Patterns that are never allowed in generated tools
 const BLOCKED_PATTERNS = [
     /process\.exit/,
-    /require\s*\(\s*['"]child_process['"]/,
-    /exec\s*\(/,
+    /child_process/,           // any child_process reference
+    /\bexec\s*\(/,             // exec(), execSync()
+    /\bspawn\s*\(/,            // spawn()
+    /\bfork\s*\(/,             // fork()
+    /\bexecFile\s*\(/,         // execFile()
     /rm\s+-rf/,
-    /fs\.rmdir/,
-    /fs\.unlink.*\//,
+    /fs\.(rmdir|rm)\b/,        // fs.rmdir, fs.rm
+    /fs\.unlinkSync/,
+    /fs\.unlink\s*\(/,
     /eval\s*\(/,
-    /Function\s*\(/
+    /new\s+Function\s*\(/,     // new Function() — dynamic code eval
+    /Function\s*\(\s*['"`]/,   // Function('code') — dynamic code eval
+    /__proto__/,               // prototype pollution
+    /prototype\s*\[/,          // prototype pollution via bracket access
 ];
+
+// Check for top-level executable statements — anything that runs on import()
+// Strips comments/strings first to avoid false positives from code in string literals
+function hasTopLevelExecution(code) {
+    const cleaned = code
+        .replace(/\/\/[^\n]*/g, '')              // strip line comments
+        .replace(/\/\*[\s\S]*?\*\//g, '')        // strip block comments
+        .replace(/`[^`\\]*(?:\\.[^`\\]*)*`/g, '""')  // strip template literals
+        .replace(/"[^"\\]*(?:\\.[^"\\]*)*"/g, '""')  // strip double-quoted strings
+        .replace(/'[^'\\]*(?:\\.[^'\\]*)*'/g, '""'); // strip single-quoted strings
+
+    for (const line of cleaned.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        // Skip safe top-level constructs
+        if (/^(import\s|export\s|const\s|let\s|var\s|\}|\{|\/\/)/.test(trimmed)) continue;
+        if (/^(async\s+function|function\s+\w)/.test(trimmed)) continue;
+        if (/^\/[\/*]/.test(trimmed)) continue;  // comments that slipped through
+        // Anything else at col-0 that's not a closing brace is suspicious
+        if (line[0] !== ' ' && line[0] !== '\t' && trimmed.length > 0) {
+            return { found: true, line: trimmed.slice(0, 80) };
+        }
+    }
+    return { found: false };
+}
 
 export class ToolCreator {
     constructor(brain, toolRegistry) {
@@ -93,9 +125,13 @@ Return ONLY the JavaScript code. No explanation.`;
 
         const code = codeMatch[1].trim();
 
-        // Safety check
+        // Safety check — blocked patterns
         const violation = BLOCKED_PATTERNS.find(p => p.test(code));
         if (violation) throw new Error(`Generated tool contains blocked pattern: ${violation}`);
+
+        // Safety check — top-level execution (code that runs at import time)
+        const topLevel = hasTopLevelExecution(code);
+        if (topLevel.found) throw new Error(`Generated tool has top-level executable code: "${topLevel.line}"`);
 
         // Extract tool name from export
         const nameMatch = code.match(/export const (\w+Tool)/);
