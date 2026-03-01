@@ -17,6 +17,7 @@ import { GoalEngine }         from './GoalEngine.js';
 import { AgentLoop }          from './AgentLoop.js';
 import { ToolCreator }        from './ToolCreator.js';
 import { SelfCodeInspector }  from './SelfCodeInspector.js';
+import { ReflectionEngine }   from './ReflectionEngine.js';
 import { PersonaEngine }      from '../personas/PersonaEngine.js';
 import { ToolRegistry }       from '../tools/ToolRegistry.js';
 import { FileTools }          from '../tools/FileTools.js';
@@ -63,6 +64,7 @@ export class MAX {
         this.agentLoop    = null;
         this.toolCreator  = null;
         this.selfInspector = null;
+        this.reflection    = null;
 
         // Conversation context window
         this._context      = [];
@@ -134,6 +136,9 @@ export class MAX {
 
         // SelfCodeInspector — MAX inspects his own source and queues improvements
         this.selfInspector = new SelfCodeInspector(this.goals);
+
+        // ReflectionEngine — fractal meta-brain, watches performance and improves over time
+        this.reflection = new ReflectionEngine(this.brain, this.goals, this.outcomes);
         // Run first inspection in background — don't block boot
         setTimeout(() => {
             this.selfInspector.inspect().then(() => {
@@ -177,11 +182,12 @@ export class MAX {
         // Refresh profile if user edited the files since last read
         this.profile.refresh();
 
-        // Build system prompt — persona + state + user profile + workspace
+        // Build system prompt — persona + state + user profile + workspace + self-model
         const systemPrompt = this.persona.buildSystemPrompt(selectedPersona)
             + this._buildStateContext()
             + this.profile.buildContextBlock()
             + this.memory.getContextString()
+            + (this.reflection?.getSelfModelContext() || '')
             + (options.includeTools ? this.tools.buildManifest() : '');
 
         // Pull relevant episodic memories + KB chunks in parallel
@@ -227,6 +233,12 @@ export class MAX {
 
         // After responding, queue a follow-up curiosity task from this topic
         this._queueFollowUpCuriosity(userMessage);
+
+        // Fire-and-forget reflection — scores this turn, runs deep analysis every N turns
+        this.reflection?.reflectOnTurn(userMessage, processedResponse, {
+            persona: selectedPersona.id,
+            drive:   this.drive.getStatus()
+        }).catch(() => {});
 
         // Drive reward
         this.drive.onTaskExecuted();
@@ -383,6 +395,7 @@ ${recent}`,
             reasoning:    this.reasoning?.getStats(),
             toolCreator:   this.toolCreator?.getStatus(),
             selfInspector: this.selfInspector?.getStatus(),
+            reflection:    this.reflection?.getStatus(),
             kb:            this.kb?.getStatus()
         };
     }
