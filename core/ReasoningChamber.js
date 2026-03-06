@@ -17,6 +17,8 @@ export class ReasoningChamber {
 
         const type     = this._detectType(query);
         const strategy = this._pickStrategy(type);
+        
+        // Inject world model into context if available
         const resObj   = await this._execute(strategy, query, context);
         const result   = resObj.text;
         const conf     = this._confidence(result, context);
@@ -60,6 +62,7 @@ export class ReasoningChamber {
             generative:     'creative_synthesis',
             security:       'security_council',
             planning:       'step_decomposition',
+            simulation:     'world_simulation', // 🌍 New: Mental Simulation
             general:        'integrated_reasoning'
         }[type] || 'integrated_reasoning';
     }
@@ -67,6 +70,26 @@ export class ReasoningChamber {
     // ─── Execute the chosen reasoning strategy ────────────────────────────
     async _execute(strategy, query, context) {
         const ctx = context.userContext || '';
+
+        // Handle world simulation separately as it interacts with the WorldModel
+        if (strategy === 'world_simulation') {
+            const world = context.world;
+            if (world) {
+                const state = world.getCurrentState();
+                const sim = world.simulate(state, query);
+                return {
+                    text: `🌍 MENTAL SIMULATION:
+Proposed Action: "${query}"
+Predicted Outcome: Tension will shift to ${(sim.nextState.tension * 100).toFixed(0)}%, Satisfaction to ${(sim.nextState.satisfaction * 100).toFixed(0)}%.
+Expected Reward: ${sim.reward.toFixed(2)}
+Estimated Latency: ${sim.latency.toFixed(0)}ms
+Confidence: ${(sim.confidence * 100).toFixed(0)}%
+
+${sim.confidence > 0.6 ? 'Conclusion: This action is well-modeled and likely to succeed.' : 'Conclusion: This is a novel action with high uncertainty.'}`,
+                    metadata: { backend: 'world_model', tokens: 0, latency: 10 }
+                };
+            }
+        }
 
         const prompts = {
             causal_chain: `Analyze this using CAUSAL CHAIN reasoning.

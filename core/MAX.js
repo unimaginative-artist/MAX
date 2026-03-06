@@ -38,6 +38,8 @@ import { KnowledgeBase }      from '../memory/KnowledgeBase.js';
 import { UserProfile }        from '../onboarding/UserProfile.js';
 import { CodeIndexer }        from '../memory/CodeIndexer.js';
 import { Sentinel }           from './Sentinel.js';
+import { WorldModel }         from './WorldModel.js';
+import { ArtifactManager }    from './ArtifactManager.js';
 import { TestGenerator }      from './TestGenerator.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -77,6 +79,8 @@ export class MAX {
         this.reflection    = null;
         this.indexer       = new CodeIndexer(this);
         this.sentinel      = new Sentinel(this);
+        this.world         = new WorldModel(this);
+        this.artifacts     = new ArtifactManager(this);
         this.lab           = new TestGenerator(this);
 
         // Conversation context window
@@ -167,6 +171,17 @@ export class MAX {
         this.reasoning = new ReasoningChamber(this.brain);
         this.evolution = new EvolutionArbiter();
         await this.evolution.initialize();
+
+        await this.world.initialize();
+
+        // 🌍 Hook World Model into Outcome Tracker
+        this.outcomes.on('outcome', (entry) => {
+            const nextState = this.world.getCurrentState();
+            this.world.recordTransition(entry.action, nextState, entry.reward, {
+                latency: entry.duration,
+                success: entry.success
+            }).catch(() => {});
+        });
 
         this.goals     = new GoalEngine(this.brain, this.outcomes);
         this.goals.initialize();
@@ -282,7 +297,10 @@ export class MAX {
         // Build full prompt with history
         const historyText = this._context
             .slice(-this._contextLimit)
-            .map(m => `${m.role === 'user' ? 'USER' : 'MAX'}: ${m.content}`)
+            .map(m => {
+                // If content is huge, it's already been pointer-ized by _processToolCalls
+                return `${m.role === 'user' ? 'USER' : 'MAX'}: ${m.content}`;
+            })
             .join('\n\n');
 
         // Think
@@ -408,6 +426,15 @@ Think deeper about the engineering implications. What are edge cases, gotchas, o
         return this.debate.debate(proposal);
     }
 
+    // ─── Direct reasoning (Causal, Simulation, Security, etc.) ────────────
+    async reason(query, options = {}) {
+        if (!this._ready) throw new Error('MAX not initialized');
+        return this.reasoning.reason(query, {
+            world: this.world,
+            userContext: this.profile.buildContextBlock()
+        });
+    }
+
     // ─── Process tool calls embedded in LLM output ────────────────────────
     async _processToolCalls(text) {
         if (!text.includes('TOOL:')) return text;
@@ -416,10 +443,22 @@ Think deeper about the engineering implications. What are edge cases, gotchas, o
         const result = [];
 
         for (const line of lines) {
-            if (line.trim().startsWith('TOOL:')) {
-                const toolResult = await this.tools.executeLLMToolCall(line.trim());
+            const trimmed = line.trim();
+            if (trimmed.startsWith('TOOL:')) {
+                const toolResult = await this.tools.executeLLMToolCall(trimmed);
                 if (toolResult) {
-                    result.push(`[Tool result: ${JSON.stringify(toolResult)}]`);
+                    let resultStr = JSON.stringify(toolResult);
+
+                    // ─── Artifact Extraction ───
+                    // If the result is huge (like a file read), store it as an artifact
+                    // and only put the pointer in the chat context.
+                    if (resultStr.length > 800) {
+                        const name = trimmed.split(':')[2] || 'Tool Output';
+                        const pointer = this.artifacts.store(name, resultStr, 'tool_result');
+                        resultStr = pointer;
+                    }
+
+                    result.push(`[Tool result: ${resultStr}]`);
                 } else {
                     result.push(line);
                 }
