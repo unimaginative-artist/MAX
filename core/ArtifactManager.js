@@ -44,10 +44,24 @@ export class ArtifactManager extends EventEmitter {
     }
 
     /**
-     * List recent artifacts for the Dashboard.
+     * Tool Action: Retrieve an artifact's content back into the context.
      */
-    list() {
-        return Array.from(this.artifacts.values()).sort((a, b) => b.timestamp - a.timestamp);
+    async read({ id }) {
+        const art = this.get(id);
+        if (!art) return { success: false, error: `Artifact ${id} not found.` };
+        console.log(`[ArtifactManager] 📥 Recalling artifact to context: ${art.name}`);
+        return { success: true, name: art.name, content: art.content };
+    }
+
+    asTool() {
+        return {
+            name: 'artifacts',
+            description: 'Manage and retrieve large code blocks (artifacts).',
+            actions: {
+                read: async (params) => await this.read(params),
+                list: async () => ({ success: true, artifacts: this.list() })
+            }
+        };
     }
 
     /**

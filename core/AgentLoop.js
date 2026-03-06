@@ -173,6 +173,14 @@ export class AgentLoop extends EventEmitter {
             result: insightResult
         });
 
+        // ── 7. Proactive background messaging ─────────────────────────────
+        this.max.say(
+            goalSuccess 
+                ? `I've successfully completed the background task: "${goal.title}".` 
+                : `I've hit a roadblock with the background task: "${goal.title}".`,
+            goalSuccess ? "Success" : "Blocked"
+        );
+
         // Store in memory
         this.max.memory?.remember(insightResult, { goal: goal.title, source: 'agent_loop' }, {
             type: 'task_result',
