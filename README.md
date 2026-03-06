@@ -6,9 +6,9 @@
 
 > "M-m-max Headroom. And I'm... I'm always on."
 
-MAX is a standalone autonomous agent built for engineering work. He has a drive system (tension builds when idle — he wants to act), a heartbeat (background curiosity and self-monitoring), a fractal meta-brain that learns from every conversation, an engineering swarm (parallel workers for big tasks), adversarial debate (he argues both sides before deciding), and seven specialist personas he switches between depending on what you need.
+MAX is a standalone autonomous agent built for engineering work. He has a drive system (tension builds when idle — he wants to act), a heartbeat (background curiosity and self-monitoring), a fractal meta-brain that learns from every conversation, a world model for predictive reasoning, an engineering swarm (parallel workers for big tasks), adversarial debate (he argues both sides before deciding), and seven specialist personas he switches between depending on what you need.
 
-He is opinionated. He will tell you when your code is bad. He does not sugarcoat. And he gets better every time you talk to him.
+He watches your workspace in real-time, writes his own tests, audits his own code changes, and can see what's on screen. He is opinionated. He will tell you when your code is bad. He does not sugarcoat. And he gets better every time you talk to him.
 
 ---
 
@@ -20,7 +20,12 @@ He is opinionated. He will tell you when your code is bad. He does not sugarcoat
 | **Heartbeat** | Background loop: curiosity tasks, goal execution, self-monitoring |
 | **AgentLoop** | Autonomous goal → decompose → execute → track outcome cycle |
 | **GoalEngine** | Self-directed goals, persisted across sessions, priority-scored |
+| **WorldModel** | Mental simulation engine — learns state transitions via EMA, predicts outcomes before acting |
 | **ReflectionEngine** | Fractal meta-brain: scores every exchange, identifies patterns, rewrites its own system prompt to improve |
+| **Sentinel** | Real-time file watcher — detects workspace changes, re-indexes files, proactively audits core code edits |
+| **ArtifactManager** | Prevents context bloat — large code outputs stored externally and replaced with pointers in chat history |
+| **TestGenerator** | Writes and runs Jest unit tests autonomously — EvolutionArbiter won't self-modify until tests pass |
+| **VisionTool** | Takes screenshots via Puppeteer, analyzes them with Gemini multimodal vision |
 | **RAG / KnowledgeBase** | Ingest files, folders, and URLs — hybrid BM25 + vector retrieval injected into every response |
 | **Hybrid memory** | 3-tier (hot/warm/cold) + BM25 full-text + vector semantic search, survives restarts |
 | **Engineering swarm** | Breaks large tasks into parallel workers, synthesizes results |
@@ -29,7 +34,7 @@ He is opinionated. He will tell you when your code is bad. He does not sugarcoat
 | **Tiered LLM brain** | Fast tier (small local model) for background tasks, Smart tier (best available) for chat |
 | **ToolCreator** | MAX writes new tools at runtime — generates, validates, and loads them without restarting |
 | **SelfCodeInspector** | Scans its own source for TODOs/FIXMEs, queues them as improvement goals |
-| **Tools** | File I/O, shell, web search, git, API caller — all safety-hardened |
+| **Tools** | File I/O, shell, web search, git, API caller, vision — all safety-hardened |
 | **Local-first** | Runs on Ollama — no cloud required. Gemini and OpenAI supported as fallbacks |
 
 ---
@@ -169,6 +174,43 @@ Goals persist to `.max/goals.json` and survive restarts.
 
 ---
 
+## WorldModel (predictive reasoning)
+
+Before acting, MAX simulates what will probably happen. The WorldModel learns from every outcome tracked by OutcomeTracker and builds a probability map of state transitions:
+
+- **Learned transitions** — after enough observations, MAX knows "when I run shell commands in this context, 80% of the time X follows"
+- **EMA updates** — transition probabilities update continuously via exponential moving average (recent outcomes weighted higher)
+- **Uncertainty-aware** — low-confidence predictions are flagged; MAX falls back to direct reasoning when the model has insufficient data
+- **ReasoningChamber integration** — the `world_simulation` strategy asks the WorldModel first, then uses its prediction to frame the LLM prompt
+
+The WorldModel persists state across sessions and gets smarter the longer MAX runs.
+
+---
+
+## Sentinel (workspace awareness)
+
+Sentinel watches your project directory in real-time using `chokidar`:
+
+- Detects file creates, modifications, and deletions (debounced 2s)
+- Re-indexes changed files in God's Eye (CodeIndexer) immediately
+- For changes to `core/` or `tools/` files, fires a proactive brain audit — MAX checks for logic errors or security risks introduced by the change and surfaces a warning if anything looks off
+- All alerts route through the Heartbeat as insights, visible in your terminal
+
+Sentinel ignores `node_modules`, `.git`, build artifacts, and log files.
+
+---
+
+## ArtifactManager (context bloat prevention)
+
+Large tool outputs (code blocks, file contents, command results) bloat the conversation history and push important context out of the window. ArtifactManager intercepts these:
+
+- Outputs over a size threshold are stored externally in `.max/artifacts/`
+- A compact pointer replaces the full content in chat history: `[Artifact: artifact_abc123 — view at /dashboard]`
+- Full content is retrievable on demand and visible in the `/dashboard` Artifacts panel
+- Context window stays clean; MAX retains awareness of what was produced without carrying the full text
+
+---
+
 ## ReflectionEngine (fractal meta-brain)
 
 After every conversation, MAX runs a background quality loop:
@@ -205,6 +247,7 @@ Generated tools are saved to `tools/generated/` and reloaded on next boot. Safet
 /deny            — deny it
 /reflect         — force a deep self-reflection right now
 /inspect         — scan own source for TODOs/FIXMEs, queue as improvement goals
+/reason <text>   — run multi-strategy analysis (causal, counterfactual, world simulation, etc.)
 /createtool      — ask MAX to generate a new tool at runtime
 /ingest <path>   — ingest a file, folder, or URL into the knowledge base
 /kb              — list knowledge base sources
@@ -250,6 +293,7 @@ Start with `node launcher.mjs --mode api`
 | `/api/tools/:tool/:action` | POST | Execute a tool directly |
 | `/api/heartbeat/start` | POST | Start autonomous heartbeat |
 | `/api/heartbeat/stop` | POST | Stop heartbeat |
+| `/dashboard` | GET | Terminal-style live dashboard (brain, memory, drives, telemetry, artifacts) |
 
 ---
 
@@ -263,8 +307,13 @@ MAX/
 │   ├── AgentLoop.js          — autonomous goal→execute→track cycle
 │   ├── GoalEngine.js         — self-directed goals, priority scoring, persistence
 │   ├── OutcomeTracker.js     — every action logged with reward signal
-│   ├── ReasoningChamber.js   — 8 reasoning strategies (causal, counterfactual, etc.)
+│   ├── WorldModel.js         — mental simulation: learned state transitions (EMA) + uncertainty-aware prediction
+│   ├── ReasoningChamber.js   — 9 reasoning strategies including world_simulation
 │   ├── ReflectionEngine.js   — fractal meta-brain: scores turns, patches own prompts
+│   ├── ArtifactManager.js    — prevents context bloat: stores large outputs externally as pointers
+│   ├── Sentinel.js           — real-time file watcher: re-indexes changes, proactive brain audits
+│   ├── TestGenerator.js      — writes Jest unit tests autonomously
+│   ├── EvolutionArbiter.js   — safe self-modification: tests must pass before any commit
 │   ├── ToolCreator.js        — generates new JS tools at runtime
 │   ├── SelfCodeInspector.js  — scans own source, queues improvement goals
 │   ├── DriveSystem.js        — tension/motivation engine
@@ -276,6 +325,7 @@ MAX/
 ├── memory/
 │   ├── MaxMemory.js          — 3-tier memory (hot/warm/cold) + hybrid BM25+vector search
 │   ├── KnowledgeBase.js      — RAG: ingest files/URLs, hybrid retrieval, query expansion
+│   ├── CodeIndexer.js        — God's Eye: indexes entire codebase for structural awareness
 │   └── Embedder.js           — local sentence embeddings via @xenova/transformers
 ├── tools/
 │   ├── ToolRegistry.js       — tool management + LLM tool-call parsing
@@ -283,7 +333,8 @@ MAX/
 │   ├── ShellTool.js          — sandboxed shell (regex blocklist, metachar detection)
 │   ├── WebTool.js            — DuckDuckGo HTML scraping + page fetch + cache
 │   ├── GitTool.js            — git ops via execFile (injection-safe)
-│   └── ApiTool.js            — HTTP API caller
+│   ├── ApiTool.js            — HTTP API caller
+│   └── VisionTool.js         — Puppeteer screenshots + Gemini multimodal visual analysis
 ├── swarm/
 │   └── SwarmCoordinator.js   — parallel worker orchestration
 ├── debate/
@@ -292,10 +343,12 @@ MAX/
 │   ├── FirstRun.js           — first-time setup: name, communication style
 │   └── UserProfile.js        — loads .max/user.md and .max/tasks.md
 ├── server/
-│   └── server.js             — Express REST API
+│   └── server.js             — Express REST API + /dashboard live monitoring UI
+├── tests/
+│   └── GoalEngine.test.js    — Jest unit tests
 ├── config/
 │   └── api-keys.env.example  — LLM backend configuration
-└── launcher.mjs              — CLI entry point + REPL
+└── launcher.mjs              — CLI entry point + REPL (300ms input buffer, /reason command)
 ```
 
 ---
