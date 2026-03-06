@@ -25,8 +25,7 @@ export class ArtifactManager extends EventEmitter {
             name,
             content,
             type,
-            lineCount: content.split('
-').length,
+            lineCount: content.split('\n').length,
             timestamp: Date.now()
         };
 
