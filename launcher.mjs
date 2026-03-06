@@ -274,6 +274,18 @@ async function chatMode(max, opts) {
 
     max.heartbeat.on('insight', printInsight);
     
+    // ── Proactive direct messages from background systems ──
+    max.heartbeat.on('message', (msg) => {
+        if (_rl) {
+            readline.clearLine(process.stdout, 0);
+            readline.cursorTo(process.stdout, 0);
+        }
+        console.log(`\nMAX [background]: ${msg.text}`);
+        if (msg.details) console.log(`[${msg.details}]`);
+        console.log();
+        if (_rl) process.stdout.write('YOU: ');
+    });
+    
     console.log('\n' + '─'.repeat(60));
     console.log('  MAX is live. Dashboard: http://localhost:3100/dashboard');
     console.log('  Commands: /status, /persona <p>, /reason <q>, /swarm, /debate, /expand, /quit');

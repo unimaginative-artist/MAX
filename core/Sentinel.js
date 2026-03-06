@@ -119,6 +119,11 @@ Otherwise, give a 1-sentence warning.`,
 
             const report = result.text;
             if (report !== 'PASS' && !report.includes('PASS')) {
+                // If it looks like a security warning, speak up proactively!
+                if (report.toLowerCase().includes('security') || report.toLowerCase().includes('risk')) {
+                    this.max.say(`🛡️ Sentinel Warning for ${file}: ${report}`, "High Risk Detection");
+                }
+
                 this.emit('insight', {
                     source: 'sentinel',
                     label:  `🛡️  Sentinel Audit: ${file}`,

@@ -472,7 +472,8 @@ export class MaxMemory {
             const obj = {};
             for (const [id, vec] of this._vectors) obj[id] = vec;
             // Use async promises to avoid blocking the main thread
-            await fs.promises.writeFile(this.vectorPath, JSON.stringify(obj));
+            await fs.promises.writeFile(this.vectorPath + '.tmp', JSON.stringify(obj));
+            await fs.promises.rename(this.vectorPath + '.tmp', this.vectorPath);
             this._vectorsDirty = false;
         } catch (err) {
             console.warn(`[Memory] ⚠️ Vector persistence failed: ${err.message}`);

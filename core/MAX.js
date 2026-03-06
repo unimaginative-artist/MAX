@@ -126,6 +126,7 @@ export class MAX {
         this.tools.register(CodeRunnerTool);
         this.tools.register(DiscordTool);
         this.tools.register(EmailTool);
+        this.tools.register(this.artifacts.asTool());
         this.tools.register(createVisionTool(this));
         this.tools.register(createSelfEvolutionTool(this));
         this.tools.register(this.lab.asTool());
@@ -307,7 +308,7 @@ export class MAX {
         let result = await this.brain.think(historyText, {
             systemPrompt: systemPrompt + memoryContext + kbContext,
             temperature: options.temperature ?? 0.7,
-            maxTokens:   options.maxTokens   ?? 2048
+            maxTokens:   options.maxTokens   ?? 8192
         });
 
         let response = result.text;
@@ -335,7 +336,7 @@ export class MAX {
             result = await this.brain.think(updatedHistory, {
                 systemPrompt: systemPrompt + memoryContext + kbContext,
                 temperature: 0.4, // lower temp for reasoning
-                maxTokens:   2048
+                maxTokens:   8192
             });
             response = result.text;
         }
@@ -426,6 +427,11 @@ Think deeper about the engineering implications. What are edge cases, gotchas, o
         return this.debate.debate(proposal);
     }
 
+    // ─── Direct communication ────────────────────────────────────────────
+    say(text, details = null) {
+        this.heartbeat.emit('message', { text, details });
+    }
+
     // ─── Direct reasoning (Causal, Simulation, Security, etc.) ────────────
     async reason(query, options = {}) {
         if (!this._ready) throw new Error('MAX not initialized');
@@ -450,9 +456,12 @@ Think deeper about the engineering implications. What are edge cases, gotchas, o
                     let resultStr = JSON.stringify(toolResult);
 
                     // ─── Artifact Extraction ───
-                    // If the result is huge (like a file read), store it as an artifact
+                    // If the result is huge, store it as an artifact
                     // and only put the pointer in the chat context.
-                    if (resultStr.length > 800) {
+                    // EXEMPTION: Never artifact-ize the result of an 'artifacts' tool call.
+                    const isArtifactTool = trimmed.startsWith('TOOL:artifacts:');
+
+                    if (resultStr.length > 5000 && !isArtifactTool) {
                         const name = trimmed.split(':')[2] || 'Tool Output';
                         const pointer = this.artifacts.store(name, resultStr, 'tool_result');
                         resultStr = pointer;
