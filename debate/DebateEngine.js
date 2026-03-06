@@ -69,11 +69,13 @@ ${priorContext}
 Make 3-4 strong, specific arguments. Be concrete. Address the actual risks or benefits.
 No fluff. Max ${this.config.argumentMaxTokens / 4} words.`;
 
-        return this.brain.think(prompt, {
+        const result = await this.brain.think(prompt, {
             systemPrompt: 'You are a sharp debate participant. Be precise and persuasive.',
             temperature:  0.8,
             maxTokens:    this.config.argumentMaxTokens
         });
+
+        return result.text;
     }
 
     async _arbitrate(proposal, rounds) {
@@ -99,11 +101,13 @@ After weighing all arguments, return a JSON verdict:
 
 Return ONLY the JSON. No extra text.`;
 
-        const raw = await this.brain.think(prompt, {
+        const result = await this.brain.think(prompt, {
             systemPrompt: 'You are an impartial arbiter. Be decisive and clear.',
             temperature:  0.2,
             maxTokens:    512
         });
+
+        const raw = result.text;
 
         try {
             const jsonMatch = raw.match(/\{[\s\S]*\}/);

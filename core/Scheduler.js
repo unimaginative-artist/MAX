@@ -181,13 +181,14 @@ export class Scheduler extends EventEmitter {
     async _runBrainJob(job) {
         if (!this.max?.brain?._ready) return;
 
-        const result = await this.max.brain.think(job.prompt, {
+        const resultObj = await this.max.brain.think(job.prompt, {
             systemPrompt: 'You are MAX, an autonomous AI agent running a scheduled background task.',
             temperature:  0.8,
             maxTokens:    768,
             tier:         'fast'
         });
 
+        const result = resultObj.text;
         this.max?.memory?.remember(`Scheduled job "${job.label}": ${result.slice(0, 200)}`, {}, { importance: 0.7 });
         this.max?.curiosity?.onTaskComplete({ label: job.label }, result);
 
@@ -204,13 +205,14 @@ export class Scheduler extends EventEmitter {
         const task = this.max?.curiosity?.getNextTask();
         if (!task) return;
 
-        const result = await this.max.brain.think(task.prompt, {
+        const resultObj = await this.max.brain.think(task.prompt, {
             systemPrompt: 'You are MAX running an autonomous curiosity exploration. Be insightful and specific.',
             temperature:  0.85,
             maxTokens:    512,
             tier:         'fast'
         });
 
+        const result = resultObj.text;
         this.max?.memory?.remember(`Curiosity: "${task.label}": ${result.slice(0, 200)}`, {}, { importance: 0.5 });
         this.max?.drive?.onTaskExecuted();
         this.max?.curiosity?.onTaskComplete(task, result);
@@ -272,12 +274,14 @@ ${tasks.map(t => `- ${t}`).join('\n')}
 In 2-3 sentences: which task looks most important right now, and is there anything that seems stuck or forgotten?
 Be direct. Max Headroom style.`;
 
-        const result = await this.max.brain.think(prompt, {
+        const resultObj = await this.max.brain.think(prompt, {
             systemPrompt: this.max.profile.buildContextBlock(),
             temperature:  0.6,
             maxTokens:    256,
             tier:         'fast'
         });
+
+        const result = resultObj.text;
 
         this.emit('insight', {
             source: 'tasks',

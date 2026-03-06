@@ -125,11 +125,12 @@ export class Heartbeat extends EventEmitter {
 
             if (this.max?.brain?._ready && curiosityTask.prompt) {
                 try {
-                    const result = await this.max.brain.think(curiosityTask.prompt, {
+                    const resultObj = await this.max.brain.think(curiosityTask.prompt, {
                         systemPrompt: 'You are MAX, an autonomous AI agent. Think concisely and return useful insights.',
                         maxTokens: 512,
                         tier: 'fast'
                     });
+                    const result = resultObj.text;
                     await this.max?.memory?.remember?.(
                         `Curiosity: "${curiosityTask.label}": ${result.slice(0, 200)}`,
                         {},

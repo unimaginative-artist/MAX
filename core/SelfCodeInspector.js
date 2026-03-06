@@ -23,7 +23,8 @@ const MARKERS = [
     { pattern: /\/\/\s*HACK[:\s]/gi,        label: 'HACK',       priority: 0.70 },
     { pattern: /\/\/\s*INCOMPLETE/gi,       label: 'INCOMPLETE', priority: 0.75 },
     { pattern: /throw new Error\('not implemented'\)/gi, label: 'NOT_IMPL', priority: 0.85 },
-    { pattern: /\/\*\s*fall through\s*\*\//gi, label: 'FALLTHROUGH', priority: 0.50 },
+    { pattern: /case\s+[^:]+:\s*(?!\s*break;|\s*return\s+|\s*throw\s+|\s*\/\*\s*fall\s*through\s*\*\/)/gi, label: 'MISSING_BREAK', priority: 0.60 },
+    { pattern: /console\.log\(/g,           label: 'LOG_NOISE',  priority: 0.30 },
     { pattern: /return null;\s*\/\/ placeholder/gi,     label: 'PLACEHOLDER', priority: 0.60 }
 ];
 
