@@ -27,6 +27,7 @@ import { WebTool }            from '../tools/WebTool.js';
 import { GitTool }            from '../tools/GitTool.js';
 import { ApiTool }            from '../tools/ApiTool.js';
 import { CodeRunnerTool }     from '../tools/CodeRunnerTool.js';
+import { createVisionTool }   from '../tools/VisionTool.js';
 import { createSelfEvolutionTool } from '../tools/SelfEvolutionTool.js';
 import { DiscordTool, autoConnectDiscord } from '../tools/DiscordTool.js';
 import { EmailTool,   autoConnectEmail   } from '../tools/EmailTool.js';
@@ -37,6 +38,7 @@ import { KnowledgeBase }      from '../memory/KnowledgeBase.js';
 import { UserProfile }        from '../onboarding/UserProfile.js';
 import { CodeIndexer }        from '../memory/CodeIndexer.js';
 import { Sentinel }           from './Sentinel.js';
+import { TestGenerator }      from './TestGenerator.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -75,6 +77,7 @@ export class MAX {
         this.reflection    = null;
         this.indexer       = new CodeIndexer(this);
         this.sentinel      = new Sentinel(this);
+        this.lab           = new TestGenerator(this);
 
         // Conversation context window
         this._context      = [];
@@ -88,16 +91,19 @@ export class MAX {
         console.log('═'.repeat(60));
 
         // Memory (async — loads vectors + tries to init embedder)
+        console.log('[MAX] 💾 Initializing memory tiers...');
         await this.memory.initialize();
         await this.kb.initialize();
 
         // User profile — load from .max/user.md and .max/tasks.md
+        console.log('[MAX] 👤 Loading user profile...');
         this.profile.load();
         if (this.profile.hasProfile) {
-            console.log(`[MAX] 👤 Profile: ${this.profile.name}`);
+            console.log(`[MAX] 👤 Profile loaded: ${this.profile.name}`);
         }
 
         // Brain
+        console.log('[MAX] 🧠 Initializing brain backends...');
         await this.brain.initialize();
         if (!this.brain._ready) {
             console.error('\n[MAX] ❌ No LLM backend. Cannot operate without a brain.');
@@ -107,6 +113,7 @@ export class MAX {
         }
 
         // Tools
+        console.log('[MAX] 🛠️  Registering tools...');
         this.tools.register(FileTools);
         this.tools.register(ShellTool);
         this.tools.register(WebTool);
@@ -115,9 +122,12 @@ export class MAX {
         this.tools.register(CodeRunnerTool);
         this.tools.register(DiscordTool);
         this.tools.register(EmailTool);
+        this.tools.register(createVisionTool(this));
         this.tools.register(createSelfEvolutionTool(this));
+        this.tools.register(this.lab.asTool());
 
         // Wire integration callbacks → heartbeat insights
+        console.log('[MAX] ♻️  Connecting integrations...');
         DiscordTool.onMessage = (msg) => {
             this.heartbeat.emit('insight', {
                 source: 'discord',
@@ -149,6 +159,7 @@ export class MAX {
         });
 
         // Autonomous systems
+        console.log('[MAX] ⚙️  Wiring autonomous systems...');
         const dataDir  = path.join(__dirname, '..', '.max');
         this.outcomes  = new OutcomeTracker({ storageDir: path.join(dataDir, 'outcomes') });
         await this.outcomes.initialize();
@@ -167,6 +178,7 @@ export class MAX {
         this.agentLoop.on('approvalNeeded', (a) => this.heartbeat.emit('approvalNeeded', a));
 
         // ToolCreator — MAX writes new tools at runtime
+        console.log('[MAX] 🔧 Loading ToolCreator...');
         this.toolCreator = new ToolCreator(this.brain, this.tools);
         this.tools.register(this.toolCreator.asTool());
         await this.toolCreator.reloadSaved();  // reload any tools generated in past sessions
@@ -174,32 +186,7 @@ export class MAX {
         // SelfCodeInspector — MAX inspects his own source and queues improvements
         this.selfInspector = new SelfCodeInspector(this.goals);
 
-        // ReflectionEngine — fractal meta-brain, watches performance and improves over time
         this.reflection = new ReflectionEngine(this.brain, this.goals, this.outcomes);
-
-        // Run codebase indexing in background
-        this.indexer.startIndexing().catch(() => {});
-
-        // Sentinel — real-time file watcher
-        this.sentinel.start();
-        this.sentinel.on('change', (change) => {
-            this.heartbeat.emit('insight', {
-                source: 'sentinel',
-                label:  `👁️  Observed: ${change.file}`,
-                result: `Detected ${change.type}. Memory index updated.`
-            });
-        });
-        this.sentinel.on('insight', (i) => this.heartbeat.emit('insight', i));
-
-        // Run first inspection in background — don't block boot
-        setTimeout(() => {
-            this.selfInspector.inspect().then(() => {
-                const queued = this.selfInspector.queueGoals(2);
-                if (queued.length > 0) {
-                    console.log(`[MAX] 🔍 Self-inspection queued ${queued.length} improvement goal(s)`);
-                }
-            }).catch(() => {});
-        }, 5000);
 
         this._ready = true;
 
@@ -208,10 +195,45 @@ export class MAX {
         console.log(`[MAX] 🧠 Persona: ${this.persona.getStatus().name}`);
         console.log(`[MAX] 🛠️  Tools: ${this.tools.list().map(t => t.name).join(', ')}`);
 
-        // Always start the autonomous systems — MAX is proactive by default
+        // Start background autonomous systems — non-blocking
+        console.log('[MAX] 💓 Starting background Heartbeat and Scheduler...');
         this.scheduler.initialize();
         this.scheduler.start();
         this.heartbeat.start();
+
+        // ─── Truly non-blocking background tasks ───
+        (async () => {
+            console.log('[MAX] 🧵 Launching background worker thread...');
+            // Wait a few seconds for main chat to be ready
+            await new Promise(r => setTimeout(r, 2000));
+
+            // Lab initialization
+            await this.lab.initialize().catch(() => {});
+            
+            // Code indexing
+            console.log('[MAX] 👁️  Starting background God\'s Eye indexing...');
+            this.indexer.startIndexing().catch(() => {});
+
+            // Sentinel — real-time file watcher
+            console.log('[MAX] 🛡️  Starting background Sentinel daemon...');
+            this.sentinel.start();
+            this.sentinel.on('change', (change) => {
+                this.heartbeat.emit('insight', {
+                    source: 'sentinel',
+                    label:  `👁️  Observed: ${change.file}`,
+                    result: `Detected ${change.type}. Memory index updated.`
+                });
+            });
+            this.sentinel.on('insight', (i) => this.heartbeat.emit('insight', i));
+
+            // First inspection
+            console.log('[MAX] 🔍 Running initial self-inspection...');
+            await this.selfInspector.inspect().catch(() => {});
+            const queued = this.selfInspector.queueGoals(2);
+            if (queued.length > 0) {
+                console.log(`[MAX] 🔍 Self-inspection queued ${queued.length} improvement goal(s)`);
+            }
+        })().catch(err => console.error('[MAX] Background startup error:', err.message));
 
         console.log('[MAX] Ready.\n');
     }
