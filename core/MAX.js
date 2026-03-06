@@ -36,6 +36,7 @@ import { MaxMemory }          from '../memory/MaxMemory.js';
 import { KnowledgeBase }      from '../memory/KnowledgeBase.js';
 import { UserProfile }        from '../onboarding/UserProfile.js';
 import { CodeIndexer }        from '../memory/CodeIndexer.js';
+import { Sentinel }           from './Sentinel.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -73,6 +74,7 @@ export class MAX {
         this.selfInspector = null;
         this.reflection    = null;
         this.indexer       = new CodeIndexer(this);
+        this.sentinel      = new Sentinel(this);
 
         // Conversation context window
         this._context      = [];
@@ -177,6 +179,17 @@ export class MAX {
 
         // Run codebase indexing in background
         this.indexer.startIndexing().catch(() => {});
+
+        // Sentinel — real-time file watcher
+        this.sentinel.start();
+        this.sentinel.on('change', (change) => {
+            this.heartbeat.emit('insight', {
+                source: 'sentinel',
+                label:  `👁️  Observed: ${change.file}`,
+                result: `Detected ${change.type}. Memory index updated.`
+            });
+        });
+        this.sentinel.on('insight', (i) => this.heartbeat.emit('insight', i));
 
         // Run first inspection in background — don't block boot
         setTimeout(() => {
