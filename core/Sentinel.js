@@ -60,9 +60,17 @@ export class Sentinel extends EventEmitter {
     _enqueue(filePath, type) {
         const relPath = path.relative(this.root, filePath);
         
+        // Strictly ignore anything in ignored paths (especially .max)
+        if (this.config.ignore.some(p => {
+            const pattern = p.replace(/\*\*/g, '.*').replace(/\//g, '[\\\\/]');
+            return new RegExp(pattern).test(relPath);
+        })) {
+            return;
+        }
+
         // Skip non-source files
         const ext = path.extname(filePath).toLowerCase();
-        const validExts = ['.js', '.mjs', '.cjs', '.ts', '.py', '.go', '.md', '.json'];
+        const validExts = ['.js', '.mjs', '.cjs', '.ts', '.py', '.go', '.md']; // Removed .json to be safe
         if (!validExts.includes(ext)) return;
 
         this._queue.add(relPath);

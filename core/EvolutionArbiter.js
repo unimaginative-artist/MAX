@@ -70,6 +70,20 @@ export class EvolutionArbiter {
             return { success: false, error: "Brain Failure: 'runCycle' missing from AgentLoop." };
         }
 
+        // 4. Automated Unit Test Check
+        try {
+            console.log(`[Evolution] 🧪 Running project test suite against change...`);
+            // We run with --passWithNoTests so it doesn't fail if the user hasn't written any yet,
+            // but if there ARE tests, they MUST pass.
+            await execAsync('npm test');
+        } catch (err) {
+            return { 
+                success: false, 
+                error: `Regression Detected: The change broke existing functionality.`,
+                details: err.stdout || err.message
+            };
+        }
+
         return { success: true };
     }
 

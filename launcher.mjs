@@ -553,6 +553,8 @@ async function main() {
     loadEnv();
     const opts = parseArgs();
 
+    console.log('[Launcher] 🚀 Booting MAX...');
+
     const max = new MAX({
         ollamaModel:   process.env.OLLAMA_MODEL,
         geminiKey:     process.env.GEMINI_API_KEY,
@@ -561,7 +563,9 @@ async function main() {
         memory:        { dbPath: join(__dirname, '.max', 'memory.db') }
     });
 
+    console.log('[Launcher] ⚙️  Initializing core systems...');
     await max.initialize();
+    console.log('[Launcher] ✅ Core systems ready.');
     if (!max._ready) process.exit(1);
 
     // First-run onboarding — runs before chat, only once

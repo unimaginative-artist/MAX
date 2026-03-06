@@ -69,11 +69,16 @@ export class CodeIndexer {
     }
 
     async _indexFile(filePath) {
+        const relPath = path.relative(process.cwd(), filePath);
+        
+        // Ensure we aren't indexing ignored files (e.g. from Sentinel trigger)
+        const parts = relPath.split(/[\\\/]/);
+        if (parts.some(p => this._ignoreDirs.has(p) || p.startsWith('.'))) {
+            return;
+        }
+
         try {
             const content = await fs.readFile(filePath, 'utf8');
-            if (!content.trim()) return;
-
-            const relPath = path.relative(process.cwd(), filePath);
             
             // ─── Semantic Code Chunking ───
             // Instead of random slices, we split by high-level semantic markers
