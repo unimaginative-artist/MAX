@@ -206,7 +206,7 @@ export class MAX {
         this._ready = true;
 
         const status = this.brain.getStatus();
-        console.log(`\n[MAX] ✅ Online — ${status.backend} / ${status.model}`);
+        console.log(`\n[MAX] ✅ Online — ${status.smart.backend} / ${status.smart.model}`);
         console.log(`[MAX] 🧠 Persona: ${this.persona.getStatus().name}`);
         console.log(`[MAX] 🛠️  Tools: ${this.tools.list().map(t => t.name).join(', ')}`);
 
