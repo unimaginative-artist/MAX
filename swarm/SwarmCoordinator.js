@@ -33,7 +33,8 @@ export class SwarmCoordinator extends EventEmitter {
             startedAt: Date.now(),
             status:    'running',
             subtasks:  task.subtasks.map(s => ({ ...s, status: 'pending', result: null })),
-            results:   []
+            results:   [],
+            scratchpad: {} // ─── SHARED BLACKBOARD: Agents can write/read here ───
         };
 
         this.activeJobs.set(jobId, job);
@@ -42,7 +43,7 @@ export class SwarmCoordinator extends EventEmitter {
         console.log(`\n[Swarm] 🐝 Job "${task.name}" — ${task.subtasks.length} subtasks, max ${this.config.maxWorkers} parallel`);
 
         try {
-            // Run subtasks in batches of maxWorkers
+            // ─── Phase 1: Exploration & Execution ───
             const batches = this._chunk(task.subtasks, this.config.maxWorkers);
 
             for (const batch of batches) {
@@ -53,13 +54,24 @@ export class SwarmCoordinator extends EventEmitter {
                 for (const r of batchResults) {
                     if (r.status === 'fulfilled') {
                         job.results.push(r.value);
+                        // Update scratchpad with specific worker discoveries if present
+                        if (r.value.discoveries) {
+                            Object.assign(job.scratchpad, r.value.discoveries);
+                        }
                     } else {
                         job.results.push({ error: r.reason?.message || 'subtask failed' });
                     }
                 }
             }
 
-            // Synthesize results
+            // ─── Phase 2: Adversarial Validation (Peer Review) ───
+            const validation = await this._validate(job);
+            if (validation.hasContradictions) {
+                console.warn(`[Swarm] ⚠️  Contradictions found in swarm output. Resolving...`);
+                job.scratchpad.contradictions = validation.notes;
+            }
+
+            // ─── Phase 3: Coherent Synthesis ───
             const synthesis = await this._synthesize(job);
             job.synthesis = synthesis;
             job.status    = 'complete';
@@ -96,12 +108,16 @@ export class SwarmCoordinator extends EventEmitter {
                 }
             }
 
-            // Build context from tool results
+            // Build context from tool results + SHARED SCRATCHPAD
             let context = '';
             if (Object.keys(toolResults).length > 0) {
-                context = '\n\nTool results:\n' + Object.entries(toolResults)
+                context += '\n\nLocal tool results:\n' + Object.entries(toolResults)
                     .map(([k, v]) => `${k}:\n${JSON.stringify(v, null, 2)}`)
                     .join('\n\n');
+            }
+
+            if (Object.keys(job.scratchpad).length > 0) {
+                context += '\n\nShared swarm discoveries:\n' + JSON.stringify(job.scratchpad, null, 2);
             }
 
             // Run the brain on this subtask
@@ -111,13 +127,19 @@ export class SwarmCoordinator extends EventEmitter {
                     systemPrompt: `You are a specialized worker in MAX's engineering swarm.
 Job: "${job.name}"
 Your subtask: ${subtask.id}
-Focus ONLY on your assigned subtask. Be precise and concrete.`,
+Focus ONLY on your assigned subtask. 
+If you find something critical other workers should know, include a JSON block: DISCOVERY: {"key": "value"}`,
                     temperature: 0.5,
                     maxTokens: 1024
                 }
             );
 
             const result = resultObj.text;
+            
+            // Extract discoveries for the scratchpad
+            const discoveryMatch = result.match(/DISCOVERY:\s*(\{.*\})/);
+            const discoveries    = discoveryMatch ? JSON.parse(discoveryMatch[1]) : null;
+
             subtask.status = 'complete';
             subtask.result = result;
             subtask.endedAt = Date.now();
@@ -125,7 +147,7 @@ Focus ONLY on your assigned subtask. Be precise and concrete.`,
             console.log(`  [Swarm] ✅ ${subtask.id} done (${subtask.endedAt - subtask.startedAt}ms)`);
             this.emit('subtask:complete', { jobId: job.id, subtaskId: subtask.id });
 
-            return { id: subtask.id, result, toolResults };
+            return { id: subtask.id, result, toolResults, discoveries };
 
         } catch (err) {
             subtask.status = 'failed';
@@ -144,7 +166,7 @@ Focus ONLY on your assigned subtask. Be precise and concrete.`,
             .join('\n\n');
 
         const synthesisResult = await this.brain.think(
-            `You coordinated a swarm of agents on the task: "${job.name}"\n\nEach worker's output:\n\n${resultText}\n\nSynthesize these into a single, coherent final answer. Be concrete. Eliminate redundancy.`,
+            `You coordinated a swarm of agents on the task: "${job.name}"\n\nShared discoveries: ${JSON.stringify(job.scratchpad)}\n\nEach worker's output:\n\n${resultText}\n\nSynthesize these into a single, coherent final answer. Eliminate redundancy. Resolve any contradictions mentioned in discoveries.`,
             {
                 systemPrompt: 'You are MAX synthesizing swarm worker outputs. Be concise and actionable.',
                 temperature:  0.3,
@@ -153,6 +175,36 @@ Focus ONLY on your assigned subtask. Be precise and concrete.`,
         );
 
         return synthesisResult.text;
+    }
+
+    // ─── Phase 2: Adversarial Peer Review ───
+    async _validate(job) {
+        if (job.results.length < 2) return { hasContradictions: false };
+
+        const summary = job.results
+            .map((r, i) => `[Worker ${job.subtasks[i]?.id}]: ${r.result?.slice(0, 300)}...`)
+            .join('\n\n');
+
+        const prompt = `Review these parallel engineering outputs for the job: "${job.name}".
+Are there any contradictions, conflicting data, or logical gaps between what the different workers reported?
+
+OUTPUTS:
+${summary}
+
+Return ONLY a JSON object:
+{
+  "hasContradictions": boolean,
+  "notes": "brief description of conflicts or 'none'",
+  "severity": 0.0 to 1.0
+}`;
+
+        try {
+            const result = await this.brain.think(prompt, { temperature: 0.1, tier: 'smart' });
+            const match  = result.text.match(/\{[\s\S]*\}/);
+            return match ? JSON.parse(match[0]) : { hasContradictions: false };
+        } catch {
+            return { hasContradictions: false };
+        }
     }
 
     _chunk(arr, size) {

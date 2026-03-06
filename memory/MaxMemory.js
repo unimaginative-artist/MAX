@@ -57,7 +57,7 @@ export class MaxMemory {
         this._createSchema();
 
         // Warm tier — load existing vectors from disk
-        this._loadVectors();
+        await this._loadVectors();
 
         // Start background jobs
         this._startPersistence();
@@ -266,9 +266,18 @@ export class MaxMemory {
             const queryVec = await this.embedder.embed(query);
             if (!queryVec) return scores;
 
+            let count = 0;
+            const BATCH_SIZE = 500;
+
             for (const [id, vec] of this._vectors) {
                 const s = Embedder.cosine(queryVec, vec);
                 if (s > 0.25) scores.set(id, s);
+
+                count++;
+                if (count % BATCH_SIZE === 0) {
+                    // Non-blocking yield: let the event loop process other events
+                    await new Promise(resolve => setImmediate(resolve));
+                }
             }
         } catch { /* non-fatal */ }
 
@@ -457,21 +466,25 @@ export class MaxMemory {
     }
 
     // ─── Persist vectors to disk ──────────────────────────────────────────
-    _persistVectors() {
+    async _persistVectors() {
         if (!this._vectorsDirty) return;
         try {
             const obj = {};
             for (const [id, vec] of this._vectors) obj[id] = vec;
-            fs.writeFileSync(this.vectorPath, JSON.stringify(obj));
+            // Use async promises to avoid blocking the main thread
+            await fs.promises.writeFile(this.vectorPath, JSON.stringify(obj));
             this._vectorsDirty = false;
-        } catch { /* non-fatal */ }
+        } catch (err) {
+            console.warn(`[Memory] ⚠️ Vector persistence failed: ${err.message}`);
+        }
     }
 
-    _loadVectors() {
+    async _loadVectors() {
         try {
             if (!fs.existsSync(this.vectorPath)) return;
-            const raw = JSON.parse(fs.readFileSync(this.vectorPath, 'utf8'));
-            for (const [id, vec] of Object.entries(raw)) {
+            const raw = await fs.promises.readFile(this.vectorPath, 'utf8');
+            const data = JSON.parse(raw);
+            for (const [id, vec] of Object.entries(data)) {
                 this._vectors.set(id, vec);
             }
             console.log(`[Memory] Loaded ${this._vectors.size} vectors from disk`);
@@ -479,17 +492,19 @@ export class MaxMemory {
     }
 
     _startPersistence() {
-        this._persistTimer = setInterval(() => this._persistVectors(), VECTOR_PERSIST_MS);
+        this._persistTimer = setInterval(async () => {
+            try { await this._persistVectors(); } catch {}
+        }, VECTOR_PERSIST_MS);
     }
 
     _startCleanup() {
         this._cleanupTimer = setInterval(() => this._cleanup(), CLEANUP_MS);
     }
 
-    shutdown() {
+    async shutdown() {
         clearInterval(this._persistTimer);
         clearInterval(this._cleanupTimer);
-        this._persistVectors();
+        await this._persistVectors();
     }
 
     // ─── Stats ────────────────────────────────────────────────────────────

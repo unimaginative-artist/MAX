@@ -204,7 +204,7 @@ export class AgentLoop extends EventEmitter {
 
             if (toolName === 'brain') {
                 // Think through this step — enforced timeout
-                result = await withTimeout(
+                const resObj = await withTimeout(
                     this.max.brain.think(
                         `Complete this step concisely:\n\nGOAL: ${goal.title}\nSTEP: ${action}`,
                         {
@@ -217,6 +217,7 @@ export class AgentLoop extends EventEmitter {
                     timeoutMs,
                     'brain step'
                 );
+                result = resObj.text;
             } else {
                 // Parse tool and action from step.tool (format: "tool" or "tool.action")
                 const [tName, tAction] = toolName.includes('.') ? toolName.split('.') : [toolName, 'run'];
@@ -237,7 +238,7 @@ export class AgentLoop extends EventEmitter {
                     result = JSON.stringify(toolResult).slice(0, 500);
                 } else {
                     // Unknown tool — fall back to brain
-                    result = await withTimeout(
+                    const resObj = await withTimeout(
                         this.max.brain.think(
                             `Complete this step: ${action}`,
                             { temperature: 0.4, maxTokens: 512, tier: 'fast' }
@@ -245,6 +246,7 @@ export class AgentLoop extends EventEmitter {
                         timeoutMs,
                         'brain fallback'
                     );
+                    result = resObj.text;
                 }
             }
 

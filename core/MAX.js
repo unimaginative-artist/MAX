@@ -16,6 +16,7 @@ import { ReasoningChamber }   from './ReasoningChamber.js';
 import { GoalEngine }         from './GoalEngine.js';
 import { AgentLoop }          from './AgentLoop.js';
 import { ToolCreator }        from './ToolCreator.js';
+import { EvolutionArbiter }   from './EvolutionArbiter.js';
 import { SelfCodeInspector }  from './SelfCodeInspector.js';
 import { ReflectionEngine }   from './ReflectionEngine.js';
 import { PersonaEngine }      from '../personas/PersonaEngine.js';
@@ -26,6 +27,7 @@ import { WebTool }            from '../tools/WebTool.js';
 import { GitTool }            from '../tools/GitTool.js';
 import { ApiTool }            from '../tools/ApiTool.js';
 import { CodeRunnerTool }     from '../tools/CodeRunnerTool.js';
+import { createSelfEvolutionTool } from '../tools/SelfEvolutionTool.js';
 import { DiscordTool, autoConnectDiscord } from '../tools/DiscordTool.js';
 import { EmailTool,   autoConnectEmail   } from '../tools/EmailTool.js';
 import { SwarmCoordinator }   from '../swarm/SwarmCoordinator.js';
@@ -33,6 +35,7 @@ import { DebateEngine }       from '../debate/DebateEngine.js';
 import { MaxMemory }          from '../memory/MaxMemory.js';
 import { KnowledgeBase }      from '../memory/KnowledgeBase.js';
 import { UserProfile }        from '../onboarding/UserProfile.js';
+import { CodeIndexer }        from '../memory/CodeIndexer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -63,11 +66,13 @@ export class MAX {
         // Autonomous systems
         this.outcomes     = null;
         this.reasoning    = null;
+        this.evolution    = null;
         this.goals        = null;
         this.agentLoop    = null;
         this.toolCreator  = null;
         this.selfInspector = null;
         this.reflection    = null;
+        this.indexer       = new CodeIndexer(this);
 
         // Conversation context window
         this._context      = [];
@@ -108,6 +113,7 @@ export class MAX {
         this.tools.register(CodeRunnerTool);
         this.tools.register(DiscordTool);
         this.tools.register(EmailTool);
+        this.tools.register(createSelfEvolutionTool(this));
 
         // Wire integration callbacks → heartbeat insights
         DiscordTool.onMessage = (msg) => {
@@ -146,6 +152,8 @@ export class MAX {
         await this.outcomes.initialize();
 
         this.reasoning = new ReasoningChamber(this.brain);
+        this.evolution = new EvolutionArbiter();
+        await this.evolution.initialize();
 
         this.goals     = new GoalEngine(this.brain, this.outcomes);
         this.goals.initialize();
@@ -166,6 +174,10 @@ export class MAX {
 
         // ReflectionEngine — fractal meta-brain, watches performance and improves over time
         this.reflection = new ReflectionEngine(this.brain, this.goals, this.outcomes);
+
+        // Run codebase indexing in background
+        this.indexer.startIndexing().catch(() => {});
+
         // Run first inspection in background — don't block boot
         setTimeout(() => {
             this.selfInspector.inspect().then(() => {

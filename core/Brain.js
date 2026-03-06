@@ -28,8 +28,8 @@ import fetch from 'node-fetch';
 export class Brain {
     constructor(config = {}) {
         this.ollamaUrl    = config.ollamaUrl || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-        this.timeout      = config.timeout     || 180_000;  // smart tier — 3 mins
-        this.fastTimeout  = config.fastTimeout || 120_000;  // fast tier — 2 mins (enough for large model load)
+        this.timeout      = config.timeout     || 240_000;  // smart tier — 4 mins
+        this.fastTimeout  = config.fastTimeout || 180_000;  // fast tier — 3 mins
 
         // ── Fast tier config ─────────────────────────────────────────────
         // Small local model — low latency, used for background tasks
@@ -38,7 +38,7 @@ export class Brain {
                 || process.env.OLLAMA_MODEL_FAST
                 || config.ollamaModel
                 || process.env.OLLAMA_MODEL
-                || 'llama3.2',
+                || 'qwen3:8b',
             ready:   false,
             backend: null   // 'ollama' | null
         };
@@ -50,7 +50,7 @@ export class Brain {
                 || process.env.OLLAMA_MODEL_SMART
                 || null,   // null = skip Ollama for smart tier, go straight to API
             geminiKey:   config.geminiKey  || process.env.GEMINI_API_KEY,
-            geminiModel: config.geminiModel || process.env.GEMINI_MODEL || 'gemini-1.5-pro',
+            geminiModel: config.geminiModel || process.env.GEMINI_MODEL || 'gemini-3.1-pro-preview',
             openaiKey:   config.openaiKey  || process.env.OPENAI_API_KEY,
             openaiUrl:   config.openaiUrl  || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
             openaiModel: config.openaiModel || process.env.OPENAI_MODEL   || 'gpt-4o',
