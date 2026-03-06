@@ -88,6 +88,26 @@ export async function createServer(max, port = 3100) {
             <div class="stat"><span>SUCCESS RATE</span> <span class="val">${(stats.outcomes.success / (stats.outcomes.total || 1) * 100).toFixed(1)}%</span></div>
         </div>
     </div>
+
+    <div class="grid" style="margin-top: 20px; grid-template-columns: 1fr;">
+        <div class="card">
+            <h2>📦 ARTIFACTS & HIDDEN CODE</h2>
+            <div style="max-height: 400px; overflow-y: auto;">
+                ${max.artifacts.list().map(a => `
+                    <div style="border-bottom: 1px solid #222; padding: 10px 0;">
+                        <div style="display: flex; justify-content: space-between; color: #888; font-size: 0.8em;">
+                            <span>ID: ${a.id} | TYPE: ${a.type} | ${a.lineCount} lines</span>
+                            <span>${new Date(a.timestamp).toLocaleTimeString()}</span>
+                        </div>
+                        <div style="color: #fff; margin: 5px 0;">${a.name}</div>
+                        <pre style="background: #000; padding: 10px; font-size: 0.85em; color: #00ff41; overflow-x: auto;">${
+                            a.content.replace(/</g, '&lt;').replace(/>/g, '&gt;').slice(0, 1000)
+                        }${a.content.length > 1000 ? '\n... (truncated in view)' : ''}</pre>
+                    </div>
+                `).join('') || '<div style="color: #444; padding: 20px;">No artifacts generated in this session yet.</div>'}
+            </div>
+        </div>
+    </div>
 </body>
 </html>
         `;
