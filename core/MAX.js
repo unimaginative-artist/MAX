@@ -416,11 +416,18 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             response = result.text;
         }
 
-        turnResults.push(response);
-        const finalResponse = turnResults.join('\n\n');
+        // Strip any leaked tool plumbing from the final user-facing response.
+        // [Tool result: ...] blocks and bare TOOL: lines are internal scaffolding —
+        // they go into _context for the brain to reason over, but the user never
+        // needs to see them. The last brain.think() output is the clean reply.
+        const finalResponse = response
+            .replace(/^\[Tool result:.*?\]\n?/gm, '')  // remove [Tool result: ...] lines
+            .replace(/^TOOL:[^\n]*\n?/gm, '')          // remove bare TOOL: call lines
+            .replace(/\n{3,}/g, '\n\n')                // collapse triple+ newlines
+            .trim();
 
         // Update context and memory (MaxMemory also extracts workspace signals)
-        this._context.push({ role: 'assistant', content: response }); // only push the final text to context to avoid double tool results next time
+        this._context.push({ role: 'assistant', content: response }); // full text (including tool traces) goes to context so brain has full picture
         this.memory.addConversation('user',      userMessage,       selectedPersona.id);
         this.memory.addConversation('assistant', finalResponse, selectedPersona.id);
 
