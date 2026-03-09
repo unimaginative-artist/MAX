@@ -373,11 +373,16 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             ? systemPrompt + `\n\n## Confidence: LOW on this query (${conf.reason})\nBe explicit about uncertainty. Use "I believe", "I'm not certain", "you should verify this". Never state uncertain facts confidently.`
             : systemPrompt;
 
-        // Think
+        // Think — cap tokens based on whether this looks like a code/analysis task.
+        // Conversational turns don't need 8K token responses; capping reduces timeout risk.
+        const needsLongReply = /\b(explain|analyse|analyze|investigate|compare|summarize|list all|implement|write|refactor|how does|why does)\b/i.test(userMessage)
+            || userMessage.length > 120;
+        const maxTok = options.maxTokens ?? (needsLongReply ? 4096 : 1024);
+
         let result = await this.brain.think(historyText, {
             systemPrompt: finalSystemPrompt + memoryContext + kbContext,
-            temperature: options.temperature ?? 0.7,
-            maxTokens:   options.maxTokens   ?? 8192
+            temperature:  options.temperature ?? 0.7,
+            maxTokens:    maxTok
         });
 
         let response = result.text;
