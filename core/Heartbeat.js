@@ -149,12 +149,61 @@ export class Heartbeat extends EventEmitter {
             drive?.onIdleTick();
             this.emit('idle');
 
-            // ── Occasional Dreaming ──
-            // If idle and in a good mood, consolidate memory (5% chance per idle tick)
+            // ── Proactive surfacing (~15% of idle ticks) ──
+            if (Math.random() < 0.15) {
+                this._proactiveSurface().catch(() => {});
+            }
+
+            // ── Occasional Dreaming (~5% of idle ticks) ──
             if (this.max?.reflection && Math.random() < 0.05) {
                 this.max.reflection.dream(this.max.kb).catch(() => {});
             }
         }
+    }
+
+    // ─── Proactive surfacing — volunteer important signals during idle ─────
+    async _proactiveSurface() {
+        const insights = [];
+
+        // 1. Stale goals — goals that haven't been touched in 7+ days
+        const goals  = this.max.goals?.listActive() || [];
+        const staleMs = 7 * 24 * 60 * 60 * 1000;
+        const stale  = goals.filter(g => Date.now() - (g.updatedAt || g.createdAt) > staleMs);
+        if (stale.length > 0) {
+            insights.push(`${stale.length} goal(s) stale >7 days: ${stale.slice(0, 3).map(g => `"${g.title}"`).join(', ')}`);
+        }
+
+        // 2. Goals created but never attempted
+        const unstarted = goals.filter(g => {
+            const daysOld = (Date.now() - g.createdAt) / (24 * 60 * 60 * 1000);
+            return daysOld > 3 && (g.attempts || 0) === 0 && g.status === 'pending';
+        });
+        if (unstarted.length > 0) {
+            insights.push(`${unstarted.length} goal(s) queued 3+ days but never attempted`);
+        }
+
+        // 3. High failure rate in recent outcomes
+        const stats = this.max.outcomes?.getStats?.();
+        if (stats && stats.total >= 10) {
+            const rate = stats.success / stats.total;
+            if (rate < 0.4) {
+                insights.push(`Low action success rate: ${(rate * 100).toFixed(0)}% across ${stats.total} tracked actions — consider /reflect`);
+            }
+        }
+
+        // 4. Memory size growing large
+        const memStats = this.max.memory?.getStats?.();
+        if (memStats && memStats.totalMemories > 500) {
+            insights.push(`Memory at ${memStats.totalMemories} entries — run /reflect to consolidate`);
+        }
+
+        if (insights.length === 0) return;
+
+        this.emit('insight', {
+            source: 'proactive',
+            label:  '📊 Things worth your attention',
+            result: '• ' + insights.join('\n• ')
+        });
     }
 
     getStatus() {

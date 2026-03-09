@@ -14,9 +14,10 @@ const GOALS_FILE = path.join(process.cwd(), '.max', 'goals.json');
 const WEIGHTS = { impact: 0.35, urgency: 0.25, feasibility: 0.25, effort: 0.15 };
 
 export class GoalEngine {
-    constructor(brain, outcomeTracker, config = {}) {
+    constructor(brain, outcomeTracker, memory = null, config = {}) {
         this.brain    = brain;
         this.outcomes = outcomeTracker;
+        this.memory   = memory;   // injected after memory system boots
         this.config   = {
             maxActive:        config.maxActive        || 10,
             maxHistory:       config.maxHistory       || 50,
@@ -57,7 +58,8 @@ export class GoalEngine {
             createdAt:   now,
             updatedAt:   now,
             attempts:    0,
-            outcome:     null
+            outcome:     null,
+            blockedBy:   goal.blockedBy || []         // dependency graph: goal IDs that must complete first
         };
 
         if (this._active.size >= this.config.maxActive) {
@@ -76,7 +78,15 @@ export class GoalEngine {
 
     // ─── Get the highest priority pending goal ────────────────────────────
     getNext(driveSystem = null) {
-        const candidates = [...this._active.values()].filter(g => g.status === 'pending');
+        const candidates = [...this._active.values()].filter(g => {
+            if (g.status !== 'pending') return false;
+            // Skip if any dependency is still active/pending
+            if (g.blockedBy?.length > 0) {
+                const stillBlocked = g.blockedBy.some(id => this._active.has(id));
+                if (stillBlocked) return false;
+            }
+            return true;
+        });
         if (candidates.length === 0) return null;
 
         // Apply urgency boost from DriveSystem if available
@@ -93,10 +103,36 @@ export class GoalEngine {
     async decompose(goal) {
         if (!this.brain._ready) return [goal.description || goal.title];
 
+        // Pull relevant memories and past outcomes to inform the plan
+        let memoryContext = '';
+        if (this.memory) {
+            try {
+                const relevant = await this.memory.recall(goal.title, { topK: 3 });
+                if (relevant.length > 0) {
+                    memoryContext = '\n\nRELEVANT PAST EXPERIENCE:\n'
+                        + relevant.map(m => `- ${m.content.slice(0, 150)}`).join('\n');
+                }
+            } catch { /* non-fatal */ }
+        }
+
+        let outcomeContext = '';
+        if (this.outcomes) {
+            try {
+                const keyword = goal.title.toLowerCase().split(' ')[0];
+                const past = this.outcomes.query({ limit: 10 }).filter(o =>
+                    (o.context?.title || o.action || '').toLowerCase().includes(keyword)
+                ).slice(0, 4);
+                if (past.length > 0) {
+                    outcomeContext = '\n\nPAST SIMILAR ATTEMPTS:\n'
+                        + past.map(o => `- ${o.success ? '✓' : '✗'} ${o.context?.title || o.action}: ${(o.result || '').slice(0, 100)}`).join('\n');
+                }
+            } catch { /* non-fatal */ }
+        }
+
         const prompt = `Break this goal into 3-6 concrete, executable steps:
 
 GOAL: ${goal.title}
-${goal.description ? `DETAILS: ${goal.description}` : ''}
+${goal.description ? `DETAILS: ${goal.description}` : ''}${memoryContext}${outcomeContext}
 
 Return a JSON array of step objects:
 [
@@ -120,6 +156,17 @@ Return ONLY the JSON array.`;
         return [{ step: 1, action: goal.description || goal.title, tool: 'brain', success: 'completed' }];
     }
 
+    // ─── Add a dependency between goals ──────────────────────────────────
+    // goalId will not be picked until all blockedByIds are complete
+    addDependency(goalId, blockedByIds = []) {
+        const goal = this._active.get(goalId);
+        if (!goal) return false;
+        goal.blockedBy = [...new Set([...(goal.blockedBy || []), ...blockedByIds])];
+        this._save();
+        console.log(`[GoalEngine] 🔗 "${goal.title}" now blocked by ${blockedByIds.length} goal(s)`);
+        return true;
+    }
+
     // ─── Mark a goal complete ─────────────────────────────────────────────
     complete(id, outcome = {}) {
         const goal = this._active.get(id);
@@ -131,6 +178,16 @@ Return ONLY the JSON array.`;
 
         this._active.delete(id);
         this._completed.unshift(goal);
+
+        // Unblock any goals that were waiting on this one
+        for (const [, g] of this._active) {
+            if (g.blockedBy?.includes(id)) {
+                g.blockedBy = g.blockedBy.filter(bid => bid !== id);
+                if (g.blockedBy.length === 0) {
+                    console.log(`[GoalEngine] 🔓 "${g.title}" unblocked`);
+                }
+            }
+        }
         if (this._completed.length > this.config.maxHistory) this._completed.pop();
 
         this.stats.completed++;
