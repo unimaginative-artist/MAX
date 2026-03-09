@@ -100,7 +100,8 @@ export class GoalEngine {
     }
 
     // ─── Decompose a goal into concrete steps via brain ───────────────────
-    async decompose(goal) {
+    // context.availableTools — string[] of registered tool names (from AgentLoop)
+    async decompose(goal, context = {}) {
         if (!this.brain._ready) return [goal.description || goal.title];
 
         // Pull relevant memories and past outcomes to inform the plan
@@ -129,20 +130,32 @@ export class GoalEngine {
             } catch { /* non-fatal */ }
         }
 
-        const prompt = `Break this goal into 3-6 concrete, executable steps:
+        // Tell the planner exactly which tools are available — prevents plans
+        // that use non-existent tools and then fail on the first step.
+        const toolLine = context.availableTools?.length
+            ? `AVAILABLE TOOLS (use only these): ${context.availableTools.join(', ')}`
+            : `AVAILABLE TOOLS: file, shell, web, git, api, brain`;
+
+        const prompt = `Break this goal into 3-6 concrete, executable steps.
 
 GOAL: ${goal.title}
-${goal.description ? `DETAILS: ${goal.description}` : ''}${memoryContext}${outcomeContext}
+${goal.description ? `DETAILS: ${goal.description}\n` : ''}${toolLine}${memoryContext}${outcomeContext}
+
+Rules:
+- Each step must use one of the listed tools
+- Actions must be specific and executable, not vague (e.g. "run: npm install" not "install dependencies")
+- Success criterion must be observable (e.g. "exit code 0" not "it works")
+- Steps must be in correct dependency order
 
 Return a JSON array of step objects:
 [
-  { "step": 1, "action": "specific thing to do", "tool": "file|shell|web|git|api|brain", "success": "how to know it worked" }
+  { "step": 1, "action": "specific thing to do", "tool": "tool_name", "success": "observable success criterion" }
 ]
 
 Return ONLY the JSON array.`;
 
         try {
-            const result = await this.brain.think(prompt, { temperature: 0.3, maxTokens: 512, tier: 'fast' });
+            const result = await this.brain.think(prompt, { temperature: 0.15, maxTokens: 600, tier: 'fast' });
             const raw    = result.text;
             const match  = raw.match(/\[[\s\S]*\]/);
             if (match) {
