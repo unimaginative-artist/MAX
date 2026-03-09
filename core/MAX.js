@@ -349,9 +349,8 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             })
             .join('\n\n');
 
-        // Confidence calibration — check if MAX is likely uncertain on this topic
-        // If so, inject a humility directive so he hedges appropriately
-        const conf = await this._checkConfidence(userMessage);
+        // Confidence calibration — heuristic check, no LLM call, zero latency
+        const conf = this._checkConfidence(userMessage);
         const finalSystemPrompt = conf.uncertain
             ? systemPrompt + `\n\n## Confidence: LOW on this query (${conf.reason})\nBe explicit about uncertainty. Use "I believe", "I'm not certain", "you should verify this". Never state uncertain facts confidently.`
             : systemPrompt;
@@ -610,37 +609,25 @@ ${recent}`,
     // ─── Confidence calibration ───────────────────────────────────────────
     // Fast heuristic + optional LLM check. Returns { uncertain, reason }.
     // Never throws — worst case returns { uncertain: false } so responses aren't blocked.
-    async _checkConfidence(query) {
-        if (!this.brain._ready || query.length < 20) return { uncertain: false };
+    _checkConfidence(query) {
+        if (query.length < 20) return { uncertain: false };
 
-        // Heuristic fast-path: skip the LLM call for clearly technical questions
+        // Heuristic-only — no LLM call. Patterns that signal genuinely time-sensitive
+        // or factual queries where MAX's training data may be stale or wrong.
+        // Deliberately narrow so casual chat ("now", "current task") doesn't trigger.
         const uncertainPatterns = [
-            /\b(latest|current|today|now|recently|price|cost)\b/i,
-            /\b(who is|what happened|when did|where is)\b/i,
-            /\b(stock|crypto|market|news|weather|score|standings)\b/i,
-            /\b\d{4}\b/,  // specific years
+            /\b(what is the (current|latest|live) (price|rate|value|score|standing))\b/i,
+            /\b(stock price|crypto price|btc price|eth price)\b/i,
+            /\b(today'?s? (weather|news|score|game))\b/i,
+            /\b(what happened (today|yesterday|this week))\b/i,
+            /\b(who (won|is winning|leads|is ahead))\b/i,
+            /\bbreaking news\b/i,
         ];
-        if (!uncertainPatterns.some(p => p.test(query))) return { uncertain: false };
 
-        try {
-            const r = await Promise.race([
-                this.brain.think(
-                    `Rate your confidence in accurately answering this (0.0=none, 1.0=certain):\n"${query.slice(0, 150)}"\nReturn ONLY JSON: {"confidence": 0.0-1.0, "reason": "brief"}`,
-                    { temperature: 0.1, maxTokens: 60, tier: 'fast' }
-                ),
-                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8_000))
-            ]);
-            const match = r.text.match(/\{[\s\S]*?\}/);
-            if (!match) return { uncertain: false };
-            const parsed = JSON.parse(match[0]);
-            return {
-                uncertain:  parsed.confidence < 0.55,
-                confidence: parsed.confidence,
-                reason:     parsed.reason || 'low confidence topic'
-            };
-        } catch {
-            return { uncertain: false };  // never block a response
-        }
+        const matched = uncertainPatterns.find(p => p.test(query));
+        if (!matched) return { uncertain: false };
+
+        return { uncertain: true, reason: 'real-time factual query — data may be stale' };
     }
 
     // ─── Rolling context compression ──────────────────────────────────────
