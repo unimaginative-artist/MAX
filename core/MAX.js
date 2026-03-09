@@ -189,6 +189,28 @@ export class MAX {
         this.goals     = new GoalEngine(this.brain, this.outcomes, this.memory);
         this.goals.initialize();
 
+        // Register goals as a tool so MAX can queue investigation plans from chat
+        this.tools.register({
+            name:        'goals',
+            description: `Queue and manage autonomous investigation/task goals.
+Actions:
+  add    → queue a goal and start working on it: TOOL:goals:add:{"title":"Investigate X","description":"...","type":"research|task|fix","priority":0.8}
+  list   → see active goals: TOOL:goals:list:{}
+  status → goal engine stats: TOOL:goals:status:{}
+
+USE THIS when the user asks you to investigate, figure out, or diagnose something that needs multi-step exploration rather than a direct answer.`,
+            actions: {
+                add: async ({ title, description = '', type = 'research', priority = 0.8 }) => {
+                    const id = this.goals.addGoal({ title, description, type, priority, source: 'user' });
+                    // Trigger AgentLoop on next tick — non-blocking
+                    setImmediate(() => this.agentLoop?.runCycle().catch(() => {}));
+                    return { success: true, id, message: `Goal queued: "${title}" — starting investigation` };
+                },
+                list:   async () => ({ success: true, goals: this.goals.listActive().slice(0, 10).map(g => ({ id: g.id, title: g.title, status: g.status, priority: g.priority })) }),
+                status: async () => ({ success: true, ...this.goals.getStatus() })
+            }
+        });
+
         this.agentLoop = new AgentLoop(this, this.config.agentLoop);
 
         // Route AgentLoop events through the heartbeat so the launcher's one listener handles everything
@@ -504,6 +526,12 @@ Memory: ${memory.totalMemories} stored facts | ${memory.conversationTurns} conve
             const rate = outcomes.total > 0 ? ((outcomes.success / outcomes.total) * 100).toFixed(0) : 'n/a';
             state += ` | Action success rate: ${rate}%`;
         }
+
+        state += `\n\n## Agentic behavior
+For complex investigation or diagnostic requests ("why isn't X working", "figure out Y", "let's see what's going on with Z"), DO NOT just answer from memory.
+Use TOOL:goals:add to queue a proper investigation goal — then the AgentLoop will investigate with real tools and report back.
+Example: user asks "why isn't SOMA agentic?" → respond with your initial read, then use TOOL:goals:add:{"title":"Investigate SOMA agentic gaps","description":"Read SOMA codebase, identify what's blocking full autonomy, produce findings","type":"research","priority":0.9}`;
+
         return state;
     }
 
