@@ -116,7 +116,7 @@ Return ONLY the JavaScript code. No explanation.`;
         const result = await this.brain.think(prompt, {
             temperature: 0.3,
             maxTokens:   1500,
-            tier:        'smart'  // needs a capable model to write good code
+            tier:        'fast'
         });
 
         const raw = result.text;
@@ -231,7 +231,7 @@ Return ONLY a JSON object:
 Return ONLY the JSON.`;
 
         try {
-            const result = await this.brain.think(prompt, { temperature: 0.2, tier: 'smart' });
+            const result = await this.brain.think(prompt, { temperature: 0.2, tier: 'fast' });
             const raw = result.text;
             const match = raw.match(/\{[\s\S]*?\}/);
             if (!match) return null;

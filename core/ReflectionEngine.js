@@ -159,7 +159,7 @@ Return null for improvementGoal if no clear goal is identified.`;
             const result = await this.brain.think(prompt, {
                 temperature: 0.3,
                 maxTokens:   600,
-                tier:        'smart'
+                tier:        'fast'
             });
 
             const raw   = result.text;
@@ -324,7 +324,7 @@ Return ONLY a JSON array of strings:
 ["Lesson 1: When doing X, always check Y because...", "Lesson 2: ..."]`;
 
         try {
-            const result = await this.brain.think(prompt, { temperature: 0.3, tier: 'smart' });
+            const result = await this.brain.think(prompt, { temperature: 0.3, tier: 'fast' });
             const raw = result.text;
             const match = raw.match(/\[[\s\S]*?\]/);
             if (!match) return null;
