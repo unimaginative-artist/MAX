@@ -136,20 +136,27 @@ export class GoalEngine {
             ? `AVAILABLE TOOLS (use only these): ${context.availableTools.join(', ')}`
             : `AVAILABLE TOOLS: file, shell, web, git, api, brain`;
 
+        // Inject proven skill as a starting point if one was found
+        const skillBlock = context.skill
+            ? `\n\nPROVEN APPROACH (adapt this, don't copy blindly — it worked before for similar goals):\n`
+                + context.skill.steps.map(s => `  ${s.step}. [${s.tool}] ${s.action}`).join('\n')
+            : '';
+
         const prompt = `Break this goal into 3-6 concrete, executable steps.
 
 GOAL: ${goal.title}
-${goal.description ? `DETAILS: ${goal.description}\n` : ''}${toolLine}${memoryContext}${outcomeContext}
+${goal.description ? `DETAILS: ${goal.description}\n` : ''}${toolLine}${skillBlock}${memoryContext}${outcomeContext}
 
 Rules:
 - Each step must use one of the listed tools
-- Actions must be specific and executable, not vague (e.g. "run: npm install" not "install dependencies")
+- Actions must be specific and executable (e.g. "run: npm install" not "install dependencies")
 - Success criterion must be observable (e.g. "exit code 0" not "it works")
-- Steps must be in correct dependency order
+- Set dependsOn to step numbers this step requires output from (empty array if independent)
+- Independent steps (dependsOn: []) can run in parallel — use this for research, reads, and searches
 
 Return a JSON array of step objects:
 [
-  { "step": 1, "action": "specific thing to do", "tool": "tool_name", "success": "observable success criterion" }
+  { "step": 1, "action": "specific thing to do", "tool": "tool_name", "success": "observable criterion", "dependsOn": [] }
 ]
 
 Return ONLY the JSON array.`;

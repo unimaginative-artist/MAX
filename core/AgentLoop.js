@@ -14,6 +14,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { EventEmitter } from 'events';
+import fs   from 'fs/promises';
+import path from 'path';
 
 // Actions that require human approval before running
 const REQUIRES_APPROVAL = ['shell', 'git.commit', 'git.push', 'file.delete', 'file.write'];
@@ -41,9 +43,11 @@ export class AgentLoop extends EventEmitter {
             ...config
         };
 
-        this._running        = false;
-        this._busy           = false;
-        this._pendingApproval = null;  // { resolve, reject, description }
+        this._running         = false;
+        this._busy            = false;
+        this._pendingApproval = null;   // { resolve, reject, description }
+        this._interrupted     = false;  // set by interrupt() to pause at next wave boundary
+        this._interruptFile   = path.join(process.cwd(), '.max', 'interrupt_state.json');
 
         this.stats = {
             cyclesRun:    0,
@@ -65,7 +69,9 @@ export class AgentLoop extends EventEmitter {
         this.stats.cyclesRun++;
 
         try {
-            const result = await this._cycle();
+            // Check for a saved interrupt state — resume if found
+            const saved = await this._loadInterruptState();
+            const result = saved ? await this._resumeCycle(saved) : await this._cycle();
             return result;
         } catch (err) {
             console.error('[AgentLoop] Cycle error:', err.message);
@@ -75,14 +81,14 @@ export class AgentLoop extends EventEmitter {
         }
     }
 
-    async _cycle() {
+    async _cycle(goalOverride = null) {
         const goals   = this.max.goals;
         const profile = this.max.profile;
         const drive   = this.max.drive;
 
         // ── 1. Pick next goal ─────────────────────────────────────────────
-        // Priority: GoalEngine goals > tasks.md active tasks > curiosity
-        let goal = goals?.getNext(drive);
+        // Priority: goalOverride (resume) > GoalEngine goals > tasks.md > curiosity
+        let goal = goalOverride || goals?.getNext(drive);
 
         if (!goal) {
             // Fall back to tasks.md active tasks
@@ -111,10 +117,13 @@ export class AgentLoop extends EventEmitter {
         const toolNames = (this.max.tools?.list() || []).map(t => t.name);
 
         if (!goal.steps || goal.steps.length === 0) {
+            // Recall a proven skill — inject into planner so it reuses what worked before
+            const skill = await this.max.skills?.recall(goal.title) || null;
+
             if (goals?.decompose) {
-                goal.steps = await goals.decompose(goal, { availableTools: toolNames });
+                goal.steps = await goals.decompose(goal, { availableTools: toolNames, skill });
             } else {
-                goal.steps = [{ step: 1, action: goal.description || goal.title, tool: 'brain', success: 'completed' }];
+                goal.steps = [{ step: 1, action: goal.description || goal.title, tool: 'brain', success: 'completed', dependsOn: [] }];
             }
             // Validate the plan before committing to it
             goal.steps = await this._validatePlan(goal, goal.steps, toolNames);
@@ -134,26 +143,55 @@ export class AgentLoop extends EventEmitter {
 
         while (replans <= this.config.maxReplans) {
             stepResults.length = 0;
-            let failed = false;
+            const stepResultMap = new Map();
+            let failed    = false;
             let failReason = '';
 
-            for (const step of goal.steps.slice(0, this.config.maxStepsPerGoal)) {
-                const result = await this._executeStep(step, goal);
-                stepResults.push(result);
+            const allSteps = goal.steps.slice(0, this.config.maxStepsPerGoal);
+            const waves    = this._buildExecutionWaves(allSteps);
 
-                if (!result.success) {
-                    failed = true;
-                    failReason = `Step ${step.step} failed: ${result.error}`;
+            for (const wave of waves) {
+                // ── Interrupt check — pause at wave boundary ──────────────
+                if (this._interrupted) {
+                    this._interrupted = false;
+                    await this._saveInterruptState(goal, stepResultMap);
+                    this.emit('insight', {
+                        source: 'agent',
+                        label:  '⏸️ Task paused',
+                        result: `Saved progress on "${goal.title}" — /resume to continue`
+                    });
+                    return { goal: goal.title, success: false, summary: 'Paused — use /resume', interrupted: true };
+                }
+
+                let waveResults;
+                if (wave.length > 1) {
+                    console.log(`  [AgentLoop] ⚡ Parallel: steps ${wave.map(s => s.step).join(', ')}`);
+                    waveResults = await Promise.all(wave.map(s => this._executeStep(s, goal, stepResultMap)));
+                } else {
+                    waveResults = [await this._executeStep(wave[0], goal, stepResultMap)];
+                }
+
+                for (const result of waveResults) {
+                    stepResultMap.set(result.step, result);
+                    stepResults.push(result);
+                }
+
+                const failedResult = waveResults.find(r => !r.success);
+                if (failedResult) {
+                    failed     = true;
+                    failReason = `Step ${failedResult.step} failed: ${failedResult.error}`;
                     break;
                 }
 
                 drive?.onTaskExecuted();
-                this.stats.stepsExecuted++;
+                this.stats.stepsExecuted += wave.length;
             }
 
             if (!failed) {
                 goalSuccess = true;
                 goalSummary = stepResults.map(r => r.summary || '').filter(Boolean).join(' → ');
+                // Encode the winning plan as a skill (fire-and-forget procedural memory)
+                this.max.skills?.encodeFromRun(goal, goal.steps, this.max.brain).catch(() => {});
                 break;
             }
 
@@ -494,6 +532,79 @@ export class AgentLoop extends EventEmitter {
             console.warn(`  [AgentLoop] Deep research failed: ${e.message}`);
             return null;
         }
+    }
+
+    // ─── Resume a previously interrupted cycle ────────────────────────────
+    async _resumeCycle(saved) {
+        console.log(`[AgentLoop] ▶️  Resuming "${saved.goal.title}" (${saved.completedSteps.length} steps already done)`);
+        await fs.unlink(this._interruptFile).catch(() => {});
+
+        // Filter out already-completed steps so we pick up where we left off
+        const doneNums = new Set(saved.completedSteps.map(([k]) => k));
+        saved.goal.steps = (saved.goal.steps || []).filter(s => !doneNums.has(s.step));
+
+        this.stats.cyclesRun--;  // avoid double-counting — runCycle already incremented
+        return this._cycle(saved.goal);
+    }
+
+    // ─── Build execution waves from a flat step list ──────────────────────
+    // Steps with empty dependsOn are independent and can run in parallel.
+    // Steps that list deps wait for those to complete first.
+    _buildExecutionWaves(steps) {
+        const completed = new Set();
+        const remaining = [...steps];
+        const waves     = [];
+
+        while (remaining.length > 0) {
+            const ready = remaining.filter(s =>
+                (s.dependsOn || []).every(d => completed.has(Number(d)))
+            );
+            // Safety: if nothing is ready (circular dep), just run next step
+            const wave = ready.length > 0 ? ready : [remaining[0]];
+            waves.push(wave);
+            wave.forEach(s => {
+                completed.add(s.step);
+                remaining.splice(remaining.indexOf(s), 1);
+            });
+        }
+
+        return waves;
+    }
+
+    // ─── Interrupt / resume API ───────────────────────────────────────────
+    interrupt() {
+        if (!this._busy) return false;
+        this._interrupted = true;
+        console.log('[AgentLoop] ⏸️  Interrupt requested — will pause at next step boundary');
+        return true;
+    }
+
+    async _saveInterruptState(goal, stepResultMap) {
+        try {
+            const state = {
+                goal,
+                completedSteps: [...stepResultMap.entries()],
+                timestamp:      Date.now()
+            };
+            await fs.mkdir(path.dirname(this._interruptFile), { recursive: true });
+            await fs.writeFile(this._interruptFile, JSON.stringify(state, null, 2));
+            console.log(`[AgentLoop] 💾 Interrupt state saved`);
+        } catch (e) {
+            console.warn('[AgentLoop] Could not save interrupt state:', e.message);
+        }
+    }
+
+    async _loadInterruptState() {
+        try {
+            const raw  = await fs.readFile(this._interruptFile, 'utf8');
+            const data = JSON.parse(raw);
+            // Only resume if the state is less than 24h old
+            if (Date.now() - data.timestamp < 24 * 60 * 60 * 1000) {
+                console.log(`[AgentLoop] 📂 Found interrupt state for "${data.goal?.title}"`);
+                return data;
+            }
+        } catch { /* no saved state */ }
+        return null;
     }
 
     // ─── Plan validation gate — catches bad plans before first step ────────
