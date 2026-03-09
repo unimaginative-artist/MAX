@@ -429,15 +429,34 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             response = result.text;
         }
 
-        // Strip any leaked tool plumbing from the final user-facing response.
-        // [Tool result: ...] blocks and bare TOOL: lines are internal scaffolding —
-        // they go into _context for the brain to reason over, but the user never
-        // needs to see them. The last brain.think() output is the clean reply.
-        const finalResponse = response
-            .replace(/^\[Tool result:.*?\]\n?/gm, '')  // remove [Tool result: ...] lines
-            .replace(/^TOOL:[^\n]*\n?/gm, '')          // remove bare TOOL: call lines
-            .replace(/\n{3,}/g, '\n\n')                // collapse triple+ newlines
+        // Strip tool plumbing — [Tool result: ...] and bare TOOL: lines are internal.
+        let finalResponse = response
+            .replace(/^\[Tool result:.*?\]\n?/gm, '')
+            .replace(/^TOOL:[^\n]*\n?/gm, '')
+            .replace(/\n{3,}/g, '\n\n')
             .trim();
+
+        // If stripping left nothing (tool loop broke before a clean reply), re-think once
+        // with the accumulated context so MAX always gives a natural language response.
+        if (!finalResponse) {
+            try {
+                const recoveryHistory = this._context
+                    .slice(-this._contextLimit)
+                    .map(m => `${m.role === 'user' ? 'USER' : 'MAX'}: ${m.content.slice(0, 2000)}`)
+                    .join('\n\n');
+                const recovery = await this.brain.think(recoveryHistory, {
+                    systemPrompt: systemPrompt + '\n\nSummarise what you just did and what happens next. Be brief.',
+                    temperature:  0.5,
+                    maxTokens:    512
+                });
+                finalResponse = recovery.text
+                    .replace(/^\[Tool result:.*?\]\n?/gm, '')
+                    .replace(/^TOOL:[^\n]*\n?/gm, '')
+                    .trim() || 'On it — queued the investigation goal.';
+            } catch {
+                finalResponse = 'On it.';
+            }
+        }
 
         // Update context and memory (MaxMemory also extracts workspace signals)
         this._context.push({ role: 'assistant', content: response }); // full text (including tool traces) goes to context so brain has full picture
