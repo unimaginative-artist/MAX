@@ -371,10 +371,22 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
 
         // ── Agentic loop: if response contains tool calls, execute and re-think ──
         let toolTurns = 0;
-        const maxToolTurns = 15; // OpenHands style: allow deep multi-step loops
-        const turnResults = [];
+        const maxToolTurns = 6;  // enough for real multi-step work, not enough to spiral
+        const turnResults  = [];
+        const seenToolCalls = new Set();  // dedup: never execute the exact same call twice
 
         while (response.includes('TOOL:') && toolTurns < maxToolTurns) {
+            // Extract all TOOL: lines in this response
+            const toolLines = response.split('\n').filter(l => l.trim().startsWith('TOOL:'));
+
+            // If every tool call in this response has already been executed, we're looping — stop
+            const allSeen = toolLines.every(l => seenToolCalls.has(l.trim()));
+            if (allSeen && toolLines.length > 0) {
+                console.warn('[MAX] Tool loop detected — same calls repeating, breaking');
+                break;
+            }
+            toolLines.forEach(l => seenToolCalls.add(l.trim()));
+
             toolTurns++;
             const processed = await this._processToolCalls(response);
             turnResults.push(processed);

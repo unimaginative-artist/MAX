@@ -42,6 +42,15 @@ export class GoalEngine {
     // ─── Add a goal ───────────────────────────────────────────────────────
     // goal: { title, description, type, steps?, source: 'auto'|'user'|'curiosity' }
     addGoal(goal) {
+        // Deduplicate: if an active goal with the same title already exists, return its id
+        const titleLower = (goal.title || '').toLowerCase().trim();
+        for (const [id, g] of this._active) {
+            if (g.title.toLowerCase().trim() === titleLower) {
+                console.log(`[GoalEngine] ⚠️  Duplicate goal ignored: "${goal.title}"`);
+                return id;
+            }
+        }
+
         const id  = `goal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
         const now = Date.now();
 
