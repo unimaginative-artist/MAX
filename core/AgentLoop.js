@@ -108,12 +108,16 @@ export class AgentLoop extends EventEmitter {
         }
 
         // ── 2. Decompose into steps if needed ─────────────────────────────
+        const toolNames = (this.max.tools?.list() || []).map(t => t.name);
+
         if (!goal.steps || goal.steps.length === 0) {
             if (goals?.decompose) {
-                goal.steps = await goals.decompose(goal);
+                goal.steps = await goals.decompose(goal, { availableTools: toolNames });
             } else {
                 goal.steps = [{ step: 1, action: goal.description || goal.title, tool: 'brain', success: 'completed' }];
             }
+            // Validate the plan before committing to it
+            goal.steps = await this._validatePlan(goal, goal.steps, toolNames);
         }
 
         console.log(`\n[AgentLoop] 🎯 Goal: "${goal.title}" (${goal.steps.length} steps)`);
@@ -219,9 +223,10 @@ export class AgentLoop extends EventEmitter {
             const errorNote = `[Attempt ${replans} failed (${errType}): ${failReason}. Try a completely different approach.]`;
             const researchNote = researchContext ? `\n\n[Research findings:\n${researchContext}]` : '';
             goal.description = `${goal.description || goal.title}\n\n${errorNote}${researchNote}`;
-            goal.steps = goals?.decompose
-                ? await goals.decompose(goal)
+            const newSteps = goals?.decompose
+                ? await goals.decompose(goal, { availableTools: toolNames })
                 : [{ step: 1, action: goal.description, tool: 'brain', success: 'completed' }];
+            goal.steps = await this._validatePlan(goal, newSteps, toolNames);
 
             console.log(`  [AgentLoop] 🔄 New plan: ${goal.steps.length} steps`);
         }
@@ -474,6 +479,55 @@ export class AgentLoop extends EventEmitter {
             console.warn(`  [AgentLoop] Deep research failed: ${e.message}`);
             return null;
         }
+    }
+
+    // ─── Plan validation gate — catches bad plans before first step ────────
+    // Asks the brain to review the plan for logical holes or bad tool choices.
+    // If a critical issue is found and a corrected plan returned, swaps it in.
+    async _validatePlan(goal, steps, toolNames = []) {
+        if (!steps?.length || !this.max.brain?._ready) return steps;
+
+        const planText = steps
+            .map(s => `  ${s.step}. [${s.tool}] ${s.action} → success: ${s.success}`)
+            .join('\n');
+
+        const toolHint = toolNames.length
+            ? `Available tools: ${toolNames.join(', ')}`
+            : '';
+
+        try {
+            const result = await withTimeout(
+                this.max.brain.think(
+                    `Review this execution plan for critical issues before running it.
+
+GOAL: ${goal.title}
+${toolHint}
+
+PLAN:
+${planText}
+
+Check for: wrong tool choices, impossible steps, missing prerequisites, wrong order.
+Reply ONLY with JSON: {"ok": true} if the plan is fine, or:
+{"ok": false, "issue": "brief description", "fix": [corrected step array]}
+
+Return {"ok": true} unless there is a clear critical flaw.`,
+                    { temperature: 0.1, maxTokens: 500, tier: 'fast' }
+                ),
+                15_000,
+                'plan validation'
+            );
+
+            const match = result.text.match(/\{[\s\S]*\}/);
+            if (!match) return steps;
+
+            const review = JSON.parse(match[0]);
+            if (!review.ok && review.fix && Array.isArray(review.fix) && review.fix.length > 0) {
+                console.log(`  [AgentLoop] 🔧 Plan issue: "${review.issue}" — applying fix (${steps.length} → ${review.fix.length} steps)`);
+                return review.fix;
+            }
+        } catch { /* non-fatal — proceed with original plan */ }
+
+        return steps;
     }
 
     // ─── Categorize error for smart pivot strategy ────────────────────────
