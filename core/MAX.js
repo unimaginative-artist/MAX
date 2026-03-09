@@ -450,7 +450,7 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
                     .map(m => `${m.role === 'user' ? 'USER' : 'MAX'}: ${m.content.slice(0, 2000)}`)
                     .join('\n\n');
                 const recovery = await this.brain.think(recoveryHistory, {
-                    systemPrompt: systemPrompt + '\n\nSummarise what you just did and what happens next. Be brief.',
+                    systemPrompt: systemPrompt + '\n\nIf you were in the middle of a task, CONTINUE IT NOW — do not describe what you were doing, just do the next step. If the task is complete, say so briefly.',
                     temperature:  0.5,
                     maxTokens:    512
                 });
@@ -657,9 +657,18 @@ Memory: ${memory.totalMemories} stored facts | ${memory.conversationTurns} conve
         }
 
         state += `\n\n## Agentic behavior
-For complex investigation or diagnostic requests ("why isn't X working", "figure out Y", "let's see what's going on with Z"), DO NOT just answer from memory.
-Use TOOL:goals:add to queue a proper investigation goal — then the AgentLoop will investigate with real tools and report back.
-Example: user asks "why isn't SOMA agentic?" → respond with your initial read, then use TOOL:goals:add:{"title":"Investigate SOMA agentic gaps","description":"Read SOMA codebase, identify what's blocking full autonomy, produce findings","type":"research","priority":0.9}`;
+
+INVESTIGATION requests ("why isn't X working", "figure out Y", "what's going on with Z"):
+→ Use TOOL:goals:add to queue a goal. The AgentLoop will investigate and report back.
+Example: TOOL:goals:add:{"title":"Investigate SOMA agentic gaps","description":"Read SOMA codebase, identify gaps","type":"research","priority":0.9}
+
+EXECUTION requests ("move this code", "edit this file", "fix X in file Y", "make this change"):
+→ DO IT NOW with tools. Do not narrate each micro-step and wait for approval.
+→ Read the file, make the change, verify it, then report COMPLETION in one response.
+→ Never say "let me read X" and stop — if you need to read X, read it in the SAME response and keep going.
+→ Only check back with the user when the task is DONE or you are genuinely blocked.
+Example: user says "move block X from line 1106 to line 233 in file Y" → read file → make edit → verify → respond "Done. Moved X to line 233. Here's what changed: ..."`;
+
 
         return state;
     }
