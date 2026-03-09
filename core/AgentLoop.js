@@ -179,6 +179,21 @@ export class AgentLoop extends EventEmitter {
 
             if (replans > this.config.maxReplans) {
                 goalSummary = `Gave up after ${replans - 1} replans. Last error: ${failReason}`;
+                // ── Proactive fallback: build a structured investigation goal ──
+                // Instead of silently giving up, queue a deeper investigation so
+                // MAX steps back and comes at the problem from a different angle.
+                const fallback = await this._buildFallbackGoal(goal, failReason);
+                if (fallback) {
+                    const newId = this.max.goals?.addGoal(fallback);
+                    if (newId) {
+                        goalSummary += ` Queued investigation: "${fallback.title}"`;
+                        this.emit('insight', {
+                            source: 'agent',
+                            label:  `🗺️  Building investigation plan for: ${goal.title}`,
+                            result: `Couldn't solve directly after ${replans - 1} attempts.\nQueued structured investigation: "${fallback.title}"\n${fallback.description}`
+                        });
+                    }
+                }
                 break;
             }
 
@@ -528,6 +543,50 @@ Return {"ok": true} unless there is a clear critical flaw.`,
         } catch { /* non-fatal — proceed with original plan */ }
 
         return steps;
+    }
+
+    // ─── Build a fallback investigation goal after repeated failure ────────
+    // When MAX can't solve something in N replans, he steps back and builds
+    // a structured research goal rather than declaring defeat.
+    async _buildFallbackGoal(failedGoal, lastError) {
+        if (!this.max.brain?._ready) return null;
+        try {
+            const result = await withTimeout(
+                this.max.brain.think(
+                    `A task failed after multiple attempts and needs a smarter investigation approach.
+
+FAILED TASK: ${failedGoal.title}
+DESCRIPTION: ${(failedGoal.description || '').slice(0, 300)}
+LAST ERROR: ${lastError.slice(0, 200)}
+
+Design a structured investigation goal that:
+1. First understands WHY the direct approach failed
+2. Explores the problem space before acting
+3. Produces concrete findings, not just another failed attempt
+
+Return ONLY a JSON object:
+{
+  "title": "Investigate: [specific thing to understand]",
+  "description": "1. [first: understand X by doing Y]. 2. [then: check Z]. 3. [finally: produce findings report]",
+  "type": "research",
+  "priority": 0.85
+}`,
+                    { temperature: 0.2, maxTokens: 300, tier: 'fast' }
+                ),
+                15_000,
+                'fallback goal'
+            );
+
+            const match = result.text.match(/\{[\s\S]*\}/);
+            if (!match) return null;
+
+            const g = JSON.parse(match[0]);
+            if (!g.title) return null;
+
+            return { ...g, source: 'auto', blockedBy: [] };
+        } catch {
+            return null;
+        }
     }
 
     // ─── Categorize error for smart pivot strategy ────────────────────────
