@@ -4,7 +4,7 @@
 // Usage: node launcher.mjs [--mode chat|swarm|api] [--persona architect]
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { fileURLToPath }            from 'url';
 import { dirname, join }            from 'path';
 import readline                     from 'readline';
@@ -161,7 +161,18 @@ async function chatMode(max, opts) {
         isThinking = true;
 
         if (line === '/quit' || line === '/exit') {
-            console.log('\n[MAX] Shutting down.');
+            // Save session state so MAX can brief himself next boot
+            try {
+                const sessionState = {
+                    timestamp: new Date().toISOString(),
+                    goals:    max.goals?.listActive().slice(0, 8).map(g => ({ title: g.title, status: g.status })),
+                    insights: _insights.slice(-5).map(i => ({ label: i.insight.label, result: i.insight.result?.slice(0, 300) })),
+                    outcomes: max.outcomes?.getStats(),
+                };
+                writeFileSync(join(__dirname, '.max', 'session.json'), JSON.stringify(sessionState, null, 2));
+                console.log('[MAX] 📋 Session saved.');
+            } catch { /* non-fatal */ }
+            console.log('[MAX] Shutting down.');
             max.scheduler?.stop();
             max.heartbeat?.stop();
             await max.memory?.shutdown?.();
@@ -205,6 +216,18 @@ async function chatMode(max, opts) {
             expandInsight(line.slice(7).trim() || 'last');
             isThinking = false;
             ask(); return;
+        }
+
+        if (line === '/pause') {
+            const ok = max.agentLoop?.interrupt();
+            console.log(ok ? '[MAX] ⏸️  Pause requested — will stop at next step boundary.\n' : '[MAX] No active task to pause.\n');
+            isThinking = false; ask(); return;
+        }
+
+        if (line === '/resume') {
+            console.log('[MAX] ▶️  Resuming...\n');
+            max.agentLoop?.runCycle().catch(e => console.error('[MAX] Resume error:', e.message));
+            isThinking = false; ask(); return;
         }
 
         if (line === '/artifacts' || line.startsWith('/artifacts ')) {
@@ -327,7 +350,7 @@ async function chatMode(max, opts) {
     
     console.log('\n' + '─'.repeat(60));
     console.log('  MAX is live. Dashboard: http://localhost:3100/dashboard');
-    console.log('  Commands: /status, /persona <p>, /reason <q>, /swarm, /debate, /expand, /artifacts, /quit');
+    console.log('  Commands: /status, /persona <p>, /reason <q>, /swarm, /debate, /expand, /artifacts, /pause, /resume, /quit');
     console.log('─'.repeat(60) + '\n');
 
     ask();

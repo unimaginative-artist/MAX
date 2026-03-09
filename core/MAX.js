@@ -41,6 +41,8 @@ import { Sentinel }           from './Sentinel.js';
 import { WorldModel }         from './WorldModel.js';
 import { ArtifactManager }    from './ArtifactManager.js';
 import { TestGenerator }      from './TestGenerator.js';
+import { SkillLibrary }       from './SkillLibrary.js';
+import fs                     from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -82,11 +84,13 @@ export class MAX {
         this.world         = new WorldModel(this);
         this.artifacts     = new ArtifactManager(this);
         this.lab           = new TestGenerator(this);
+        this.skills        = new SkillLibrary();
 
         // Conversation context window
-        this._context      = [];
-        this._contextLimit = 12;
-        this._compressing  = false;  // guard against concurrent compression
+        this._context         = [];
+        this._contextLimit    = 12;
+        this._compressing     = false;  // guard against concurrent compression
+        this._sessionBriefing = null;   // loaded from .max/session.json on boot
     }
 
     async initialize() {
@@ -170,6 +174,20 @@ export class MAX {
         this.outcomes  = new OutcomeTracker({ storageDir: path.join(dataDir, 'outcomes') });
         await this.outcomes.initialize();
         await this.artifacts.init();
+        await this.skills.initialize();
+
+        // Session continuity — brief MAX on where he left off
+        const sessionFile = path.join(dataDir, 'session.json');
+        if (fs.existsSync(sessionFile)) {
+            try {
+                const s = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
+                const hoursAgo = Math.round((Date.now() - new Date(s.timestamp)) / 3_600_000);
+                if (hoursAgo < 168) {  // within a week
+                    this._sessionBriefing = { ...s, hoursAgo };
+                    console.log(`[MAX] 📋 Last session ${hoursAgo}h ago — ${s.goals?.length || 0} goals in progress`);
+                }
+            } catch { /* fresh start, no session file yet */ }
+        }
 
         this.reasoning = new ReasoningChamber(this.brain);
         this.evolution = new EvolutionArbiter();
@@ -328,9 +346,16 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             })
             .join('\n\n');
 
+        // Confidence calibration — check if MAX is likely uncertain on this topic
+        // If so, inject a humility directive so he hedges appropriately
+        const conf = await this._checkConfidence(userMessage);
+        const finalSystemPrompt = conf.uncertain
+            ? systemPrompt + `\n\n## Confidence: LOW on this query (${conf.reason})\nBe explicit about uncertainty. Use "I believe", "I'm not certain", "you should verify this". Never state uncertain facts confidently.`
+            : systemPrompt;
+
         // Think
         let result = await this.brain.think(historyText, {
-            systemPrompt: systemPrompt + memoryContext + kbContext,
+            systemPrompt: finalSystemPrompt + memoryContext + kbContext,
             temperature: options.temperature ?? 0.7,
             maxTokens:   options.maxTokens   ?? 8192
         });
@@ -527,6 +552,13 @@ Memory: ${memory.totalMemories} stored facts | ${memory.conversationTurns} conve
             state += ` | Action success rate: ${rate}%`;
         }
 
+        if (this._sessionBriefing) {
+            const { hoursAgo, goals: sg, insights: si } = this._sessionBriefing;
+            state += `\n\n## Last session (${hoursAgo}h ago)`;
+            state += `\nIn-progress goals: ${sg?.map(g => `"${g.title}"`).join(', ') || 'none'}`;
+            if (si?.[0]) state += `\nLast insight: ${si[0].result?.slice(0, 150)}`;
+        }
+
         state += `\n\n## Agentic behavior
 For complex investigation or diagnostic requests ("why isn't X working", "figure out Y", "let's see what's going on with Z"), DO NOT just answer from memory.
 Use TOOL:goals:add to queue a proper investigation goal — then the AgentLoop will investigate with real tools and report back.
@@ -570,6 +602,42 @@ ${recent}`,
             }
             console.log(`[MAX] 💾 Compaction flush: saved ${extracted.length} facts before context truncation`);
         } catch { /* non-fatal */ }
+    }
+
+    // ─── Confidence calibration ───────────────────────────────────────────
+    // Fast heuristic + optional LLM check. Returns { uncertain, reason }.
+    // Never throws — worst case returns { uncertain: false } so responses aren't blocked.
+    async _checkConfidence(query) {
+        if (!this.brain._ready || query.length < 20) return { uncertain: false };
+
+        // Heuristic fast-path: skip the LLM call for clearly technical questions
+        const uncertainPatterns = [
+            /\b(latest|current|today|now|recently|price|cost)\b/i,
+            /\b(who is|what happened|when did|where is)\b/i,
+            /\b(stock|crypto|market|news|weather|score|standings)\b/i,
+            /\b\d{4}\b/,  // specific years
+        ];
+        if (!uncertainPatterns.some(p => p.test(query))) return { uncertain: false };
+
+        try {
+            const r = await Promise.race([
+                this.brain.think(
+                    `Rate your confidence in accurately answering this (0.0=none, 1.0=certain):\n"${query.slice(0, 150)}"\nReturn ONLY JSON: {"confidence": 0.0-1.0, "reason": "brief"}`,
+                    { temperature: 0.1, maxTokens: 60, tier: 'fast' }
+                ),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8_000))
+            ]);
+            const match = r.text.match(/\{[\s\S]*?\}/);
+            if (!match) return { uncertain: false };
+            const parsed = JSON.parse(match[0]);
+            return {
+                uncertain:  parsed.confidence < 0.55,
+                confidence: parsed.confidence,
+                reason:     parsed.reason || 'low confidence topic'
+            };
+        } catch {
+            return { uncertain: false };  // never block a response
+        }
     }
 
     // ─── Rolling context compression ──────────────────────────────────────
@@ -633,7 +701,8 @@ ${recent}`,
             toolCreator:   this.toolCreator?.getStatus(),
             selfInspector: this.selfInspector?.getStatus(),
             reflection:    this.reflection?.getStatus(),
-            kb:            this.kb?.getStatus()
+            kb:            this.kb?.getStatus(),
+            skills:        this.skills?.getStatus()
         };
     }
 }
