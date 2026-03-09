@@ -93,6 +93,7 @@ export class MAX {
         this._contextLimit    = 12;
         this._compressing     = false;  // guard against concurrent compression
         this._sessionBriefing = null;   // loaded from .max/session.json on boot
+        this._chatBusy        = false;  // true while think() is running — tells Heartbeat to stand down
     }
 
     async initialize() {
@@ -307,6 +308,7 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
     // ─── Main think/respond loop ──────────────────────────────────────────
     async think(userMessage, options = {}) {
         if (!this._ready) throw new Error('MAX not initialized');
+        this._chatBusy = true;
 
         // Auto-select persona based on message content + internal drive state
         const selectedPersona = options.persona
@@ -463,6 +465,8 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             duration: result.metadata?.latency || 0,
             metadata: result.metadata
         });
+
+        this._chatBusy = false;
 
         return {
             response:  finalResponse,

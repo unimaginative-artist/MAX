@@ -144,20 +144,32 @@ async function chatMode(max, opts) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
     _rl = rl;
 
-    let inputBuffer = '';
-    let bufferTimer = null;
-    let isThinking  = false;
-    let swarmNext   = false;
-    let debateNext  = false;
+    let inputBuffer   = '';
+    let bufferTimer   = null;
+    let isThinking    = false;
+    let pendingInput  = null;   // message typed while thinking — processed after response
+    let swarmNext     = false;
+    let debateNext    = false;
     let activePersona = opts.persona || null;
 
-    const ask = () => { 
-        if (!isThinking) process.stdout.write('YOU: '); 
+    const ask = () => {
+        if (!isThinking) process.stdout.write('YOU: ');
     };
 
     const processInput = async (input) => {
         const line = input.trim();
         if (!line) { ask(); return; }
+
+        // If already thinking, queue this message — process it right after
+        if (isThinking) {
+            pendingInput = line;
+            const partial = _rl?.line || '';
+            readline.clearLine(process.stdout, 0);
+            readline.cursorTo(process.stdout, 0);
+            console.log(`  [queued] "${line.slice(0, 60)}${line.length > 60 ? '...' : ''}"`);
+            process.stdout.write('  ⠿  MAX is still thinking...');
+            return;
+        }
 
         isThinking = true;
 
@@ -452,7 +464,17 @@ async function chatMode(max, opts) {
         } catch (err) { console.error('[MAX] Error:', err.message); }
         
         isThinking = false;
-        ask();
+
+        // Drain the queue — if user typed while we were thinking, process it now
+        if (pendingInput) {
+            const queued = pendingInput;
+            pendingInput = null;
+            process.stdout.write('\r' + ' '.repeat(40) + '\r');
+            console.log(`[MAX] Processing queued message: "${queued.slice(0, 60)}"\n`);
+            processInput(queued);
+        } else {
+            ask();
+        }
     };
 
     rl.on('line', (line) => {
