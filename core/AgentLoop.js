@@ -235,6 +235,48 @@ export class AgentLoop extends EventEmitter {
                 break;
             }
 
+            // ── Diagnosis step-back — first LOGIC failure on a real GoalEngine goal ──
+            // Instead of immediately redecomposing (same approach, different words),
+            // diagnose the root cause and queue a structurally different remedy goal.
+            // The original goal re-enters the queue blocked on the remedy — the
+            // dependency graph handles the rest automatically when remedy completes.
+            if (errType === 'LOGIC' && replans === 1 && goal.id && this.max.goals?._active?.has(goal.id)) {
+                console.log(`  [AgentLoop] 🔬 Diagnosing root cause before replan...`);
+                const diagnosis = await this._diagnoseFailure(goal, failReason, stepResults);
+
+                if (diagnosis?.remedyGoal) {
+                    const remedyId = this.max.goals.addGoal({
+                        ...diagnosis.remedyGoal,
+                        source:    'auto',
+                        blockedBy: []
+                    });
+
+                    if (remedyId) {
+                        this.max.goals.requeue(goal.id, [remedyId]);
+
+                        this.emit('insight', {
+                            source: 'agent',
+                            label:  `🔬 Diagnosed: ${goal.title}`,
+                            result: `Root cause: ${diagnosis.rootCause}\n${diagnosis.explanation}\n\nQueued remedy: "${diagnosis.remedyGoal.title}"\nOriginal goal re-queued — will retry when remedy completes.`
+                        });
+
+                        this.max.outcomes?.record({
+                            agent:   'AgentLoop',
+                            action:  'goal:diagnosed',
+                            context: { title: goal.title, rootCause: diagnosis.rootCause },
+                            result:  diagnosis.explanation,
+                            success: true,
+                            reward:  0.3   // positive — this is intelligent behavior
+                        });
+
+                        console.log(`  [AgentLoop] 🗺️  Diagnosis: ${diagnosis.rootCause} — remedy: "${diagnosis.remedyGoal.title}"`);
+                        return { goal: goal.title, success: false, summary: `Diagnosed: ${diagnosis.explanation}`, diagnosed: true };
+                    }
+                }
+                // Diagnosis failed or remedy couldn't be created — fall through to normal replan
+                console.log(`  [AgentLoop] Diagnosis inconclusive — falling back to replan`);
+            }
+
             // TIMEOUT: same plan, just wait and retry — environment may catch up
             if (errType === 'TIMEOUT') {
                 console.log(`  [AgentLoop] ⏱️  Timeout — waiting 10s before retry (same plan)`);
@@ -695,6 +737,62 @@ Return ONLY a JSON object:
             if (!g.title) return null;
 
             return { ...g, source: 'auto', blockedBy: [] };
+        } catch {
+            return null;
+        }
+    }
+
+    // ─── Diagnose failure root cause + design a remedy goal ──────────────
+    // Called after first genuine LOGIC failure. Uses brain to understand WHY
+    // the approach itself failed, then proposes a different-typed goal that
+    // addresses the root cause before retrying the original.
+    async _diagnoseFailure(goal, failReason, stepResults) {
+        if (!this.max.brain?._ready) return null;
+
+        const stepSummary = stepResults
+            .map(r => `  Step ${r.step}: ${r.success ? '✓' : '✗'} ${(r.summary || r.error || '').slice(0, 120)}`)
+            .join('\n');
+
+        try {
+            const result = await withTimeout(
+                this.max.brain.think(
+                    `An autonomous task failed. Diagnose WHY and design a smarter follow-up goal.
+
+FAILED TASK: ${goal.title}
+DESCRIPTION: ${(goal.description || '').slice(0, 200)}
+ERROR: ${failReason.slice(0, 200)}
+STEP RESULTS:
+${stepSummary}
+
+Diagnose the ROOT CAUSE. Return ONLY JSON:
+{
+  "rootCause": "MISSING_INFO|MISSING_PREREQ|WRONG_APPROACH|ENVIRONMENT|AMBIGUOUS",
+  "explanation": "one sentence: exactly what went wrong and why the approach itself was wrong",
+  "remedyGoal": {
+    "title": "specific thing to do to resolve the root cause",
+    "description": "concrete steps: 1. ... 2. ... 3. ...",
+    "type": "research|fix|task",
+    "priority": 0.9
+  }
+}
+
+Root cause guide:
+- MISSING_INFO: task needs information that wasn't gathered first
+- MISSING_PREREQ: a dependency (tool/package/service/file) isn't installed or ready
+- WRONG_APPROACH: the strategy itself is wrong — a different method is needed
+- ENVIRONMENT: system-level issue (path, version mismatch, config, OS difference)
+- AMBIGUOUS: the goal is too vague to execute without clarification`,
+                    { temperature: 0.2, maxTokens: 400, tier: 'fast' }
+                ),
+                15_000,
+                'diagnose failure'
+            );
+
+            const match = result.text.match(/\{[\s\S]*\}/);
+            if (!match) return null;
+            const diagnosis = JSON.parse(match[0]);
+            if (!diagnosis.rootCause || !diagnosis.remedyGoal?.title) return null;
+            return diagnosis;
         } catch {
             return null;
         }

@@ -42,6 +42,7 @@ import { WorldModel }         from './WorldModel.js';
 import { ArtifactManager }    from './ArtifactManager.js';
 import { TestGenerator }      from './TestGenerator.js';
 import { SkillLibrary }       from './SkillLibrary.js';
+import { SelfEditor }         from './SelfEditor.js';
 import fs                     from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -85,6 +86,7 @@ export class MAX {
         this.artifacts     = new ArtifactManager(this);
         this.lab           = new TestGenerator(this);
         this.skills        = new SkillLibrary();
+        this.selfEditor    = new SelfEditor();
 
         // Conversation context window
         this._context         = [];
@@ -175,6 +177,7 @@ export class MAX {
         await this.outcomes.initialize();
         await this.artifacts.init();
         await this.skills.initialize();
+        await this.selfEditor.initialize();
 
         // Session continuity — brief MAX on where he left off
         const sessionFile = path.join(dataDir, 'session.json');
