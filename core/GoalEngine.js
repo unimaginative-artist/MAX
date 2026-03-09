@@ -187,6 +187,23 @@ Return ONLY the JSON array.`;
         return true;
     }
 
+    // ─── Requeue a goal as pending-blocked after diagnosis ───────────────
+    // Used by AgentLoop when it diagnoses a root cause and queues a remedy.
+    // The original goal re-enters the pending queue, blocked on the remedy.
+    // When the remedy completes, complete() auto-unblocks this goal.
+    requeue(id, blockedByIds = []) {
+        const goal = this._active.get(id);
+        if (!goal) return false;
+        goal.status    = 'pending';
+        goal.steps     = [];        // clear stale steps — will re-decompose when unblocked
+        goal.attempts  = (goal.attempts || 0);
+        goal.blockedBy = [...new Set([...(goal.blockedBy || []), ...blockedByIds])];
+        goal.updatedAt = Date.now();
+        this._save();
+        console.log(`[GoalEngine] ⏳ "${goal.title}" requeued — blocked pending remedy`);
+        return true;
+    }
+
     // ─── Mark a goal complete ─────────────────────────────────────────────
     complete(id, outcome = {}) {
         const goal = this._active.get(id);

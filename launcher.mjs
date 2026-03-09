@@ -101,12 +101,13 @@ function printInsight(insight) {
 
     const label = insight.label.replace(/\n.*/s, '').slice(0, 50);
     if (_rl) {
+        const partial = _rl.line || '';
         readline.clearLine(process.stdout, 0);
         readline.cursorTo(process.stdout, 0);
-    }
-    console.log(`  💡 [${insight.source}] ${label}  — /expand ${id}`);
-    if (_rl) {
-        process.stdout.write('YOU: ');
+        console.log(`  💡 [${insight.source}] ${label}  — /expand ${id}`);
+        process.stdout.write('YOU: ' + partial);
+    } else {
+        console.log(`  💡 [${insight.source}] ${label}  — /expand ${id}`);
     }
 }
 
@@ -269,11 +270,137 @@ async function chatMode(max, opts) {
             ask(); return;
         }
 
-        if (line === '/swarm') { 
-            swarmNext = true; 
-            console.log('[MAX] Next message → swarm.\n'); 
+        // ── /self — self-editing loop ──────────────────────────────────
+        if (line.startsWith('/self')) {
+            const sub = line.slice(5).trim();
+            const se  = max.selfEditor;
+
+            // /self read <path>
+            if (sub.startsWith('read ')) {
+                const relPath = sub.slice(5).trim();
+                try {
+                    const { code, lines } = await se.readSource(relPath);
+                    console.log(`\n[MAX] ${relPath}  (${lines} lines)\n${'─'.repeat(60)}`);
+                    console.log(code.slice(0, 4000));
+                    if (code.length > 4000) console.log(`\n... (truncated — ${lines} lines total)`);
+                    console.log();
+                } catch (err) { console.log(`[MAX] ${err.message}\n`); }
+
+            // /self edit <path> <instruction>
+            } else if (sub.startsWith('edit ')) {
+                const rest        = sub.slice(5).trim();
+                const spaceIdx    = rest.indexOf(' ');
+                if (spaceIdx === -1) {
+                    console.log('[MAX] Usage: /self edit <path> <instruction>\n');
+                } else {
+                    const relPath     = rest.slice(0, spaceIdx).trim();
+                    const instruction = rest.slice(spaceIdx + 1).trim();
+                    try {
+                        const stop = startSpinner('editing');
+                        console.log(`\n[MAX] Proposing edit to ${relPath}...`);
+                        const newCode  = await se.proposeEdit(relPath, instruction, max.brain);
+                        const stagePath = await se.stage(relPath, newCode);
+                        stop();
+
+                        console.log(`[MAX] Staged → ${stagePath}`);
+                        process.stdout.write('[MAX] Validating (syntax + import)...');
+                        const validation = await se.validate(relPath);
+                        process.stdout.write('\r' + ' '.repeat(50) + '\r');
+
+                        if (!validation.ok) {
+                            console.log(`[MAX] ❌ Validation failed (${validation.stage}): ${validation.error}\n`);
+                            console.log(`[MAX] Staged version kept — fix with /self edit or /self rollback ${relPath}\n`);
+                        } else {
+                            const diffResult = await se.diff(relPath);
+                            console.log(`[MAX] ✅ Valid — ${diffResult?.changes ?? 0} line(s) changed`);
+                            try {
+                                const opened = await se.openDiff(relPath);
+                                console.log(`[MAX] 🪟 Diff open in ${opened.method === 'vscode' ? 'VS Code' : 'system editor'}`);
+                            } catch { /* editor not available */ }
+                            console.log(`[MAX] Review the changes, then:\n  /self commit ${relPath}   — apply\n  /self rollback ${relPath} — discard\n`);
+                        }
+                    } catch (err) { console.log(`[MAX] Edit failed: ${err.message}\n`); }
+                }
+
+            // /self diff <path>
+            } else if (sub.startsWith('diff ')) {
+                const relPath = sub.slice(5).trim();
+                try {
+                    const d = await se.diff(relPath);
+                    if (!d) { console.log(`[MAX] No staged version of ${relPath}\n`); }
+                    else {
+                        console.log(`\n[MAX] Diff for ${relPath}  (+${d.addedLines} lines, ${d.changes} change(s)):`);
+                        console.log('─'.repeat(60));
+                        console.log(d.diff.slice(0, 3000));
+                        console.log();
+                    }
+                } catch (err) { console.log(`[MAX] ${err.message}\n`); }
+
+            // /self test <path>
+            } else if (sub.startsWith('test ')) {
+                const relPath = sub.slice(5).trim();
+                try {
+                    process.stdout.write(`[MAX] Testing ${relPath}...`);
+                    const result = await se.validate(relPath);
+                    process.stdout.write('\r' + ' '.repeat(60) + '\r');
+                    if (result.ok) {
+                        console.log(`[MAX] ✅ ${relPath} passes syntax + import validation\n`);
+                    } else {
+                        console.log(`[MAX] ❌ ${result.stage} error: ${result.error}\n`);
+                    }
+                } catch (err) { console.log(`[MAX] ${err.message}\n`); }
+
+            // /self commit <path>
+            } else if (sub.startsWith('commit ')) {
+                const relPath = sub.slice(7).trim();
+                try {
+                    const { committed, backup } = await se.commit(relPath);
+                    console.log(`[MAX] ✅ Committed: ${committed}`);
+                    console.log(`[MAX] 📦 Backup saved: ${backup}\n`);
+                } catch (err) { console.log(`[MAX] Commit failed: ${err.message}\n`); }
+
+            // /self rollback <path>
+            } else if (sub.startsWith('rollback ')) {
+                const relPath = sub.slice(9).trim();
+                try {
+                    await se.rollback(relPath);
+                    console.log(`[MAX] ↩️  Rolled back ${relPath} — staged changes discarded\n`);
+                } catch (err) { console.log(`[MAX] ${err.message}\n`); }
+
+            // /self list
+            } else if (sub === 'list') {
+                const staged  = se.listStaged();
+                const backups = await se.listBackups();
+                if (staged.length > 0) {
+                    console.log(`\n[MAX] Staged (awaiting commit):\n${staged.map(p => `  ${p}`).join('\n')}`);
+                } else {
+                    console.log('[MAX] No staged edits.');
+                }
+                if (backups.length > 0) {
+                    console.log(`[MAX] Backups (${backups.length}):\n${backups.slice(0, 5).map(b => `  ${b}`).join('\n')}`);
+                }
+                console.log();
+
+            } else {
+                console.log('[MAX] /self commands:');
+                console.log('  /self read <path>              — view source file');
+                console.log('  /self edit <path> <instruction> — propose edit via brain');
+                console.log('  /self diff <path>              — show staged changes');
+                console.log('  /self test <path>              — validate staged version');
+                console.log('  /self commit <path>            — apply changes (backs up original)');
+                console.log('  /self rollback <path>          — discard staged changes');
+                console.log('  /self list                     — staged files + backups\n');
+            }
+
             isThinking = false;
-            ask(); return; 
+            ask(); return;
+        }
+
+        if (line === '/swarm') {
+            swarmNext = true;
+            console.log('[MAX] Next message → swarm.\n');
+            isThinking = false;
+            ask(); return;
         }
         if (line === '/debate') { 
             debateNext = true; 
@@ -339,18 +466,24 @@ async function chatMode(max, opts) {
     // ── Proactive direct messages from background systems ──
     max.heartbeat.on('message', (msg) => {
         if (_rl) {
+            const partial = _rl.line || '';
             readline.clearLine(process.stdout, 0);
             readline.cursorTo(process.stdout, 0);
+            console.log(`\nMAX [background]: ${msg.text}`);
+            if (msg.details) console.log(`[${msg.details}]`);
+            console.log();
+            process.stdout.write('YOU: ' + partial);
+        } else {
+            console.log(`\nMAX [background]: ${msg.text}`);
+            if (msg.details) console.log(`[${msg.details}]`);
+            console.log();
         }
-        console.log(`\nMAX [background]: ${msg.text}`);
-        if (msg.details) console.log(`[${msg.details}]`);
-        console.log();
-        if (_rl) process.stdout.write('YOU: ');
     });
     
     console.log('\n' + '─'.repeat(60));
     console.log('  MAX is live. Dashboard: http://localhost:3100/dashboard');
     console.log('  Commands: /status, /persona <p>, /reason <q>, /swarm, /debate, /expand, /artifacts, /pause, /resume, /quit');
+    console.log('  Self-edit: /self edit <path> <instruction>  →  /self test  →  /self commit | /self rollback');
     console.log('─'.repeat(60) + '\n');
 
     ask();
