@@ -382,10 +382,17 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             // Add this intermediate turn to context so the next "think" sees the results
             this._context.push({ role: 'assistant', content: processed });
 
-            // Re-build history text with the new tool results
+            // Re-build history — cap each turn's content so one huge tool result
+            // can't blow out the context on the next re-think
             const updatedHistory = this._context
                 .slice(-this._contextLimit)
-                .map(m => `${m.role === 'user' ? 'USER' : 'MAX'}: ${m.content}`)
+                .map(m => {
+                    const label   = m.role === 'user' ? 'USER' : 'MAX';
+                    const content = m.content.length > 4_000
+                        ? m.content.slice(0, 4_000) + ' [...]'
+                        : m.content;
+                    return `${label}: ${content}`;
+                })
                 .join('\n\n');
 
             // Think again with the results
@@ -512,18 +519,31 @@ Think deeper about the engineering implications. What are edge cases, gotchas, o
             if (trimmed.startsWith('TOOL:')) {
                 const toolResult = await this.tools.executeLLMToolCall(trimmed);
                 if (toolResult) {
-                    let resultStr = JSON.stringify(toolResult);
+                    let resultStr = typeof toolResult === 'string'
+                        ? toolResult
+                        : JSON.stringify(toolResult);
 
-                    // ─── Artifact Extraction ───
-                    // If the result is huge, store it as an artifact
-                    // and only put the pointer in the chat context.
-                    // EXEMPTION: Never artifact-ize the result of an 'artifacts' tool call.
-                    const isArtifactTool = trimmed.startsWith('TOOL:artifacts:');
+                    // ─── Context budget guard ─────────────────────────────
+                    // Hard cap: nothing larger than 8KB enters the LLM context
+                    // as raw text — regardless of which tool produced it.
+                    // Artifact tool results get a preview + retrieval hint.
+                    // Everything else gets artifact-ized (pointer only).
+                    const CONTEXT_CAP   = 8_000;
+                    const isArtifactOp  = trimmed.startsWith('TOOL:artifacts:');
 
-                    if (resultStr.length > 5000 && !isArtifactTool) {
-                        const name = trimmed.split(':')[2] || 'Tool Output';
-                        const pointer = this.artifacts.store(name, resultStr, 'tool_result');
-                        resultStr = pointer;
+                    if (resultStr.length > CONTEXT_CAP) {
+                        if (isArtifactOp) {
+                            // Show a useful preview — don't re-store as another artifact
+                            const preview = resultStr.slice(0, CONTEXT_CAP);
+                            resultStr = preview
+                                + `\n\n[...TRUNCATED — ${Math.round(resultStr.length / 1000)}KB total. `
+                                + `Ask specific questions about sections rather than reading everything at once.]`;
+                        } else {
+                            // Store as artifact — only the pointer enters context
+                            const name    = trimmed.split(':').slice(1, 3).join('.') || 'tool_output';
+                            const pointer = this.artifacts.store(name, resultStr, 'tool_result');
+                            resultStr = pointer;
+                        }
                     }
 
                     result.push(`[Tool result: ${resultStr}]`);

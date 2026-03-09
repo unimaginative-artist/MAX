@@ -110,6 +110,22 @@ export class Brain {
     async think(prompt, { systemPrompt = '', temperature = 0.7, maxTokens = 2048, tier = 'smart' } = {}) {
         if (!this._ready) throw new Error('Brain not initialized — call initialize() first');
 
+        // Hard token budget guard — prevents context overflow errors.
+        // Rough estimate: 1 token ≈ 4 chars. Reserve maxTokens for completion.
+        // If we're over budget, truncate prompt from the FRONT (drop oldest turns).
+        const CONTEXT_LIMIT = 100_000;  // conservative ceiling across all backends
+        const charBudget    = (CONTEXT_LIMIT - maxTokens) * 4;
+        const sysLen        = systemPrompt.length;
+        const promptBudget  = Math.max(charBudget - sysLen, 10_000);
+
+        if (prompt.length > promptBudget) {
+            const truncated = prompt.slice(-promptBudget);
+            // Try to start at a clean turn boundary so we don't cut mid-sentence
+            const boundary  = truncated.indexOf('\n\nUSER:');
+            prompt = boundary > 0 ? truncated.slice(boundary) : truncated;
+            console.warn(`[Brain] ✂️  Prompt truncated to fit context window (budget: ${Math.round(promptBudget / 1000)}K chars)`);
+        }
+
         let result;
         if (tier === 'fast') {
             result = await this._runFast(prompt, systemPrompt, temperature, maxTokens);
