@@ -207,6 +207,45 @@ async function chatMode(max, opts) {
             ask(); return;
         }
 
+        if (line === '/artifacts' || line.startsWith('/artifacts ')) {
+            const sub = line.slice('/artifacts'.length).trim();
+            const arts = max.artifacts;
+            if (!sub || sub === 'list') {
+                const list = arts.list();
+                if (list.length === 0) {
+                    console.log('[MAX] No artifacts stored.\n');
+                } else {
+                    console.log(`\n[MAX] ${list.length} artifact(s):\n`);
+                    for (const a of list) {
+                        console.log(`  ${a.id}  "${a.name}"  (${a.type}, ${a.lineCount} lines, ${(a.byteSize/1024).toFixed(1)}KB)  ${a.timestamp}`);
+                    }
+                    console.log();
+                }
+            } else if (sub.startsWith('open ')) {
+                const id = sub.slice(5).trim();
+                const r  = await arts.open(id);
+                console.log(r.success ? `[MAX] ${r.message}\n` : `[MAX] Error: ${r.error}\n`);
+            } else if (sub.startsWith('delete ')) {
+                const id = sub.slice(7).trim();
+                const r  = arts.delete(id);
+                console.log(r.success ? `[MAX] ${r.message}\n` : `[MAX] Error: ${r.error}\n`);
+            } else if (sub.startsWith('get ')) {
+                const id  = sub.slice(4).trim();
+                const art = arts.get(id);
+                if (!art) { console.log(`[MAX] Artifact ${id} not found.\n`); }
+                else {
+                    console.log(`\n[MAX] Artifact: "${art.name}" (${art.type})\n${'─'.repeat(60)}`);
+                    console.log(art.content.slice(0, 3000));
+                    if (art.content.length > 3000) console.log(`\n... (${art.lineCount} lines total)`);
+                    console.log();
+                }
+            } else {
+                console.log('[MAX] Usage: /artifacts [list|get <id>|open <id>|delete <id>]\n');
+            }
+            isThinking = false;
+            ask(); return;
+        }
+
         if (line === '/swarm') { 
             swarmNext = true; 
             console.log('[MAX] Next message → swarm.\n'); 
@@ -288,7 +327,7 @@ async function chatMode(max, opts) {
     
     console.log('\n' + '─'.repeat(60));
     console.log('  MAX is live. Dashboard: http://localhost:3100/dashboard');
-    console.log('  Commands: /status, /persona <p>, /reason <q>, /swarm, /debate, /expand, /quit');
+    console.log('  Commands: /status, /persona <p>, /reason <q>, /swarm, /debate, /expand, /artifacts, /quit');
     console.log('─'.repeat(60) + '\n');
 
     ask();

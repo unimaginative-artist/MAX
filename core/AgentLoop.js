@@ -153,6 +153,23 @@ export class AgentLoop extends EventEmitter {
                 break;
             }
 
+            // ── Smart error categorization — choose pivot strategy ────────
+            const errType = this._categorizeError(failReason);
+            console.log(`  [AgentLoop] 🔬 Error type: ${errType} — ${failReason.slice(0, 80)}`);
+
+            // PERMISSION: surface to user and stop — don't burn replans on auth issues
+            if (errType === 'PERMISSION') {
+                this.emit('approvalNeeded', {
+                    description: `Permission error on "${goal.title}": ${failReason}`,
+                    goal:    goal.title,
+                    step:    null,
+                    approve: () => {},
+                    deny:    () => {}
+                });
+                goalSummary = `Blocked by permission: ${failReason}`;
+                break;
+            }
+
             replans++;
             this.stats.replans++;
 
@@ -161,6 +178,20 @@ export class AgentLoop extends EventEmitter {
                 break;
             }
 
+            // TIMEOUT: same plan, just wait and retry — environment may catch up
+            if (errType === 'TIMEOUT') {
+                console.log(`  [AgentLoop] ⏱️  Timeout — waiting 10s before retry (same plan)`);
+                await new Promise(r => setTimeout(r, 10_000));
+                continue;  // retry identical steps — don't redecompose
+            }
+
+            // NETWORK: short backoff then replan — might need different endpoint/approach
+            if (errType === 'NETWORK') {
+                console.log(`  [AgentLoop] 🌐 Network error — backing off 5s then replanning`);
+                await new Promise(r => setTimeout(r, 5_000));
+            }
+
+            // LOGIC + NETWORK (after backoff): research + replan
             console.log(`  [AgentLoop] ↩️  Pivoting (replan ${replans}/${this.config.maxReplans}): ${failReason}`);
 
             // ── After 2 failures: research before replanning ──────────────
@@ -185,7 +216,7 @@ export class AgentLoop extends EventEmitter {
             }
 
             // Append failure context (+ research if available) and re-decompose
-            const errorNote = `[Attempt ${replans} failed: ${failReason}. Try a completely different approach.]`;
+            const errorNote = `[Attempt ${replans} failed (${errType}): ${failReason}. Try a completely different approach.]`;
             const researchNote = researchContext ? `\n\n[Research findings:\n${researchContext}]` : '';
             goal.description = `${goal.description || goal.title}\n\n${errorNote}${researchNote}`;
             goal.steps = goals?.decompose
@@ -443,6 +474,23 @@ export class AgentLoop extends EventEmitter {
             console.warn(`  [AgentLoop] Deep research failed: ${e.message}`);
             return null;
         }
+    }
+
+    // ─── Categorize error for smart pivot strategy ────────────────────────
+    // Returns 'TIMEOUT' | 'PERMISSION' | 'NETWORK' | 'LOGIC'
+    _categorizeError(msg) {
+        const m = (msg || '').toLowerCase();
+        if (m.includes('timeout') || m.includes('timed out'))
+            return 'TIMEOUT';
+        if (m.includes('permission') || m.includes('access denied') ||
+            m.includes('eacces')    || m.includes('eperm')          ||
+            m.includes('unauthorized') || m.includes('forbidden'))
+            return 'PERMISSION';
+        if (m.includes('econnrefused') || m.includes('enotfound') ||
+            m.includes('network')    || m.includes('fetch failed') ||
+            m.includes('getaddrinfo'))
+            return 'NETWORK';
+        return 'LOGIC';
     }
 
     // ─── Detect coding steps — route these to smart tier ─────────────────

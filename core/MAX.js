@@ -86,6 +86,7 @@ export class MAX {
         // Conversation context window
         this._context      = [];
         this._contextLimit = 12;
+        this._compressing  = false;  // guard against concurrent compression
     }
 
     async initialize() {
@@ -168,6 +169,7 @@ export class MAX {
         const dataDir  = path.join(__dirname, '..', '.max');
         this.outcomes  = new OutcomeTracker({ storageDir: path.join(dataDir, 'outcomes') });
         await this.outcomes.initialize();
+        await this.artifacts.init();
 
         this.reasoning = new ReasoningChamber(this.brain);
         this.evolution = new EvolutionArbiter();
@@ -184,7 +186,7 @@ export class MAX {
             }).catch(() => {});
         });
 
-        this.goals     = new GoalEngine(this.brain, this.outcomes);
+        this.goals     = new GoalEngine(this.brain, this.outcomes, this.memory);
         this.goals.initialize();
 
         this.agentLoop = new AgentLoop(this, this.config.agentLoop);
@@ -349,8 +351,11 @@ export class MAX {
         this.memory.addConversation('user',      userMessage,       selectedPersona.id);
         this.memory.addConversation('assistant', finalResponse, selectedPersona.id);
 
-        // Pre-compaction flush — before context window fills, extract key facts to permanent storage
-        // This prevents silent memory loss when old turns get truncated
+        // Rolling context compression — when history gets long, compress old turns into a
+        // summary turn so the context window never silently loses information by hard truncation.
+        this._maybeCompressContext();
+
+        // Pre-compaction flush — extract key facts to permanent memory before truncation
         if (this._context.length >= this._contextLimit * 1.6) {
             this._flushMemories().catch(() => {});
         }
@@ -537,6 +542,43 @@ ${recent}`,
             }
             console.log(`[MAX] 💾 Compaction flush: saved ${extracted.length} facts before context truncation`);
         } catch { /* non-fatal */ }
+    }
+
+    // ─── Rolling context compression ──────────────────────────────────────
+    // Fire-and-forget: compresses oldest turns into a summary when context grows.
+    // Keeps MAX's working memory fresh without silently dropping old context.
+    _maybeCompressContext() {
+        if (this._context.length <= this._contextLimit || this._compressing) return;
+        this._compressing = true;
+        this._compressContext()
+            .catch(() => {})
+            .finally(() => { this._compressing = false; });
+    }
+
+    async _compressContext() {
+        if (!this.brain._ready) return;
+
+        const keepRecent = Math.ceil(this._contextLimit * 0.6);  // keep newest 60%
+        const toCompress = this._context.slice(0, -keepRecent);
+        const toKeep     = this._context.slice(-keepRecent);
+
+        if (toCompress.length < 4) return;  // not worth it
+
+        const excerpt = toCompress
+            .map(m => `${m.role === 'user' ? 'USER' : 'MAX'}: ${m.content.slice(0, 400)}`)
+            .join('\n\n')
+            .slice(0, 4000);
+
+        const result = await this.brain.think(
+            `Compress this conversation history into 2-3 sentences capturing all key decisions, facts, and context:\n\n${excerpt}`,
+            { temperature: 0.1, maxTokens: 200, tier: 'fast' }
+        );
+
+        this._context = [
+            { role: 'user', content: `[Conversation history (compressed): ${result.text}]` },
+            ...toKeep
+        ];
+        console.log(`[MAX] 🗜️  Compressed ${toCompress.length} old context turns → summary`);
     }
 
     clearContext() {

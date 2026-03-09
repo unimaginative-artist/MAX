@@ -300,6 +300,68 @@ Return null for improvementGoal if no clear goal is identified.`;
         };
     }
 
+    // ─── Reflect on task execution patterns (not just chat quality) ───────
+    // Analyzes AgentLoop outcome history for recurring failure patterns
+    // and generates improvement goals to address them.
+    async reflectOnTaskOutcomes() {
+        if (!this.brain?._ready || !this.outcomes) return;
+
+        const taskOutcomes = this.outcomes.query({ limit: 40 })
+            .filter(o => o.agent === 'AgentLoop' || o.action?.startsWith('goal:'));
+
+        if (taskOutcomes.length < 5) return;
+
+        const failRate  = taskOutcomes.filter(o => !o.success).length / taskOutcomes.length;
+        const summary   = taskOutcomes
+            .map(o => `${o.success ? '✓' : '✗'} ${o.context?.title || o.action}: ${(o.result || '').slice(0, 100)}`)
+            .join('\n');
+
+        const prompt = `You are MAX's task execution analyzer. Study these outcomes and find patterns.
+
+TASK OUTCOMES (${taskOutcomes.length} total, ${(failRate * 100).toFixed(0)}% failure rate):
+${summary}
+
+Identify:
+1. What categories of tasks consistently fail and why?
+2. What execution patterns lead to success?
+3. What single change would most reduce failures?
+
+Return ONLY a JSON object:
+{
+  "failurePatterns": ["specific pattern with evidence"],
+  "successPatterns": ["what reliably works"],
+  "improvementGoal": {
+    "title": "specific actionable improvement title",
+    "description": "exactly what to change in the execution strategy",
+    "type": "improvement",
+    "priority": 0.1-1.0
+  }
+}`;
+
+        try {
+            const result = await this.brain.think(prompt, { temperature: 0.3, maxTokens: 500, tier: 'fast' });
+            const match  = result.text.match(/\{[\s\S]*\}/);
+            if (!match) return;
+
+            const analysis = JSON.parse(match[0]);
+
+            for (const p of (analysis.failurePatterns || [])) {
+                if (p) this._notePattern(`Task: ${p}`);
+            }
+
+            if (analysis.improvementGoal?.title) {
+                this.goals?.addGoal({ ...analysis.improvementGoal, source: 'task_reflection' });
+                console.log(`[ReflectionEngine] ➕ Task improvement goal: "${analysis.improvementGoal.title}"`);
+            }
+
+            this._selfModel.totalReflections++;
+            this._save();
+            console.log(`[ReflectionEngine] 📊 Task reflection complete — ${(failRate * 100).toFixed(0)}% failure rate analyzed`);
+        } catch (err) {
+            console.error('[ReflectionEngine] Task reflect error:', err.message);
+        }
+    }
+
     // ─── Dreaming: long-term consolidation of outcomes into KB ────────────
     // Called during low-activity periods or on /reflect
     async dream(kb = null) {
