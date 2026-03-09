@@ -48,7 +48,7 @@ REQUIREMENTS:
 4. Return ONLY the code for the test file. No explanation.`;
 
         try {
-            const result = await this.max.brain.think(prompt, { tier: 'smart', temperature: 0.2 });
+            const result = await this.max.brain.think(prompt, { tier: 'fast', temperature: 0.2 });
             let testCode = result.text;
 
             // Extract code block if LLM included one
