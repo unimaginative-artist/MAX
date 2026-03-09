@@ -91,6 +91,14 @@ export class Heartbeat extends EventEmitter {
     }
 
     async _runCycle() {
+        // ── Don't compete with active chat for the brain ──────────────────
+        // If the user is mid-conversation, skip this background cycle entirely.
+        // Prevents AgentLoop brain calls from timing out and interrupting input.
+        if (this.max?._chatBusy) {
+            console.log(`[Heartbeat] 💬 Chat active — skipping background cycle`);
+            return;
+        }
+
         const drive = this.max?.drive;
         const driveStatus = drive?.getStatus?.();
 
