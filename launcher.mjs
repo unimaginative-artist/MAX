@@ -500,11 +500,12 @@ async function chatMode(max, opts) {
         inputBuffer += (inputBuffer ? '\n' : '') + line;
         if (bufferTimer) clearTimeout(bufferTimer);
         bufferTimer = setTimeout(() => {
+            bufferTimer = null;
             const full = inputBuffer;
             inputBuffer = '';
             resumeSpinner();
             processInput(full);
-        }, 600); // 600ms — enough time for Windows to finish delivering a large paste
+        }, 900); // 900ms — Windows large pastes can take 600-700ms to fully deliver
     });
 
     max.heartbeat.on('insight', printInsight);
