@@ -280,7 +280,7 @@ export class Brain {
         return {
             ready:       this._ready,
             fast:  { backend: this._fast.backend,  model: this._fast.ollamaModel,  ready: this._fast.ready  },
-            smart: { backend: this._smart.backend, model: this._smart.ollamaModel || this._smart.geminiModel || this._smart.openaiModel, ready: this._smart.ready }
+            smart: { backend: this._smart.backend, model: this._smart.ollamaModel || (this._smart.backend === 'openai' ? this._smart.openaiModel : this._smart.geminiModel), ready: this._smart.ready }
         };
     }
 }
