@@ -91,9 +91,12 @@ export class MAX {
         // Conversation context window
         this._context         = [];
         this._contextLimit    = 12;
-        this._compressing     = false;  // guard against concurrent compression
-        this._sessionBriefing = null;   // loaded from .max/session.json on boot
-        this._chatBusy        = false;  // true while think() is running — tells Heartbeat to stand down
+        this._compressing     = false;
+        this._sessionBriefing = null;
+        this._chatBusy        = false;
+
+        // System prompt cache — rebuilt only when persona or drive state changes
+        this._promptCache     = { key: null, prompt: null };
     }
 
     async initialize() {
@@ -324,19 +327,27 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
         // Refresh profile if user edited the files since last read
         this.profile.refresh();
 
-        // Build system prompt — persona + state + user profile + workspace + self-model + tools
-        // Tools always included — MAX is an agent and should always know his capabilities
-        const systemPrompt = this.persona.buildSystemPrompt(selectedPersona)
-            + this._buildStateContext()
-            + this.profile.buildContextBlock()
-            + this.memory.getContextString()
-            + (this.reflection?.getSelfModelContext() || '')
-            + this.tools.buildManifest();
+        // Build system prompt — cache it and only rebuild when persona or drive state changes.
+        // The tools manifest, profile, and self-model are expensive to build every turn.
+        const driveStatus  = this.drive.getStatus();
+        const promptCacheKey = `${selectedPersona.id}|${Math.round(driveStatus.tension * 10)}|${this._context.length}`;
+        if (this._promptCache.key !== promptCacheKey) {
+            this._promptCache.prompt = this.persona.buildSystemPrompt(selectedPersona)
+                + this._buildStateContext()
+                + this.profile.buildContextBlock()
+                + this.memory.getContextString()
+                + (this.reflection?.getSelfModelContext() || '')
+                + this.tools.buildManifest();
+            this._promptCache.key = promptCacheKey;
+        }
+        const systemPrompt = this._promptCache.prompt;
 
-        // Pull relevant episodic memories + KB chunks in parallel
+        // Pull episodic memories + KB chunks — skip KB for short conversational messages
+        // (greetings, acks, one-word replies) since they don't benefit from semantic search
+        const isConversational = userMessage.trim().length < 40 && !/\b(file|code|why|how|what|where|soma|goal|error|fix)\b/i.test(userMessage);
         const [relevantMemories, kbChunks] = await Promise.all([
             this.memory.recall(userMessage, { topK: 4 }),
-            this.kb.query(userMessage, { topK: 5, brain: this.brain })
+            isConversational ? Promise.resolve([]) : this.kb.query(userMessage, { topK: 5, brain: this.brain })
         ]);
 
         const memoryContext = relevantMemories.length > 0
