@@ -264,17 +264,18 @@ export class AgentLoop extends EventEmitter {
             let result = '';
 
             const timeoutMs = this.config.stepTimeoutMs;
+            const isCoding  = this._isCodingStep(step, goal);
 
             if (toolName === 'brain') {
-                // Think through this step — enforced timeout
+                // Think through this step — use smart tier for coding tasks
                 const resObj = await withTimeout(
                     this.max.brain.think(
                         `Complete this step concisely:\n\nGOAL: ${goal.title}\nSTEP: ${action}`,
                         {
                             systemPrompt: `You are MAX completing an autonomous task step. Be concrete and brief.`,
-                            temperature:  0.4,
-                            maxTokens:    512,
-                            tier:         'fast'
+                            temperature:  isCoding ? 0.2 : 0.4,
+                            maxTokens:    isCoding ? 2048 : 512,
+                            tier:         isCoding ? 'smart' : 'fast'
                         }
                     ),
                     timeoutMs,
@@ -442,6 +443,22 @@ export class AgentLoop extends EventEmitter {
             console.warn(`  [AgentLoop] Deep research failed: ${e.message}`);
             return null;
         }
+    }
+
+    // ─── Detect coding steps — route these to smart tier ─────────────────
+    _isCodingStep(step, goal) {
+        const codingTools = ['file.write', 'file.edit', 'shell', 'coderunner', 'lab'];
+        const codingWords = ['write', 'implement', 'create', 'code', 'fix', 'refactor',
+                             'edit', 'debug', 'build', 'generate', 'patch', 'update'];
+
+        const toolStr   = (step.tool   || '').toLowerCase();
+        const actionStr = (step.action || '').toLowerCase();
+        const goalStr   = (goal.title  || '').toLowerCase();
+
+        const codingTool = codingTools.some(t => toolStr.includes(t));
+        const codingAction = codingWords.some(w => actionStr.includes(w) || goalStr.includes(w));
+
+        return codingTool || codingAction;
     }
 
     // ─── Approval gate ────────────────────────────────────────────────────
