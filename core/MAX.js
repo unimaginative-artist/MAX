@@ -179,17 +179,22 @@ export class MAX {
         await this.skills.initialize();
         await this.selfEditor.initialize();
 
-        // Session continuity — brief MAX on where he left off
+        // Session continuity — restore conversation + brief MAX on where he left off
         const sessionFile = path.join(dataDir, 'session.json');
         if (fs.existsSync(sessionFile)) {
             try {
-                const s = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
+                const s        = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
                 const hoursAgo = Math.round((Date.now() - new Date(s.timestamp)) / 3_600_000);
                 if (hoursAgo < 168) {  // within a week
+                    // Restore conversation turns into working context so MAX picks up mid-thread
+                    if (Array.isArray(s.conversation) && s.conversation.length > 0) {
+                        this._context = s.conversation.map(m => ({ role: m.role, content: m.content }));
+                        console.log(`[MAX] 💬 Restored ${this._context.length} conversation turns from last session`);
+                    }
                     this._sessionBriefing = { ...s, hoursAgo };
                     console.log(`[MAX] 📋 Last session ${hoursAgo}h ago — ${s.goals?.length || 0} goals in progress`);
                 }
-            } catch { /* fresh start, no session file yet */ }
+            } catch { /* fresh start */ }
         }
 
         this.reasoning = new ReasoningChamber(this.brain);
@@ -555,10 +560,22 @@ Memory: ${memory.totalMemories} stored facts | ${memory.conversationTurns} conve
         }
 
         if (this._sessionBriefing) {
-            const { hoursAgo, goals: sg, insights: si } = this._sessionBriefing;
-            state += `\n\n## Last session (${hoursAgo}h ago)`;
-            state += `\nIn-progress goals: ${sg?.map(g => `"${g.title}"`).join(', ') || 'none'}`;
-            if (si?.[0]) state += `\nLast insight: ${si[0].result?.slice(0, 150)}`;
+            const { hoursAgo, goals: sg, insights: si, conversation: sc } = this._sessionBriefing;
+            state += `\n\n## Previous session (${hoursAgo}h ago)`;
+            if (sg?.length > 0) {
+                state += `\nIn-progress goals: ${sg.map(g => `"${g.title}"`).join(', ')}`;
+            }
+            if (si?.[0]) {
+                state += `\nLast insight: ${si[0].result?.slice(0, 150)}`;
+            }
+            // Show the last few exchanges so MAX knows exactly what was being discussed
+            if (sc?.length > 0) {
+                state += `\n\nLast conversation:\n`;
+                state += sc.slice(-4).map(m =>
+                    `${m.role === 'user' ? 'Barry' : 'MAX'}: ${m.content.slice(0, 200)}`
+                ).join('\n');
+            }
+            state += `\n\nYou are continuing this conversation. Acknowledge you remember where you left off — don't restart cold.`;
         }
 
         state += `\n\n## Agentic behavior

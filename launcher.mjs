@@ -165,10 +165,14 @@ async function chatMode(max, opts) {
             // Save session state so MAX can brief himself next boot
             try {
                 const sessionState = {
-                    timestamp: new Date().toISOString(),
-                    goals:    max.goals?.listActive().slice(0, 8).map(g => ({ title: g.title, status: g.status })),
-                    insights: _insights.slice(-5).map(i => ({ label: i.insight.label, result: i.insight.result?.slice(0, 300) })),
-                    outcomes: max.outcomes?.getStats(),
+                    timestamp:    new Date().toISOString(),
+                    goals:        max.goals?.listActive().slice(0, 8).map(g => ({ title: g.title, status: g.status })),
+                    insights:     _insights.slice(-5).map(i => ({ label: i.insight.label, result: i.insight.result?.slice(0, 300) })),
+                    outcomes:     max.outcomes?.getStats(),
+                    conversation: (max._context || []).slice(-8).map(m => ({
+                        role:    m.role,
+                        content: m.content.slice(0, 600)   // cap each turn so file stays small
+                    }))
                 };
                 writeFileSync(join(__dirname, '.max', 'session.json'), JSON.stringify(sessionState, null, 2));
                 console.log('[MAX] 📋 Session saved.');
