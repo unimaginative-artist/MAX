@@ -51,6 +51,7 @@ export class AgentLoop extends EventEmitter {
             goalsCompleted: 0,
             stepsExecuted: 0,
             replans:      0,
+            searches:     0,
             approvalsPending: 0,
             approvalsGranted: 0,
             approvalsDenied: 0
@@ -162,8 +163,31 @@ export class AgentLoop extends EventEmitter {
 
             console.log(`  [AgentLoop] ↩️  Pivoting (replan ${replans}/${this.config.maxReplans}): ${failReason}`);
 
-            // Append failure context and re-decompose
-            goal.description = `${goal.description || goal.title}\n\n[Previous attempt failed: ${failReason}. Try a different approach.]`;
+            // ── After 2 failures: research before replanning ──────────────
+            // Two bad plans in a row means MAX doesn't know enough.
+            // Do deeper research on the topic before generating plan 3+.
+            let researchContext = '';
+            if (replans >= 2) {
+                console.log(`  [AgentLoop] 📚 Two failures — researching before replan ${replans}...`);
+                researchContext = await this._deepResearch(goal, failReason);
+                if (researchContext) {
+                    console.log(`  [AgentLoop] 📖 Research complete — injecting context`);
+                    this.stats.searches++;
+                    this.emit('insight', {
+                        source: 'agent',
+                        label:  `📚 Research: "${goal.title}"`,
+                        result: researchContext
+                    });
+                    this.max.memory?.remember(researchContext, { goal: goal.title, source: 'agent_research' }, {
+                        type: 'research', importance: 0.75
+                    });
+                }
+            }
+
+            // Append failure context (+ research if available) and re-decompose
+            const errorNote = `[Attempt ${replans} failed: ${failReason}. Try a completely different approach.]`;
+            const researchNote = researchContext ? `\n\n[Research findings:\n${researchContext}]` : '';
+            goal.description = `${goal.description || goal.title}\n\n${errorNote}${researchNote}`;
             goal.steps = goals?.decompose
                 ? await goals.decompose(goal)
                 : [{ step: 1, action: goal.description, tool: 'brain', success: 'completed' }];
@@ -318,8 +342,105 @@ export class AgentLoop extends EventEmitter {
             return { step: step.step, success: true, result, summary };
 
         } catch (err) {
-            console.error(`  [AgentLoop] Step ${step.step} error:`, err.message);
+            // ── Search-and-Retry ──────────────────────────────────────────
+            // Before giving up, search the web for a solution and retry once.
+            console.log(`  [AgentLoop] 🔍 Searching for a solution to: ${err.message.slice(0, 80)}`);
+            const searchContext = await this._searchForSolution(step, goal, err.message);
+
+            if (searchContext) {
+                try {
+                    const retryObj = await withTimeout(
+                        this.max.brain.think(
+                            `Complete this step. A previous attempt failed.\n\nGOAL: ${goal.title}\nSTEP: ${action}\nERROR: ${err.message}\n\nSEARCH RESULTS:\n${searchContext}\n\nUse the search results to find the correct approach.`,
+                            { systemPrompt: 'You are MAX completing an autonomous task step. Be concrete and brief.', temperature: 0.3, maxTokens: 512, tier: 'fast' }
+                        ),
+                        this.config.stepTimeoutMs,
+                        'search retry'
+                    );
+                    const retrySummary = retryObj.text.slice(0, 200);
+                    console.log(`  [AgentLoop] ✅ Search retry succeeded`);
+                    this.stats.searches++;
+                    return { step: step.step, success: true, result: retryObj.text, summary: retrySummary };
+                } catch (retryErr) {
+                    console.error(`  [AgentLoop] Search retry also failed:`, retryErr.message);
+                }
+            }
+
+            console.error(`  [AgentLoop] Step ${step.step} failed:`, err.message);
             return { step: step.step, success: false, error: err.message, summary: '' };
+        }
+    }
+
+    // ─── Search for a solution to a failed step ───────────────────────────
+    async _searchForSolution(step, goal, errorMsg) {
+        try {
+            const query = `how to ${step.action.slice(0, 80)} ${errorMsg.slice(0, 60)}`.replace(/\s+/g, ' ').trim();
+            console.log(`  [AgentLoop] 🌐 Web search: "${query.slice(0, 100)}"`);
+
+            const searchResult = await withTimeout(
+                this.max.tools.execute('web', 'search', { query }),
+                20_000,
+                'web search'
+            );
+
+            if (!searchResult?.results?.length) return null;
+
+            return searchResult.results
+                .slice(0, 3)
+                .map(r => `[${r.title}]: ${r.snippet || r.body || ''}`)
+                .join('\n\n')
+                .slice(0, 1500);
+
+        } catch (e) {
+            console.warn(`  [AgentLoop] Search unavailable: ${e.message}`);
+            return null;
+        }
+    }
+
+    // ─── Deep research — called after 2+ failed replans ──────────────────
+    // Runs multiple searches and asks the brain to synthesize findings
+    // into a concise briefing that gets injected into the next plan.
+    async _deepResearch(goal, lastError) {
+        try {
+            const queries = [
+                `how to ${goal.title.slice(0, 80)}`,
+                `${lastError.slice(0, 60)} solution`,
+                `best approach for ${goal.title.slice(0, 60)}`
+            ];
+
+            const snippets = [];
+            for (const query of queries) {
+                try {
+                    console.log(`  [AgentLoop] 🌐 Research: "${query.slice(0, 80)}"`);
+                    const r = await withTimeout(
+                        this.max.tools.execute('web', 'search', { query }),
+                        20_000,
+                        'research search'
+                    );
+                    if (r?.results?.length) {
+                        snippets.push(...r.results.slice(0, 2).map(x => `${x.title}: ${x.snippet || x.body || ''}`));
+                    }
+                } catch { /* skip failed individual searches */ }
+            }
+
+            if (snippets.length === 0) return null;
+
+            const raw = snippets.join('\n\n').slice(0, 3000);
+
+            // Synthesize with brain
+            const synthesis = await withTimeout(
+                this.max.brain.think(
+                    `I'm trying to: "${goal.title}"\nI've failed twice. Last error: ${lastError}\n\nSearch results:\n${raw}\n\nSummarize the key findings and the best approach in 3-5 bullet points.`,
+                    { temperature: 0.3, maxTokens: 400, tier: 'fast' }
+                ),
+                30_000,
+                'research synthesis'
+            );
+
+            return synthesis.text.slice(0, 1000);
+        } catch (e) {
+            console.warn(`  [AgentLoop] Deep research failed: ${e.message}`);
+            return null;
         }
     }
 
