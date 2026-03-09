@@ -128,15 +128,34 @@ function expandInsight(arg) {
 
 // ─── Thinking spinner ─────────────────────────────────────────────────────
 const SPINNER = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+let _spinnerTimer = null;
+let _spinnerPaused = false;
+
 function startSpinner(label = 'thinking') {
     let i = 0;
-    const timer = setInterval(() => {
-        process.stdout.write(`\r  ${SPINNER[i++ % SPINNER.length]}  MAX is ${label}...`);
+    _spinnerPaused = false;
+    _spinnerTimer = setInterval(() => {
+        if (!_spinnerPaused) {
+            process.stdout.write(`\r  ${SPINNER[i++ % SPINNER.length]}  MAX is ${label}...`);
+        }
     }, 80);
     return function stop() {
-        clearInterval(timer);
+        clearInterval(_spinnerTimer);
+        _spinnerTimer = null;
+        _spinnerPaused = false;
         process.stdout.write('\r' + ' '.repeat(40) + '\r');
     };
+}
+
+function pauseSpinner() {
+    if (_spinnerTimer && !_spinnerPaused) {
+        _spinnerPaused = true;
+        process.stdout.write('\r' + ' '.repeat(40) + '\r');
+    }
+}
+
+function resumeSpinner() {
+    _spinnerPaused = false;
 }
 
 // ─── Chat mode ───────────────────────────────────────────────────────────
@@ -160,14 +179,13 @@ async function chatMode(max, opts) {
         const line = input.trim();
         if (!line) { ask(); return; }
 
-        // If already thinking, queue this message — process it right after
+        // If already thinking, append to pending queue — process after response
         if (isThinking) {
-            pendingInput = line;
-            const partial = _rl?.line || '';
+            pendingInput = pendingInput ? pendingInput + '\n' + line : line;
             readline.clearLine(process.stdout, 0);
             readline.cursorTo(process.stdout, 0);
             console.log(`  [queued] "${line.slice(0, 60)}${line.length > 60 ? '...' : ''}"`);
-            process.stdout.write('  ⠿  MAX is still thinking...');
+            resumeSpinner();
             return;
         }
 
@@ -478,13 +496,15 @@ async function chatMode(max, opts) {
     };
 
     rl.on('line', (line) => {
+        pauseSpinner();   // freeze spinner so paste text doesn't get mangled by it
         inputBuffer += (inputBuffer ? '\n' : '') + line;
         if (bufferTimer) clearTimeout(bufferTimer);
         bufferTimer = setTimeout(() => {
             const full = inputBuffer;
             inputBuffer = '';
+            resumeSpinner();
             processInput(full);
-        }, 300); // Increased to 300ms for safer Windows pastes
+        }, 600); // 600ms — enough time for Windows to finish delivering a large paste
     });
 
     max.heartbeat.on('insight', printInsight);
