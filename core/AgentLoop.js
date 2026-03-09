@@ -36,6 +36,8 @@ export class AgentLoop extends EventEmitter {
             stepTimeoutMs:    config.stepTimeoutMs    || 60_000,
             requireApproval:  config.requireApproval  ?? true,   // gate destructive actions
             autoApproveLevel: config.autoApproveLevel || 'read', // 'read'|'write'|'all'
+            maxReplans:       config.maxReplans       || 3,      // pivot attempts before giving up
+            verifySteps:      config.verifySteps      ?? true,   // LLM verification gate per step
             ...config
         };
 
@@ -48,6 +50,7 @@ export class AgentLoop extends EventEmitter {
             goalsStarted: 0,
             goalsCompleted: 0,
             stepsExecuted: 0,
+            replans:      0,
             approvalsPending: 0,
             approvalsGranted: 0,
             approvalsDenied: 0
@@ -117,27 +120,55 @@ export class AgentLoop extends EventEmitter {
 
         this.emit('goalStart', { goal });
 
-        // ── 3. Execute steps ──────────────────────────────────────────────
+        // ── 3. Execute steps — with Pivot Loop ───────────────────────────
+        // On step failure, re-decompose with error context and retry.
         const stepResults = [];
-        let   goalSuccess = true;
+        let   goalSuccess = false;
         let   goalSummary = '';
+        let   replans     = 0;
 
-        for (const step of goal.steps.slice(0, this.config.maxStepsPerGoal)) {
-            const result = await this._executeStep(step, goal);
-            stepResults.push(result);
+        while (replans <= this.config.maxReplans) {
+            stepResults.length = 0;
+            let failed = false;
+            let failReason = '';
 
-            if (!result.success) {
-                goalSuccess = false;
-                goalSummary = `Failed at step ${step.step}: ${result.error}`;
+            for (const step of goal.steps.slice(0, this.config.maxStepsPerGoal)) {
+                const result = await this._executeStep(step, goal);
+                stepResults.push(result);
+
+                if (!result.success) {
+                    failed = true;
+                    failReason = `Step ${step.step} failed: ${result.error}`;
+                    break;
+                }
+
+                drive?.onTaskExecuted();
+                this.stats.stepsExecuted++;
+            }
+
+            if (!failed) {
+                goalSuccess = true;
+                goalSummary = stepResults.map(r => r.summary || '').filter(Boolean).join(' → ');
                 break;
             }
 
-            drive?.onTaskExecuted();
-            this.stats.stepsExecuted++;
-        }
+            replans++;
+            this.stats.replans++;
 
-        if (goalSuccess) {
-            goalSummary = stepResults.map(r => r.summary || '').filter(Boolean).join(' → ');
+            if (replans > this.config.maxReplans) {
+                goalSummary = `Gave up after ${replans - 1} replans. Last error: ${failReason}`;
+                break;
+            }
+
+            console.log(`  [AgentLoop] ↩️  Pivoting (replan ${replans}/${this.config.maxReplans}): ${failReason}`);
+
+            // Append failure context and re-decompose
+            goal.description = `${goal.description || goal.title}\n\n[Previous attempt failed: ${failReason}. Try a different approach.]`;
+            goal.steps = goals?.decompose
+                ? await goals.decompose(goal)
+                : [{ step: 1, action: goal.description, tool: 'brain', success: 'completed' }];
+
+            console.log(`  [AgentLoop] 🔄 New plan: ${goal.steps.length} steps`);
         }
 
         // ── 4. Record outcome ─────────────────────────────────────────────
@@ -259,6 +290,31 @@ export class AgentLoop extends EventEmitter {
             }
 
             const summary = typeof result === 'string' ? result.slice(0, 200) : JSON.stringify(result).slice(0, 200);
+
+            // ── Verification Gate ─────────────────────────────────────────
+            // If the step has a success criterion, ask the brain to check it.
+            if (this.config.verifySteps && step.success && step.success !== 'completed') {
+                try {
+                    const verifyResult = await withTimeout(
+                        this.max.brain.think(
+                            `Did this step succeed?\n\nSTEP: ${action}\nSUCCESS CRITERION: ${step.success}\nOUTPUT: ${summary}\n\nReply with only YES or NO.`,
+                            { temperature: 0.0, maxTokens: 10, tier: 'fast' }
+                        ),
+                        15_000,
+                        'verify'
+                    );
+                    const verdict = verifyResult.text.trim().toUpperCase();
+                    if (verdict.startsWith('NO')) {
+                        throw new Error(`Verification failed: expected "${step.success}" but output was: ${summary.slice(0, 100)}`);
+                    }
+                } catch (verifyErr) {
+                    // Only treat as failure if it's our own thrown error, not a brain timeout
+                    if (verifyErr.message.startsWith('Verification failed')) throw verifyErr;
+                    // Brain timeout → skip verification, proceed
+                    console.warn(`  [AgentLoop] Verify skipped: ${verifyErr.message}`);
+                }
+            }
+
             return { step: step.step, success: true, result, summary };
 
         } catch (err) {
