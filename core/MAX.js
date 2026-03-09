@@ -457,7 +457,7 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
                 finalResponse = recovery.text
                     .replace(/^\[Tool result:.*?\]\n?/gm, '')
                     .replace(/^TOOL:[^\n]*\n?/gm, '')
-                    .trim() || 'On it — queued the investigation goal.';
+                    .trim() || 'On it.';
             } catch {
                 finalResponse = 'On it.';
             }
@@ -667,7 +667,8 @@ EXECUTION requests ("move this code", "edit this file", "fix X in file Y", "make
 → Read the file, make the change, verify it, then report COMPLETION in one response.
 → Never say "let me read X" and stop — if you need to read X, read it in the SAME response and keep going.
 → Only check back with the user when the task is DONE or you are genuinely blocked.
-Example: user says "move block X from line 1106 to line 233 in file Y" → read file → make edit → verify → respond "Done. Moved X to line 233. Here's what changed: ..."`;
+→ Always end with a clear completion signal: "Done. [what changed]. What do you want to do next?"
+Example: "Done. Moved SomaAgenticExecutor init to line 233 in extended.js. It's now in PHASE A before the heap fills. What do you want to do next?"`;
 
 
         return state;
