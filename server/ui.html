@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MAX</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg:           #0d0d0d;
+            --surface:      #141414;
+            --surface2:     #1c1c1c;
+            --border:       #262626;
+            --accent:       #7c3aed;
+            --accent-dim:   #4c1d95;
+            --accent-glow:  rgba(124,58,237,0.15);
+            --text:         #e5e7eb;
+            --muted:        #6b7280;
+            --success:      #10b981;
+            --warning:      #f59e0b;
+            --danger:       #ef4444;
+        }
+
+        html, body { height: 100%; background: var(--bg); color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            font-size: 14px; overflow: hidden; }
+
+        /* ── Layout ─────────────────────────────────────────── */
+        #app { display: flex; flex-direction: column; height: 100vh; }
+
+        #nav {
+            display: flex; align-items: center; gap: 12px;
+            padding: 0 16px; height: 48px;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface); flex-shrink: 0;
+        }
+
+        #main { display: flex; flex: 1; overflow: hidden; }
+
+        #chat-col { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+
+        #sidebar {
+            width: 300px; flex-shrink: 0;
+            border-left: 1px solid var(--border);
+            display: flex; flex-direction: column; overflow: hidden;
+        }
+
+        /* ── Nav ────────────────────────────────────────────── */
+        .logo { font-size: 17px; font-weight: 800; letter-spacing: 4px; color: var(--accent); }
+        .spacer { flex: 1; }
+
+        .tension-wrap { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--muted); }
+        .tension-track { width: 72px; height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
+        .tension-bar { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.6s ease; }
+
+        .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+        .live-dot.on { background: var(--success); animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+        /* ── SOMA toggle ──────────────────────────────────────── */
+        .soma-toggle {
+            display: flex; align-items: center; gap: 7px;
+            font-size: 11px; color: var(--muted);
+            cursor: pointer; user-select: none;
+            padding: 4px 8px; border-radius: 4px;
+            border: 1px solid var(--border);
+            transition: all .15s;
+        }
+        .soma-toggle:hover { border-color: var(--accent); color: var(--text); }
+        .soma-toggle.active { border-color: #7c3aed88; color: var(--accent); }
+        .soma-switch {
+            width: 28px; height: 15px; border-radius: 8px;
+            background: var(--border); position: relative; transition: background .2s;
+            flex-shrink: 0;
+        }
+        .soma-switch::after {
+            content: ''; position: absolute; top: 2px; left: 2px;
+            width: 11px; height: 11px; border-radius: 50%;
+            background: var(--muted); transition: all .2s;
+        }
+        .soma-toggle.active .soma-switch { background: var(--accent); }
+        .soma-toggle.active .soma-switch::after { left: 15px; background: #fff; }
+        .soma-toggle.checking .soma-switch { background: var(--warning); }
+
+        /* ── SOMA modal ───────────────────────────────────────── */
+        #soma-modal {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0,0,0,.7); z-index: 100;
+            align-items: center; justify-content: center;
+        }
+        #soma-modal.open { display: flex; }
+        .soma-card {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 10px; padding: 28px 32px; max-width: 400px; width: 90%;
+            animation: fadeUp .2s ease;
+        }
+        .soma-card h2 { font-size: 16px; margin-bottom: 8px; }
+        .soma-card p { font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 20px; }
+        .soma-card .btns { display: flex; gap: 10px; }
+        .soma-card a {
+            flex: 1; text-align: center; padding: 9px 0;
+            background: var(--accent); color: #fff; text-decoration: none;
+            border-radius: 6px; font-size: 13px; font-weight: 600;
+            transition: opacity .15s;
+        }
+        .soma-card a:hover { opacity: .85; }
+        .soma-card button {
+            flex: 1; padding: 9px 0; background: none;
+            border: 1px solid var(--border); color: var(--muted);
+            border-radius: 6px; font-size: 13px; cursor: pointer;
+            transition: all .15s;
+        }
+        .soma-card button:hover { border-color: var(--text); color: var(--text); }
+
+        select {
+            background: var(--surface2); border: 1px solid var(--border);
+            color: var(--text); padding: 4px 8px; border-radius: 4px;
+            font-size: 12px; cursor: pointer; outline: none;
+        }
+        select:focus { border-color: var(--accent); }
+
+        /* ── Messages ───────────────────────────────────────── */
+        #messages {
+            flex: 1; overflow-y: auto; padding: 20px 20px 10px;
+            display: flex; flex-direction: column; gap: 18px;
+            scroll-behavior: smooth;
+        }
+        #messages::-webkit-scrollbar { width: 4px; }
+        #messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+        .msg { display: flex; gap: 10px; max-width: 780px; animation: fadeUp .2s ease; }
+        .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+        @keyframes fadeUp { from { opacity:0; transform:translateY(6px); } to { opacity:1; } }
+
+        .avatar {
+            width: 30px; height: 30px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 11px; font-weight: 700; flex-shrink: 0; margin-top: 2px;
+        }
+        .msg.user .avatar { background: var(--accent); color: #fff; }
+        .msg.max .avatar { background: var(--surface2); color: var(--accent); border: 1px solid var(--border); }
+
+        .msg-body { min-width: 0; }
+        .msg-name { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+        .msg.user .msg-name { text-align: right; }
+
+        .bubble {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 10px; padding: 10px 14px;
+            line-height: 1.65; word-break: break-word;
+        }
+        .msg.user .bubble { background: #1a1037; border-color: var(--accent-dim); }
+
+        /* Markdown */
+        .bubble strong { font-weight: 600; }
+        .bubble em { font-style: italic; color: #c4b5fd; }
+        .bubble code {
+            background: #0a0a0a; border: 1px solid var(--border);
+            padding: 1px 5px; border-radius: 3px;
+            font-family: 'Cascadia Code','Fira Code',monospace; font-size: 12.5px;
+        }
+        .bubble pre {
+            background: #0a0a0a; border: 1px solid var(--border);
+            border-radius: 6px; padding: 10px 12px;
+            overflow-x: auto; margin: 6px 0;
+        }
+        .bubble pre code { background:none; border:none; padding:0; font-size:12px; }
+        .bubble ul, .bubble ol { padding-left: 18px; margin: 4px 0; }
+        .bubble li { margin: 2px 0; }
+        .bubble p { margin: 4px 0; }
+        .bubble p:first-child { margin-top: 0; }
+        .bubble p:last-child { margin-bottom: 0; }
+
+        /* Thinking */
+        .dots span { animation: dot 1.2s infinite; font-size: 18px; line-height: 1; }
+        .dots span:nth-child(2) { animation-delay: .2s; }
+        .dots span:nth-child(3) { animation-delay: .4s; }
+        @keyframes dot { 0%,80%,100%{opacity:.15} 40%{opacity:1} }
+
+        /* ── Input bar ──────────────────────────────────────── */
+        #input-bar {
+            border-top: 1px solid var(--border); padding: 12px 16px;
+            display: flex; gap: 8px; background: var(--surface); flex-shrink: 0;
+        }
+        #msg-input {
+            flex: 1; background: var(--surface2); border: 1px solid var(--border);
+            color: var(--text); padding: 9px 13px; border-radius: 8px;
+            font-size: 14px; resize: none; outline: none; font-family: inherit;
+            line-height: 1.5; min-height: 40px; max-height: 120px;
+            transition: border-color .15s;
+        }
+        #msg-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+        #msg-input::placeholder { color: var(--muted); }
+        #send-btn {
+            background: var(--accent); color: #fff; border: none;
+            padding: 9px 16px; border-radius: 8px; font-size: 13px; font-weight: 600;
+            cursor: pointer; align-self: flex-end; transition: opacity .15s;
+        }
+        #send-btn:hover { opacity: .85; }
+        #send-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+        /* ── Sidebar ────────────────────────────────────────── */
+        .stats-row {
+            display: flex; border-bottom: 1px solid var(--border);
+            background: var(--surface);
+        }
+        .stat { flex: 1; padding: 9px 6px; text-align: center; border-right: 1px solid var(--border); }
+        .stat:last-child { border-right: none; }
+        .stat .v { font-size: 15px; font-weight: 700; display: block; }
+        .stat .k { font-size: 10px; color: var(--muted); letter-spacing: .5px; text-transform: uppercase; }
+
+        .sb-head {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 9px 13px; font-size: 10px; font-weight: 700;
+            letter-spacing: .9px; text-transform: uppercase; color: var(--muted);
+            background: var(--surface); border-bottom: 1px solid var(--border);
+        }
+        .sb-btn {
+            background: none; border: 1px solid var(--border); color: var(--muted);
+            padding: 2px 8px; border-radius: 3px; font-size: 11px; cursor: pointer;
+            transition: all .15s;
+        }
+        .sb-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+        #goals-section { border-bottom: 1px solid var(--border); }
+        #goals-list { max-height: 180px; overflow-y: auto; }
+        #goal-add-row { display: none; gap: 6px; padding: 6px 12px 10px; }
+        #goal-add-row input {
+            flex: 1; background: var(--surface2); border: 1px solid var(--border);
+            color: var(--text); padding: 5px 9px; border-radius: 4px;
+            font-size: 12px; outline: none;
+        }
+        #goal-add-row input:focus { border-color: var(--accent); }
+        #goal-add-row button {
+            background: var(--accent); color: #fff; border: none;
+            padding: 5px 10px; border-radius: 4px; font-size: 12px; cursor: pointer;
+        }
+
+        .goal-row { display: flex; align-items: flex-start; gap: 8px; padding: 7px 13px; }
+        .goal-row:hover { background: var(--surface2); }
+        .g-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
+        .g-dot.pending  { background: var(--muted); }
+        .g-dot.active   { background: var(--accent); animation: pulse 1.5s infinite; }
+        .g-dot.completed{ background: var(--success); }
+        .g-dot.failed   { background: var(--danger); }
+        .g-title { font-size: 12.5px; line-height: 1.4; }
+        .g-meta  { font-size: 10px; color: var(--muted); }
+
+        #feed-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        #feed { flex: 1; overflow-y: auto; }
+        #feed::-webkit-scrollbar { width: 3px; }
+        #feed::-webkit-scrollbar-thumb { background: var(--border); }
+
+        .feed-item {
+            padding: 8px 13px; border-bottom: 1px solid var(--border);
+            animation: fadeUp .25s ease;
+        }
+        .fi-label { font-size: 12px; font-weight: 500; margin-bottom: 2px; }
+        .fi-result { font-size: 11.5px; color: var(--muted); line-height: 1.4;
+            overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+        .fi-time { font-size: 10px; color: var(--muted); margin-top: 2px; opacity: .6; }
+
+        .empty { padding: 18px 13px; text-align: center; color: var(--muted); font-size: 12px; }
+    </style>
+</head>
+<body>
+<div id="app">
+
+    <!-- Nav -->
+    <nav id="nav">
+        <span class="logo">MAX</span>
+        <select id="persona-sel" onchange="switchPersona(this.value)">
+            <option value="">Persona</option>
+        </select>
+        <div class="tension-wrap">
+            <span id="t-pct">0%</span>
+            <div class="tension-track"><div class="tension-bar" id="t-bar" style="width:0%"></div></div>
+            <span>tension</span>
+        </div>
+        <div class="spacer"></div>
+        <div class="soma-toggle" id="soma-toggle" onclick="toggleSoma()" title="SOMA brain bridge">
+            <div class="soma-switch"></div>
+            <span id="soma-label">SOMA</span>
+        </div>
+        <div class="live-dot" id="live-dot"></div>
+        <span id="live-label" style="font-size:11px;color:var(--muted)">connecting…</span>
+    </nav>
+
+    <!-- SOMA not found modal -->
+    <div id="soma-modal">
+        <div class="soma-card">
+            <h2 id="soma-modal-title">SOMA not detected</h2>
+            <p id="soma-modal-body">The SOMA brain bridge gives MAX access to a more powerful local AI system. To use it, you need SOMA running on your machine (<code style="font-size:12px;background:#0a0a0a;padding:2px 5px;border-radius:3px">localhost:3001</code>).</p>
+            <div class="btns">
+                <a href="https://github.com/unimaginative-artist/SOMA" target="_blank">Download SOMA</a>
+                <button onclick="closeSomaModal()">Maybe later</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main area -->
+    <div id="main">
+
+        <!-- Chat -->
+        <div id="chat-col">
+            <div id="messages">
+                <div class="msg max">
+                    <div class="avatar">M</div>
+                    <div class="msg-body">
+                        <div class="msg-name">MAX</div>
+                        <div class="bubble">Hey. What are we building?</div>
+                    </div>
+                </div>
+            </div>
+            <div id="input-bar">
+                <textarea id="msg-input" rows="1" placeholder="Message MAX… (Enter to send, Shift+Enter for newline)"></textarea>
+                <button id="send-btn" onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div id="sidebar">
+
+            <!-- Stats -->
+            <div class="stats-row">
+                <div class="stat"><span class="v" id="s-mem">—</span><span class="k">memories</span></div>
+                <div class="stat"><span class="v" id="s-goals">—</span><span class="k">goals</span></div>
+                <div class="stat"><span class="v" id="s-rate">—</span><span class="k">success</span></div>
+            </div>
+
+            <!-- Goals -->
+            <div id="goals-section">
+                <div class="sb-head">
+                    <span>Active Goals</span>
+                    <button class="sb-btn" onclick="toggleAddGoal()">+ Add</button>
+                </div>
+                <div id="goal-add-row">
+                    <input id="goal-input" type="text" placeholder="Goal title…"
+                           onkeydown="if(event.key==='Enter') submitGoal()">
+                    <button onclick="submitGoal()">Add</button>
+                </div>
+                <div id="goals-list"><div class="empty">No active goals</div></div>
+            </div>
+
+            <!-- Live feed -->
+            <div id="feed-section">
+                <div class="sb-head"><span>Live Feed</span></div>
+                <div id="feed"><div class="empty">Waiting for insights…</div></div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<script>
+// ── Markdown ────────────────────────────────────────────────────────────────
+function md(raw) {
+    if (!raw) return '';
+    let s = raw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    // fenced code blocks
+    s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_,lang,code) =>
+        `<pre><code class="lang-${lang}">${code.trim()}</code></pre>`);
+    // inline code
+    s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    // bold / italic
+    s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    // lists
+    s = s.replace(/^[\-\*\•] (.+)$/gm, '<li>$1</li>');
+    s = s.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+    s = s.replace(/(<li>[\s\S]+?<\/li>\n?)+/g, m => `<ul>${m}</ul>`);
+    // paragraphs
+    s = s.split(/\n{2,}/).map(p => {
+        p = p.trim();
+        if (!p || p.startsWith('<pre>') || p.startsWith('<ul>') || p.startsWith('<li>')) return p;
+        return `<p>${p.replace(/\n/g,'<br>')}</p>`;
+    }).join('\n');
+    return s;
+}
+
+// ── Chat state ──────────────────────────────────────────────────────────────
+let busy = false, $thinking = null;
+
+function appendMsg(role, content, isThinking = false) {
+    const feed = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+    const initials = role === 'user' ? 'B' : 'M';
+    const name     = role === 'user' ? 'You' : 'MAX';
+    const bubbleHtml = isThinking
+        ? `<span class="dots"><span>•</span><span>•</span><span>•</span></span>`
+        : md(content);
+    div.innerHTML = `
+        <div class="avatar">${initials}</div>
+        <div class="msg-body">
+            <div class="msg-name">${name}</div>
+            <div class="bubble">${bubbleHtml}</div>
+        </div>`;
+    feed.appendChild(div);
+    feed.scrollTop = feed.scrollHeight;
+    if (isThinking) $thinking = div;
+    return div;
+}
+
+async function sendMessage() {
+    if (busy) return;
+    const inp = document.getElementById('msg-input');
+    const text = inp.value.trim();
+    if (!text) return;
+    inp.value = ''; inp.style.height = 'auto';
+    appendMsg('user', text);
+
+    busy = true;
+    document.getElementById('send-btn').disabled = true;
+    appendMsg('max', '', true);
+
+    try {
+        const persona = document.getElementById('persona-sel').value || undefined;
+        const r = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: text, persona })
+        });
+        const data = await r.json();
+        const reply = data.text || data.response || data.message || JSON.stringify(data);
+        if ($thinking) {
+            $thinking.querySelector('.bubble').innerHTML = md(reply);
+            $thinking = null;
+        }
+    } catch (err) {
+        if ($thinking) { $thinking.querySelector('.bubble').textContent = `Error: ${err.message}`; $thinking = null; }
+    } finally {
+        busy = false;
+        document.getElementById('send-btn').disabled = false;
+        document.getElementById('messages').scrollTop = 9999999;
+    }
+}
+
+// ── Personas ────────────────────────────────────────────────────────────────
+async function loadStatus() {
+    try {
+        const data = await fetch('/api/status').then(r => r.json());
+        const sel = document.getElementById('persona-sel');
+        if (!sel.options.length || sel.options[0].value === '') {
+            sel.innerHTML = '';
+            ['architect','grinder','paranoid','breaker','explainer','devil'].forEach(p => {
+                const o = document.createElement('option');
+                o.value = p; o.textContent = p[0].toUpperCase() + p.slice(1);
+                if (p === data.persona?.id) o.selected = true;
+                sel.appendChild(o);
+            });
+        }
+        if (data.memory)   document.getElementById('s-mem').textContent   = (data.memory.totalMemories||0).toLocaleString();
+        if (data.outcomes) document.getElementById('s-rate').textContent  =
+            data.outcomes.total > 0 ? Math.round(data.outcomes.success/data.outcomes.total*100)+'%' : '—';
+        const t = data.drive?.tension || 0;
+        document.getElementById('t-bar').style.width = (t*100)+'%';
+        document.getElementById('t-pct').textContent = Math.round(t*100)+'%';
+    } catch {}
+}
+
+async function switchPersona(id) {
+    if (!id) return;
+    try { await fetch('/api/persona',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({persona:id}) }); } catch {}
+}
+
+// ── Goals ────────────────────────────────────────────────────────────────────
+async function loadGoals() {
+    try {
+        const goals = await fetch('/api/goals').then(r => r.json());
+        const list = document.getElementById('goals-list');
+        document.getElementById('s-goals').textContent = Array.isArray(goals) ? goals.length : '?';
+        if (!Array.isArray(goals) || !goals.length) {
+            list.innerHTML = '<div class="empty">No active goals</div>'; return;
+        }
+        list.innerHTML = '';
+        goals.forEach(g => {
+            const row = document.createElement('div'); row.className = 'goal-row';
+            row.innerHTML = `
+                <div class="g-dot ${g.status||'pending'}"></div>
+                <div>
+                    <div class="g-title">${escHtml(g.title||g.name||'Unnamed')}</div>
+                    <div class="g-meta">${g.status||'pending'}${g.priority!=null?' · p'+g.priority:''}</div>
+                </div>`;
+            list.appendChild(row);
+        });
+    } catch {}
+}
+
+function toggleAddGoal() {
+    const r = document.getElementById('goal-add-row');
+    r.style.display = r.style.display === 'flex' ? 'none' : 'flex';
+    if (r.style.display === 'flex') document.getElementById('goal-input').focus();
+}
+
+async function submitGoal() {
+    const inp = document.getElementById('goal-input');
+    const title = inp.value.trim(); if (!title) return;
+    inp.value = '';
+    try {
+        await fetch('/api/goals', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({title}) });
+        await loadGoals();
+        document.getElementById('goal-add-row').style.display = 'none';
+    } catch {}
+}
+
+// ── Live feed (SSE) ─────────────────────────────────────────────────────────
+function addFeedItem(data) {
+    const feed = document.getElementById('feed');
+    const empty = feed.querySelector('.empty'); if (empty) empty.remove();
+    const item = document.createElement('div'); item.className = 'feed-item';
+    const time = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+    const result = (data.result||'').slice(0,220);
+    item.innerHTML = `
+        <div class="fi-label">${escHtml(data.label||data.source||'insight')}</div>
+        ${result ? `<div class="fi-result">${escHtml(result)}</div>` : ''}
+        <div class="fi-time">${time}</div>`;
+    feed.insertBefore(item, feed.firstChild);
+    while (feed.children.length > 60) feed.removeChild(feed.lastChild);
+}
+
+function connectSSE() {
+    const dot = document.getElementById('live-dot');
+    const lbl = document.getElementById('live-label');
+    const es = new EventSource('/api/events');
+    es.onopen = () => { dot.className = 'live-dot on'; lbl.textContent = 'live'; };
+    es.onmessage = e => {
+        try {
+            const d = JSON.parse(e.data);
+            if (d.type === 'insight') addFeedItem(d);
+            else if (d.type === 'status') {
+                const t = d.drive?.tension || 0;
+                document.getElementById('t-bar').style.width = (t*100)+'%';
+                document.getElementById('t-pct').textContent = Math.round(t*100)+'%';
+                if (d.memory?.totalMemories != null)
+                    document.getElementById('s-mem').textContent = d.memory.totalMemories.toLocaleString();
+                loadGoals();
+            }
+        } catch {}
+    };
+    es.onerror = () => {
+        dot.className = 'live-dot'; lbl.textContent = 'reconnecting…';
+        es.close(); setTimeout(connectSSE, 3000);
+    };
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Textarea auto-grow
+document.getElementById('msg-input').addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+document.getElementById('msg-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+
+// ── SOMA bridge toggle ────────────────────────────────────────────────────────
+let somaActive = localStorage.getItem('somaActive') === 'true';
+
+function setSomaUI(active, checking = false) {
+    const el = document.getElementById('soma-toggle');
+    const lbl = document.getElementById('soma-label');
+    el.classList.toggle('active', active && !checking);
+    el.classList.toggle('checking', checking);
+    lbl.textContent = checking ? 'checking…' : active ? 'SOMA on' : 'SOMA';
+}
+
+async function toggleSoma() {
+    if (somaActive) {
+        // Turn off
+        somaActive = false;
+        localStorage.setItem('somaActive', 'false');
+        setSomaUI(false);
+        await fetch('/api/soma/toggle', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ enable: false }) }).catch(()=>{});
+        return;
+    }
+    // Turn on — check if SOMA is running first
+    setSomaUI(false, true);
+    try {
+        const data = await fetch('/api/soma/check').then(r => r.json());
+        if (data.available && data.ready) {
+            // SOMA fully booted — enable the bridge
+            await fetch('/api/soma/toggle', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ enable: true }) });
+            somaActive = true;
+            localStorage.setItem('somaActive', 'true');
+            setSomaUI(true);
+        } else if (data.available && !data.ready) {
+            // SOMA is running but still booting — tell the user
+            setSomaUI(false);
+            document.getElementById('soma-modal-title').textContent = 'SOMA is still waking up';
+            document.getElementById('soma-modal-body').textContent = 'SOMA is running but still loading its systems. Give it a minute and try again.';
+            document.getElementById('soma-modal').classList.add('open');
+        } else {
+            // SOMA not running — show modal with download link
+            setSomaUI(false);
+            document.getElementById('soma-modal-title').textContent = 'SOMA not detected';
+            document.getElementById('soma-modal-body').textContent = 'The SOMA brain bridge gives MAX access to a more powerful local AI system. To use it, you need SOMA running on your machine (localhost:3001).';
+            document.getElementById('soma-modal').classList.add('open');
+        }
+    } catch {
+        setSomaUI(false);
+        document.getElementById('soma-modal').classList.add('open');
+    }
+}
+
+function closeSomaModal() {
+    document.getElementById('soma-modal').classList.remove('open');
+}
+
+// Close modal on backdrop click
+document.getElementById('soma-modal').addEventListener('click', e => {
+    if (e.target === document.getElementById('soma-modal')) closeSomaModal();
+});
+
+// Restore toggle state on load
+if (somaActive) {
+    fetch('/api/soma/check').then(r => r.json()).then(data => {
+        if (data.available) {
+            fetch('/api/soma/toggle', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ enable: true }) });
+            setSomaUI(true);
+        } else {
+            somaActive = false;
+            localStorage.setItem('somaActive', 'false');
+            setSomaUI(false);
+        }
+    }).catch(() => { somaActive = false; setSomaUI(false); });
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+loadStatus();
+loadGoals();
+connectSSE();
+setInterval(loadStatus, 20000);
+setInterval(loadGoals, 15000);
+</script>
+</body>
+</html>

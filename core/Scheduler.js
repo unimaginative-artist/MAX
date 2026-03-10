@@ -117,8 +117,8 @@ export class Scheduler extends EventEmitter {
     start() {
         if (this._running) return;
         this._running = true;
-        this._tick();
-        this._timer = setInterval(() => this._tick(), TICK_MS);
+        this._tick().catch(() => {});
+        this._timer = setInterval(() => this._tick().catch(() => {}), TICK_MS);
         console.log('[Scheduler] ⏰ Running');
     }
 

@@ -4,10 +4,34 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import express from 'express';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export async function createServer(max, port = 3100) {
     const app = express();
     app.use(express.json());
+
+    // ── SSE client registry ───────────────────────────────────────────────
+    const sseClients = new Set();
+
+    function broadcast(obj) {
+        const payload = `data: ${JSON.stringify(obj)}\n\n`;
+        sseClients.forEach(res => { try { res.write(payload); } catch {} });
+    }
+
+    // Forward MAX insights to all SSE clients
+    max.heartbeat?.on('insight', insight => {
+        broadcast({ type: 'insight', ...insight });
+    });
+
+    // Periodic status push every 12s
+    setInterval(() => {
+        if (!sseClients.size) return;
+        try { broadcast({ type: 'status', ...max.getStatus() }); } catch {}
+    }, 12000);
 
     // CORS for local frontends
     app.use((req, res, next) => {
@@ -16,6 +40,87 @@ export async function createServer(max, port = 3100) {
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
         if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
         next();
+    });
+
+    // ── Web UI ────────────────────────────────────────────────────────────
+    app.get('/', (req, res) => {
+        try {
+            res.setHeader('Content-Type', 'text/html');
+            res.send(readFileSync(join(__dirname, 'ui.html'), 'utf8'));
+        } catch {
+            res.status(404).send('UI not found — run from MAX root');
+        }
+    });
+
+    // ── SSE event stream ──────────────────────────────────────────────────
+    app.get('/api/events', (req, res) => {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders();
+        sseClients.add(res);
+        // Send initial connected + status
+        try {
+            res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
+            res.write(`data: ${JSON.stringify({ type: 'status', ...max.getStatus() })}\n\n`);
+        } catch {}
+        req.on('close', () => sseClients.delete(res));
+    });
+
+    // ── SOMA bridge toggle ────────────────────────────────────────────────
+    // Check if SOMA is reachable right now
+    app.get('/api/soma/check', async (req, res) => {
+        try {
+            const { default: fetch } = await import('node-fetch');
+            // Use 127.0.0.1 (not localhost) — Windows can resolve localhost to IPv6
+            // Try /health first — it bypasses checkReady so works even during SOMA boot
+            const r = await Promise.race([
+                fetch('http://127.0.0.1:3001/health'),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))
+            ]);
+            const data = await r.json().catch(() => ({}));
+            // available = port is up; ready = fully booted
+            res.json({ available: r.ok, ready: data.status === 'healthy', active: max.soma?.available ?? false });
+        } catch {
+            res.json({ available: false, ready: false, active: false });
+        }
+    });
+
+    // Enable or disable SOMA bridge at runtime
+    app.post('/api/soma/toggle', async (req, res) => {
+        const { enable } = req.body;
+        if (!max.soma) return res.status(500).json({ error: 'SomaBridge not initialized' });
+
+        if (enable) {
+            max.soma.baseUrl = 'http://127.0.0.1:3001';
+            const ok = await max.soma._probe();
+            res.json({ active: ok, available: ok });
+        } else {
+            max.soma._available = false;
+            max.soma._ready = false;
+            res.json({ active: false, available: false });
+        }
+    });
+
+    // ── Goals ─────────────────────────────────────────────────────────────
+    app.get('/api/goals', (req, res) => {
+        const goals = max.goals?.listActive() || [];
+        res.json(goals);
+    });
+
+    app.post('/api/goals', (req, res) => {
+        const { title, description, priority } = req.body;
+        if (!title) return res.status(400).json({ error: 'title required' });
+        const id = max.goals?.addGoal({ title, description: description || title, priority });
+        if (!id) return res.status(500).json({ error: 'GoalEngine not ready' });
+        broadcast({ type: 'goal', action: 'added', id, title });
+        res.json({ id, title });
+    });
+
+    app.delete('/api/goals/:id', (req, res) => {
+        const ok = max.goals?.complete?.(req.params.id) ?? max.goals?.remove?.(req.params.id);
+        broadcast({ type: 'goal', action: 'removed', id: req.params.id });
+        res.json({ ok: !!ok });
     });
 
     // ── Health ────────────────────────────────────────────────────────────
@@ -218,12 +323,24 @@ export async function createServer(max, port = 3100) {
         res.json({ running: false });
     });
 
-    app.listen(port, () => {
-        console.log(`[MAX] 🌐 API server running at http://localhost:${port}`);
-        console.log(`[MAX]   POST /api/chat     — talk to MAX`);
-        console.log(`[MAX]   POST /api/swarm    — run swarm job`);
-        console.log(`[MAX]   POST /api/debate   — adversarial debate`);
-        console.log(`[MAX]   GET  /api/status   — system status`);
+    await new Promise((resolve) => {
+        const server = app.listen(port, () => {
+            console.log(`[MAX] 🌐 Web UI  →  http://localhost:${port}`);
+            console.log(`[MAX]   POST /api/chat      — chat`);
+            console.log(`[MAX]   GET  /api/events    — SSE live feed`);
+            console.log(`[MAX]   GET  /api/goals     — list goals`);
+            console.log(`[MAX]   POST /api/goals     — add goal`);
+            console.log(`[MAX]   GET  /api/status    — system status`);
+            resolve();
+        });
+        server.on('error', (err) => {
+            if (err.code === 'EADDRINUSE') {
+                console.warn(`[MAX] ⚠️  Port ${port} in use — web UI unavailable (kill old MAX process or change MAX_PORT)`);
+            } else {
+                console.error('[MAX] Server error:', err.message);
+            }
+            resolve(); // don't block startup
+        });
     });
 
     return app;
