@@ -106,7 +106,7 @@ export class Brain {
     }
 
     // ─── Core inference ───────────────────────────────────────────────────
-    // tier: 'fast' (background/heartbeat) | 'smart' (user chat/reasoning) — default smart
+    // tier: 'fast' | 'smart' | 'code' — code goes straight to DeepSeek, bypassing local Ollama
     async think(prompt, { systemPrompt = '', temperature = 0.7, maxTokens = 2048, tier = 'smart' } = {}) {
         if (!this._ready) throw new Error('Brain not initialized — call initialize() first');
 
@@ -129,6 +129,8 @@ export class Brain {
         let result;
         if (tier === 'fast') {
             result = await this._runFast(prompt, systemPrompt, temperature, maxTokens);
+        } else if (tier === 'code') {
+            result = await this._runCode(prompt, systemPrompt, temperature, maxTokens);
         } else {
             result = await this._runSmart(prompt, systemPrompt, temperature, maxTokens);
         }
@@ -149,6 +151,21 @@ export class Brain {
             }
         }
         return this._runSmart(prompt, systemPrompt, temperature, Math.min(maxTokens, 512));
+    }
+
+    // ─── Code tier — DeepSeek first, qwen3:8b fallback ───────────────────
+    async _runCode(prompt, systemPrompt, temperature, maxTokens) {
+        const t = this._smart;
+        // DeepSeek is strong at code — try it first
+        if (this._validKey(t.openaiKey)) {
+            try {
+                return await this._openai(prompt, systemPrompt, temperature, maxTokens);
+            } catch (err) {
+                console.warn(`[Brain] DeepSeek error: ${err.message} — falling back to local`);
+            }
+        }
+        // Fallback: local qwen3:8b
+        return this._runSmart(prompt, systemPrompt, temperature, maxTokens);
     }
 
     // ─── Smart tier execution ─────────────────────────────────────────────

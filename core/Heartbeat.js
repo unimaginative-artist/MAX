@@ -62,7 +62,7 @@ export class Heartbeat extends EventEmitter {
         const maxInterval = 5 * 60 * 1000;
         const interval = maxInterval - (tension * (maxInterval - minInterval));
 
-        this._timer = setTimeout(() => this._tick(), interval);
+        this._timer = setTimeout(() => this._tick().catch(err => console.error('[Heartbeat] tick error:', err.message)), interval);
     }
 
     async _tick() {

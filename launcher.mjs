@@ -477,7 +477,9 @@ async function chatMode(max, opts) {
             const stop = startSpinner('thinking');
             const res = await max.think(line, { persona: activePersona });
             stop();
-            console.log('\nMAX: ' + res.response);
+            // Strip "MAX:" prefix if the model included it in its own response
+            const reply = (res.response || '').replace(/^(MAX|M\.A\.X):\s*/i, '').trimStart();
+            console.log('\nMAX: ' + reply);
             console.log(`\n[${res.persona} | tension ${(res.drive.tension * 100).toFixed(0)}%]\n`);
         } catch (err) { console.error('[MAX] Error:', err.message); }
         
@@ -557,5 +559,13 @@ async function main() {
         await chatMode(max, opts);
     }
 }
+
+// Catch unhandled rejections from background tasks — log and continue rather than crash
+process.on('unhandledRejection', (err) => {
+    console.error('[MAX] ⚠️  Unhandled rejection (background task):', err?.message || err);
+});
+process.on('uncaughtException', (err) => {
+    console.error('[MAX] ⚠️  Uncaught exception:', err?.message || err);
+});
 
 main().catch(err => { console.error('[MAX] Fatal:', err); process.exit(1); });

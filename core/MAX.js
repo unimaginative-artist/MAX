@@ -37,12 +37,16 @@ import { MaxMemory }          from '../memory/MaxMemory.js';
 import { KnowledgeBase }      from '../memory/KnowledgeBase.js';
 import { UserProfile }        from '../onboarding/UserProfile.js';
 import { CodeIndexer }        from '../memory/CodeIndexer.js';
+import { RepoGraph }          from './RepoGraph.js';
+import { DiagnosticsSystem }  from './Diagnostics.js';
 import { Sentinel }           from './Sentinel.js';
 import { WorldModel }         from './WorldModel.js';
 import { ArtifactManager }    from './ArtifactManager.js';
 import { TestGenerator }      from './TestGenerator.js';
 import { SkillLibrary }       from './SkillLibrary.js';
 import { SelfEditor }         from './SelfEditor.js';
+import { Notifier }           from './Notifier.js';
+import { SomaBridge }         from './SomaBridge.js';
 import fs                     from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -82,11 +86,15 @@ export class MAX {
         this.reflection    = null;
         this.indexer       = new CodeIndexer(this);
         this.sentinel      = new Sentinel(this);
+        this.graph         = new RepoGraph(this);
+        this.diagnostics   = new DiagnosticsSystem(this);
         this.world         = new WorldModel(this);
         this.artifacts     = new ArtifactManager(this);
         this.lab           = new TestGenerator(this);
         this.skills        = new SkillLibrary();
         this.selfEditor    = new SelfEditor();
+        this.notifier      = new Notifier();
+        this.soma          = new SomaBridge();
 
         // Conversation context window
         this._context         = [];
@@ -183,6 +191,12 @@ export class MAX {
         await this.skills.initialize();
         await this.selfEditor.initialize();
 
+        // SOMA bridge — try to connect to SOMA; gracefully offline if not running
+        await this.soma.initialize();
+
+        // Morning briefing scheduler — 8am daily
+        // (wired to Scheduler after heartbeat is set up below)
+
         // Session continuity — restore conversation + brief MAX on where he left off
         const sessionFile = path.join(dataDir, 'session.json');
         if (fs.existsSync(sessionFile)) {
@@ -271,6 +285,21 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
         this.scheduler.start();
         this.heartbeat.start();
 
+        // Wire Notifier — forward high-signal insights to Discord
+        this.heartbeat.on('insight', insight => {
+            this.notifier.onInsight(insight).catch(() => {});
+        });
+
+        // Morning briefing at 8am daily (only if notifier is enabled)
+        if (this.notifier.enabled) {
+            this.scheduler.add({
+                id:       'morning_briefing',
+                label:    'Morning briefing → Discord',
+                cron:     '0 8 * * *',
+                fn:       () => this.notifier.briefing(this)
+            });
+        }
+
         // ─── Truly non-blocking background tasks ───
         (async () => {
             console.log('[MAX] 🧵 Launching background worker thread...');
@@ -303,6 +332,10 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             if (queued.length > 0) {
                 console.log(`[MAX] 🔍 Self-inspection queued ${queued.length} improvement goal(s)`);
             }
+
+            // Diagnostics audit — feeding the Goal Economy (Section 2)
+            await new Promise(r => setTimeout(r, 5000));
+            await this.diagnostics.runAll().catch(() => {});
         })().catch(err => console.error('[MAX] Background startup error:', err.message));
 
         console.log('[MAX] Ready.\n');
@@ -379,11 +412,33 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             || userMessage.length > 120;
         const maxTok = options.maxTokens ?? (needsLongReply ? 4096 : 1024);
 
-        let result = await this.brain.think(historyText, {
-            systemPrompt: finalSystemPrompt + memoryContext + kbContext,
-            temperature:  options.temperature ?? 0.7,
-            maxTokens:    maxTok
-        });
+        // Coding requests → DeepSeek (better at code than qwen3:8b)
+        const isCodingTask = /\b(write|create|build|implement|code|function|class|script|fix|debug|refactor|edit|update|add|remove|rename)\b/i.test(userMessage)
+            && /\b(file|code|function|class|method|module|component|api|route|test|script|bug|error|import|export|variable|const|let|async|await)\b/i.test(userMessage);
+        const brainTier = options.tier ?? (isCodingTask ? 'code' : 'smart');
+
+        // SOMA bridge — use QuadBrain if SOMA is available (priority-0)
+        let result;
+        if (this.soma?.available) {
+            try {
+                result = await this.soma.think(historyText, {
+                    temperature: options.temperature ?? 0.7,
+                    maxTokens:   maxTok,
+                    timeout:     30_000
+                });
+            } catch {
+                // SOMA failed — fall through to local brain
+                result = null;
+            }
+        }
+        if (!result) {
+            result = await this.brain.think(historyText, {
+                systemPrompt: finalSystemPrompt + memoryContext + kbContext,
+                temperature:  options.temperature ?? 0.7,
+                maxTokens:    maxTok,
+                tier:         brainTier
+            });
+        }
 
         let response = result.text;
 
@@ -797,7 +852,9 @@ ${recent}`,
             selfInspector: this.selfInspector?.getStatus(),
             reflection:    this.reflection?.getStatus(),
             kb:            this.kb?.getStatus(),
-            skills:        this.skills?.getStatus()
+            skills:        this.skills?.getStatus(),
+            soma:          this.soma?.getStatus(),
+            notifier:      this.notifier?.getStatus()
         };
     }
 }
