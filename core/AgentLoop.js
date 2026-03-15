@@ -277,11 +277,14 @@ export class AgentLoop extends EventEmitter {
                 console.log(`  [AgentLoop] Diagnosis inconclusive — falling back to replan`);
             }
 
-            // TIMEOUT: same plan, just wait and retry — environment may catch up
+            // TIMEOUT: count against replan budget — retrying identical plan on a slow model
+            // loops forever. Increment replans so we give up after maxReplans attempts.
             if (errType === 'TIMEOUT') {
-                console.log(`  [AgentLoop] ⏱️  Timeout — waiting 10s before retry (same plan)`);
-                await new Promise(r => setTimeout(r, 10_000));
-                continue;  // retry identical steps — don't redecompose
+                replans++;
+                if (replans > this.config.maxReplans) break;
+                console.log(`  [AgentLoop] ⏱️  Timeout (${replans}/${this.config.maxReplans}) — retrying with reduced scope`);
+                await new Promise(r => setTimeout(r, 5_000));
+                continue;
             }
 
             // NETWORK: short backoff then replan — might need different endpoint/approach
@@ -389,7 +392,10 @@ export class AgentLoop extends EventEmitter {
         const action   = step.action;
         const toolName = step.tool || 'brain';
 
-        console.log(`  [AgentLoop] Step ${step.step}: ${action.slice(0, 70)} [${toolName}]`);
+        // Only log step start for tool steps — brain steps are too noisy in chat
+        if (toolName !== 'brain') {
+            console.log(`  [AgentLoop] Step ${step.step}: ${action.slice(0, 70)} [${toolName}]`);
+        }
 
         // ── Inject outputs from dependency steps into the prompt context ──
         const depContext = (step.dependsOn || [])
@@ -413,7 +419,8 @@ export class AgentLoop extends EventEmitter {
             const isCoding  = this._isCodingStep(step, goal);
 
             if (toolName === 'brain') {
-                // Think through this step — use smart tier for coding tasks
+                // Always use smart tier (DeepSeek) for brain steps — fast tier is local
+                // Ollama which is too slow for complex reasoning and causes timeout loops.
                 const depNote = depContext ? `\n\nPRIOR STEP OUTPUTS:\n${depContext}` : '';
                 const resObj = await withTimeout(
                     this.max.brain.think(
@@ -422,7 +429,7 @@ export class AgentLoop extends EventEmitter {
                             systemPrompt: `You are MAX completing an autonomous task step. Be concrete and brief.`,
                             temperature:  isCoding ? 0.2 : 0.4,
                             maxTokens:    isCoding ? 2048 : 512,
-                            tier:         isCoding ? 'smart' : 'fast'
+                            tier:         isCoding ? 'code' : 'smart'
                         }
                     ),
                     timeoutMs,
