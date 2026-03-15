@@ -252,13 +252,32 @@ export class Brain {
 
     async _ollama(model, prompt, systemPrompt, temperature, maxTokens, timeoutMs = null) {
         const start = Date.now();
+
+        // Use /api/chat with proper message structure so the model tracks conversation
+        // context correctly. /api/generate flattens everything into one blob and small
+        // models lose track of conversation state, producing repeated responses.
+        const messages = [];
+        if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+
+        // Parse flat "USER: .../MAX: ..." history back into structured message objects
+        const turns = prompt.split(/\n\n(?=USER:|MAX:)/);
+        for (const turn of turns) {
+            if (turn.startsWith('USER:')) {
+                messages.push({ role: 'user', content: turn.slice(5).trim() });
+            } else if (turn.startsWith('MAX:')) {
+                messages.push({ role: 'assistant', content: turn.slice(4).trim() });
+            } else if (turn.trim()) {
+                messages.push({ role: 'user', content: turn.trim() });
+            }
+        }
+
         const body = {
             model,
-            prompt: systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt,
+            messages,
             stream:  false,
             options: { temperature, num_predict: maxTokens }
         };
-        const res = await fetch(`${this.ollamaUrl}/api/generate`, {
+        const res = await fetch(`${this.ollamaUrl}/api/chat`, {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify(body),
@@ -266,9 +285,9 @@ export class Brain {
         });
         if (!res.ok) throw new Error(`Ollama ${res.status}`);
         const data = await res.json();
-        
+
         return {
-            text: data.response?.trim() || '',
+            text: data.message?.content?.trim() || '',
             metadata: {
                 model,
                 tokens:  data.eval_count || 0,
