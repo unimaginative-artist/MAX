@@ -19,7 +19,7 @@ export class SomaBridge {
 
     async initialize() {
         if (!this.baseUrl) {
-            console.log('[SomaBridge] ℹ️  SOMA_URL not set — bridge disabled (uncomment in api-keys.env to enable)');
+            // Silent when SOMA_URL not configured — MAX runs fully standalone
             return this;
         }
         await this._probe();

@@ -185,6 +185,7 @@ MAX is designed as SOMA's execution layer. When SOMA is running:
 - [x] SOMA proposal queue + apply pipeline + dashboard UI
 - [x] SomaController (mechanical SOMA control with git checkpoint + auto-revert)
 - [x] Brain: Gemini replaced with DeepSeek (deepseek-reasoner as smart/code tier)
+- [x] **Feedback loops closed** — ReflectionEngine writes insights to KB after every deep reflection. AgentLoop writes goal outcomes (success + failure) to KB. `dream()` auto-triggers every 3rd reflection + runs on 12h Scheduler. `KnowledgeBase.remember()` shortcut added for plain-text ingestion.
 
 ### Short-term
 - [ ] **Streaming responses** — Brain.js streaming refactor. This is the single biggest UX improvement. Users currently wait 10-30s in silence. Even just printing a `...` progress indicator with partial token counts would help.
@@ -196,7 +197,7 @@ MAX is designed as SOMA's execution layer. When SOMA is running:
 - [ ] **Persistent shell processes across restarts** — save `_procs` registry to `.max/procs.json` on shutdown, attempt to re-attach or report orphaned processes on boot.
 - [ ] **Goal dependency UI** — when `/goals list` shows blocked goals, display the dependency chain so it's clear what needs to complete first.
 - [ ] **Structured output for AgentLoop steps** — currently steps return raw text. For code-writing steps, parse the result and extract file paths that were written. Feed these back to the system context automatically.
-- [ ] **Knowledge base growth** — `KnowledgeBase` is initialized but only populated when MAX explicitly writes to it. Wire `ReflectionEngine` deep reflections to store key learnings in KB. Wire interesting curiosity results to KB. Make it the long-term memory substrate.
+- [ ] **Curiosity → KB** — CuriosityEngine interesting results aren't written to KB yet. Wire `CuriosityEngine` to call `kb.remember()` when it discovers something novel. This makes the KB grow organically from MAX's own exploration.
 
 ### Long-term
 - [ ] **MAX as SOMA arbiter** — register MAX itself as an arbiter in SOMA's MessageBroker. SOMA can then dispatch execution signals directly to MAX rather than through HTTP. MAX becomes a first-class component of the COS.

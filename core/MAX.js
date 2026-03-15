@@ -310,7 +310,7 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
         // SelfCodeInspector — MAX inspects his own source and queues improvements
         this.selfInspector = new SelfCodeInspector(this.goals);
 
-        this.reflection = new ReflectionEngine(this.brain, this.goals, this.outcomes);
+        this.reflection = new ReflectionEngine(this.brain, this.goals, this.outcomes, this.kb);
 
         this._ready = true;
 
@@ -357,6 +357,15 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             every:   '4h',
             type:    'custom',
             handler: () => this.reflection?.reflectOnTaskOutcomes?.().catch(() => {})
+        });
+
+        // Dream consolidation — every 12h, distill lessons from outcomes into KB
+        this.scheduler.addJob({
+            id:      'dream_consolidation',
+            label:   'Dream: consolidate lessons into knowledge base',
+            every:   '12h',
+            type:    'custom',
+            handler: () => this.reflection?.dream(this.kb).catch(() => {})
         });
 
         // ─── Truly non-blocking background tasks ───
