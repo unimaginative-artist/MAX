@@ -158,6 +158,32 @@ function resumeSpinner() {
     _spinnerPaused = false;
 }
 
+// ─── Acknowledge a queued message while MAX is mid-response ──────────────
+// Fires non-blocking. Uses fast tier so it doesn't compete with the main call.
+// MAX reads the queued message and prints a short "I see it, hold on" reply.
+async function acknowledgeQueued(max, queuedMsg) {
+    try {
+        const result = await max.brain.think(
+            `You are MAX. While you were mid-response, the user just sent:\n"${queuedMsg.slice(0, 200)}"\n\nWrite ONE short sentence (10 words max) acknowledging you saw it and will address it next. Direct, Max Headroom style. No quotes around your reply.`,
+            { temperature: 0.6, maxTokens: 40, tier: 'fast' }
+        );
+        const ack = result.text
+            .replace(/^(MAX:\s*|["'])/i, '')
+            .replace(/["']$/, '')
+            .split('\n')[0]
+            .trim();
+        if (!ack) return;
+
+        if (_rl) {
+            const partial = _rl.line || '';
+            readline.clearLine(process.stdout, 0);
+            readline.cursorTo(process.stdout, 0);
+            console.log(`\nMAX: ${ack}\n`);
+            if (_spinnerTimer) process.stdout.write('YOU: ' + partial);
+        }
+    } catch { /* best-effort — never block the main response */ }
+}
+
 // ─── Chat mode ───────────────────────────────────────────────────────────
 async function chatMode(max, opts) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
@@ -179,12 +205,21 @@ async function chatMode(max, opts) {
         const line = input.trim();
         if (!line) { ask(); return; }
 
-        // If already thinking, append to pending queue — process after response
+        // If already thinking, queue the message and acknowledge it immediately
         if (isThinking) {
+            const isFirstQueue = !pendingInput;
             pendingInput = pendingInput ? pendingInput + '\n' + line : line;
+
             readline.clearLine(process.stdout, 0);
             readline.cursorTo(process.stdout, 0);
             console.log(`  [queued] "${line.slice(0, 60)}${line.length > 60 ? '...' : ''}"`);
+
+            // First queued message: fire a fast acknowledgment — non-blocking
+            // MAX reads the message and prints a short "I see it" before finishing
+            if (isFirstQueue && max.brain?._ready) {
+                acknowledgeQueued(max, line).catch(() => {});
+            }
+
             resumeSpinner();
             return;
         }
@@ -253,6 +288,57 @@ async function chatMode(max, opts) {
             ask(); return;
         }
 
+        // ── SOMA self-modification proposal commands ────────────────────────
+        if (line === '/proposals') {
+            const proposals = max._server?._somaProposals
+                ? [...new Set(max._server._somaProposals.values())]
+                : [];
+            if (proposals.length === 0) {
+                console.log('[MAX] No pending SOMA modification proposals.\n');
+            } else {
+                console.log(`\n[MAX] ${proposals.length} pending proposal(s):\n`);
+                for (const p of proposals) {
+                    const score = p.overallScore ? ` (${(p.overallScore * 100).toFixed(0)}%)` : '';
+                    console.log(`  ${p.taskId.slice(0, 8)}  ${p.file}  [${(p.riskLevel || 'unknown').toUpperCase()}]${score}`);
+                    console.log(`           ${p.rationale?.slice(0, 80) || ''}`);
+                }
+                console.log('\n  → /approve <id>   or   /deny <id>\n');
+            }
+            isThinking = false; ask(); return;
+        }
+
+        if (line.startsWith('/approve ')) {
+            const id = line.slice(9).trim();
+            try {
+                const res = await fetch(`http://localhost:${process.env.MAX_PORT || 3100}/api/soma/proposals/${id}/approve`, { method: 'POST' });
+                const data = await res.json();
+                if (data.accepted) {
+                    console.log(`[MAX] ✅ Approved proposal ${id} — apply pipeline running in background...\n`);
+                } else {
+                    console.log(`[MAX] ❌ ${data.error || 'Failed to approve'}\n`);
+                }
+            } catch (err) {
+                console.log(`[MAX] Error: ${err.message}\n`);
+            }
+            isThinking = false; ask(); return;
+        }
+
+        if (line.startsWith('/deny ')) {
+            const id = line.slice(6).trim();
+            try {
+                const res = await fetch(`http://localhost:${process.env.MAX_PORT || 3100}/api/soma/proposals/${id}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (data.denied) {
+                    console.log(`[MAX] 🚫 Denied proposal ${id}.\n`);
+                } else {
+                    console.log(`[MAX] ❌ ${data.error || 'Not found'}\n`);
+                }
+            } catch (err) {
+                console.log(`[MAX] Error: ${err.message}\n`);
+            }
+            isThinking = false; ask(); return;
+        }
+
         if (line === '/pause') {
             const ok = max.agentLoop?.interrupt();
             console.log(ok ? '[MAX] ⏸️  Pause requested — will stop at next step boundary.\n' : '[MAX] No active task to pause.\n');
@@ -262,6 +348,107 @@ async function chatMode(max, opts) {
         if (line === '/resume') {
             console.log('[MAX] ▶️  Resuming...\n');
             max.agentLoop?.runCycle().catch(e => console.error('[MAX] Resume error:', e.message));
+            isThinking = false; ask(); return;
+        }
+
+        // ── /run <command> — direct shell, no LLM ─────────────────────────
+        if (line.startsWith('/run ')) {
+            const cmd = line.slice(5).trim();
+            if (!cmd) { isThinking = false; ask(); return; }
+            try {
+                await max.tools.execute('shell', 'run', { command: cmd });
+            } catch (err) { console.log(`[MAX] Shell error: ${err.message}\n`); }
+            isThinking = false; ask(); return;
+        }
+
+        // ── /ps — list background processes ───────────────────────────────
+        if (line === '/ps') {
+            try {
+                const res = await max.tools.execute('shell', 'ps', {});
+                if (res.count === 0) {
+                    console.log('[MAX] No background processes running.\n');
+                } else {
+                    console.log(`\n[MAX] ${res.count} background process(es):\n`);
+                    for (const p of res.processes) {
+                        console.log(`  [${p.name}]  pid ${p.pid}  ${p.command}`);
+                        if (p.lastLog) console.log(`         last: ${p.lastLog}`);
+                    }
+                    console.log();
+                }
+            } catch (err) { console.log(`[MAX] Error: ${err.message}\n`); }
+            isThinking = false; ask(); return;
+        }
+
+        // ── /kill <name> — stop a named background process ────────────────
+        if (line.startsWith('/kill ')) {
+            const name = line.slice(6).trim();
+            if (!name) { isThinking = false; ask(); return; }
+            try {
+                const res = await max.tools.execute('shell', 'stop', { name });
+                if (res.success) console.log(`[MAX] Stopped process "${name}" (pid ${res.pid})\n`);
+                else console.log(`[MAX] ${res.error}\n`);
+            } catch (err) { console.log(`[MAX] Error: ${err.message}\n`); }
+            isThinking = false; ask(); return;
+        }
+
+        // ── /goals — manage goal queue ────────────────────────────────────
+        if (line === '/goals' || line.startsWith('/goals ')) {
+            const sub = line.slice(6).trim();
+            const goals = max.goals;
+            if (!goals) { console.log('[MAX] Goal engine not available.\n'); isThinking = false; ask(); return; }
+
+            if (!sub || sub === 'list') {
+                const active = goals.listActive();
+                if (active.length === 0) {
+                    console.log('[MAX] No active goals.\n');
+                } else {
+                    console.log(`\n[MAX] ${active.length} goal(s):\n`);
+                    for (const g of active) {
+                        const blocked = g.blockedBy?.length ? ` [blocked: ${g.blockedBy.join(', ')}]` : '';
+                        console.log(`  [${g.id.slice(0, 8)}] [${g.status.padEnd(10)}] p${(g.priority || 0).toFixed(1)}  ${g.title}${blocked}`);
+                    }
+                    console.log();
+                }
+            } else if (sub.startsWith('add ')) {
+                const title = sub.slice(4).trim().replace(/^["']|["']$/g, '');
+                if (!title) { console.log('[MAX] Usage: /goals add "goal title"\n'); }
+                else {
+                    const id = goals.addGoal({ title, priority: 0.6, source: 'user' });
+                    console.log(`[MAX] ✅ Goal added: [${id.slice(0, 8)}] "${title}"\n`);
+                }
+            } else if (sub === 'clear') {
+                const active = goals.listActive();
+                let cleared = 0;
+                for (const g of active) {
+                    if (g.status === 'pending' || g.status === 'ready') {
+                        goals._active.delete(g.id);
+                        cleared++;
+                    }
+                }
+                console.log(`[MAX] Cleared ${cleared} pending goal(s).\n`);
+            } else if (sub.startsWith('done ')) {
+                const id = sub.slice(5).trim();
+                const goal = [...(goals._active?.values() || [])].find(g => g.id.startsWith(id));
+                if (!goal) { console.log(`[MAX] Goal "${id}" not found.\n`); }
+                else { goals.markComplete(goal.id); console.log(`[MAX] Marked complete: "${goal.title}"\n`); }
+            } else {
+                console.log('[MAX] Usage: /goals [list|add "title"|done <id>|clear]\n');
+            }
+            isThinking = false; ask(); return;
+        }
+
+        // ── /reflect — trigger deep reflection immediately ────────────────
+        if (line === '/reflect') {
+            if (!max.reflection) { console.log('[MAX] Reflection engine not available.\n'); isThinking = false; ask(); return; }
+            try {
+                const stop = startSpinner('reflecting');
+                const summary = await max.reflection.forceReflect();
+                stop();
+                console.log('\n[MAX] Deep reflection complete.');
+                if (summary?.promptPatch) console.log(`  Prompt patch: "${summary.promptPatch.slice(0, 120)}"`);
+                if (summary?.recentScore != null) console.log(`  Recent score: ${(summary.recentScore * 100).toFixed(0)}%`);
+                console.log();
+            } catch (err) { console.log(`[MAX] Reflect error: ${err.message}\n`); }
             isThinking = false; ask(); return;
         }
 
@@ -498,7 +685,11 @@ async function chatMode(max, opts) {
     };
 
     rl.on('line', (line) => {
-        pauseSpinner();   // freeze spinner so paste text doesn't get mangled by it
+        // Only pause the spinner on the FIRST line of each input burst.
+        // Without this, every line of a multi-line paste calls clearLine + cursorTo,
+        // which mangles the terminal output during large pastes.
+        if (!bufferTimer) pauseSpinner();
+
         inputBuffer += (inputBuffer ? '\n' : '') + line;
         if (bufferTimer) clearTimeout(bufferTimer);
         bufferTimer = setTimeout(() => {
@@ -507,7 +698,7 @@ async function chatMode(max, opts) {
             inputBuffer = '';
             resumeSpinner();
             processInput(full);
-        }, 900); // 900ms — Windows large pastes can take 600-700ms to fully deliver
+        }, 1500); // 1500ms — generous window for large Windows pastes
     });
 
     max.heartbeat.on('insight', printInsight);
@@ -531,7 +722,7 @@ async function chatMode(max, opts) {
     
     console.log('\n' + '─'.repeat(60));
     console.log('  MAX is live. Dashboard: http://localhost:3100/dashboard');
-    console.log('  Commands: /status, /persona <p>, /reason <q>, /swarm, /debate, /expand, /artifacts, /pause, /resume, /quit');
+    console.log('  Commands: /status, /persona <p>, /reason <q>, /run <cmd>, /ps, /kill <n>, /goals [list|add|clear], /reflect, /swarm, /debate, /expand, /artifacts, /pause, /resume, /quit');
     console.log('  Self-edit: /self edit <path> <instruction>  →  /self test  →  /self commit | /self rollback');
     console.log('─'.repeat(60) + '\n');
 
@@ -544,8 +735,11 @@ async function main() {
     console.log('[Launcher] 🚀 Booting MAX...');
 
     const max = new MAX({
-        geminiKey:     process.env.GEMINI_API_KEY,
-        memory:        { dbPath: join(__dirname, '.max', 'memory.db') }
+        geminiKey:  process.env.GEMINI_API_KEY,
+        memory:     { dbPath: join(__dirname, '.max', 'memory.db') },
+        // 'write' = auto-approve reads + writes; only gate git push/commit + file delete
+        // Set MAX_AUTO_APPROVE=all in api-keys.env for fully hands-off operation
+        agentLoop:  { autoApproveLevel: process.env.MAX_AUTO_APPROVE || 'write' }
     });
 
     console.log('[Launcher] ⚙️  Initializing core systems...');

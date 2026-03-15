@@ -224,7 +224,80 @@
         .sb-btn:hover { border-color: var(--accent); color: var(--accent); }
 
         #goals-section { border-bottom: 1px solid var(--border); }
-        #goals-list { max-height: 180px; overflow-y: auto; }
+        #goals-list { max-height: 160px; overflow-y: auto; }
+
+        /* ── SOMA Proposals ─────────────────────────────────── */
+        #proposals-section { border-bottom: 1px solid var(--border); }
+        #proposals-list { max-height: 260px; overflow-y: auto; }
+        #proposals-list::-webkit-scrollbar { width: 3px; }
+        #proposals-list::-webkit-scrollbar-thumb { background: var(--border); }
+
+        .proposal-card {
+            padding: 10px 13px; border-bottom: 1px solid var(--border);
+            animation: fadeUp .25s ease;
+        }
+        .proposal-card:last-child { border-bottom: none; }
+
+        .proposal-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+        .proposal-file { font-size: 11.5px; font-weight: 600; color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .risk-badge {
+            font-size: 9px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase;
+            padding: 1px 5px; border-radius: 3px; flex-shrink: 0;
+        }
+        .risk-low    { background: rgba(16,185,129,.15); color: #10b981; border: 1px solid rgba(16,185,129,.3); }
+        .risk-medium { background: rgba(245,158,11,.15); color: #f59e0b; border: 1px solid rgba(245,158,11,.3); }
+        .risk-high   { background: rgba(239,68,68,.15);  color: #ef4444; border: 1px solid rgba(239,68,68,.3); }
+
+        .score-bar { display: flex; gap: 4px; margin-bottom: 6px; }
+        .score-pill {
+            flex: 1; text-align: center; font-size: 9px; font-weight: 700;
+            padding: 2px 0; border-radius: 3px; letter-spacing: .4px;
+        }
+        .score-pill.pass { background: rgba(16,185,129,.12); color: #10b981; border: 1px solid rgba(16,185,129,.2); }
+        .score-pill.fail { background: rgba(239,68,68,.12);  color: #ef4444; border: 1px solid rgba(239,68,68,.2); }
+
+        .proposal-rationale {
+            font-size: 11px; color: var(--muted); line-height: 1.45;
+            margin-bottom: 6px;
+            overflow: hidden; display: -webkit-box;
+            -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+        }
+
+        .proposal-code-toggle {
+            background: none; border: 1px solid var(--border); color: var(--muted);
+            font-size: 10px; padding: 2px 7px; border-radius: 3px; cursor: pointer;
+            margin-bottom: 6px; transition: all .15s;
+        }
+        .proposal-code-toggle:hover { border-color: var(--accent); color: var(--accent); }
+
+        .proposal-code {
+            display: none; background: #0a0a0a; border: 1px solid var(--border);
+            border-radius: 5px; padding: 8px 10px; margin-bottom: 8px;
+            font-family: 'Cascadia Code','Fira Code',monospace; font-size: 10.5px;
+            color: #c4b5fd; overflow-x: auto; max-height: 160px; overflow-y: auto;
+            white-space: pre; line-height: 1.5;
+        }
+        .proposal-code.open { display: block; }
+
+        .proposal-actions { display: flex; gap: 6px; }
+        .btn-approve {
+            flex: 1; padding: 6px 0; border: none; border-radius: 5px;
+            background: rgba(16,185,129,.15); color: #10b981;
+            border: 1px solid rgba(16,185,129,.3);
+            font-size: 11px; font-weight: 700; cursor: pointer;
+            transition: all .15s; letter-spacing: .3px;
+        }
+        .btn-approve:hover { background: rgba(16,185,129,.28); }
+        .btn-deny {
+            flex: 1; padding: 6px 0; border: none; border-radius: 5px;
+            background: rgba(239,68,68,.1); color: #ef4444;
+            border: 1px solid rgba(239,68,68,.25);
+            font-size: 11px; font-weight: 700; cursor: pointer;
+            transition: all .15s; letter-spacing: .3px;
+        }
+        .btn-deny:hover { background: rgba(239,68,68,.22); }
+        .btn-approve:disabled, .btn-deny:disabled { opacity: .4; cursor: not-allowed; }
         #goal-add-row { display: none; gap: 6px; padding: 6px 12px 10px; }
         #goal-add-row input {
             flex: 1; background: var(--surface2); border: 1px solid var(--border);
@@ -341,6 +414,15 @@
                     <button onclick="submitGoal()">Add</button>
                 </div>
                 <div id="goals-list"><div class="empty">No active goals</div></div>
+            </div>
+
+            <!-- SOMA Proposals -->
+            <div id="proposals-section" style="display:none">
+                <div class="sb-head">
+                    <span>🧬 SOMA Proposals</span>
+                    <span id="proposals-count" style="background:rgba(239,68,68,.2);color:#ef4444;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;border:1px solid rgba(239,68,68,.3)"></span>
+                </div>
+                <div id="proposals-list"></div>
             </div>
 
             <!-- Live feed -->
@@ -530,6 +612,20 @@ function connectSSE() {
         try {
             const d = JSON.parse(e.data);
             if (d.type === 'insight') addFeedItem(d);
+            else if (d.type === 'soma_proposal') {
+                const p = d.proposal;
+                if (p?.taskId) {
+                    _proposals.set(p.taskId, p);
+                    renderProposals();
+                    // Flash the section heading briefly
+                    const section = document.getElementById('proposals-section');
+                    section.style.boxShadow = '0 0 0 1px #ef4444';
+                    setTimeout(() => { section.style.boxShadow = ''; }, 1200);
+                }
+            }
+            else if (d.type === 'soma_proposal_result') {
+                addFeedItem({ label: d.applied ? '✅ SOMA change applied' : '↩️ SOMA change reverted', result: d.applied ? 'Self-modification deployed successfully.' : (d.reason || 'Reverted.') });
+            }
             else if (d.type === 'status') {
                 const t = d.drive?.tension || 0;
                 document.getElementById('t-bar').style.width = (t*100)+'%';
@@ -632,12 +728,119 @@ if (somaActive) {
     }).catch(() => { somaActive = false; setSomaUI(false); });
 }
 
+// ── SOMA Proposals ────────────────────────────────────────────────────────────
+const _proposals = new Map(); // taskId → proposal
+
+function renderProposals() {
+    const section = document.getElementById('proposals-section');
+    const list    = document.getElementById('proposals-list');
+    const count   = document.getElementById('proposals-count');
+    const items   = [..._proposals.values()];
+
+    section.style.display = items.length ? '' : 'none';
+    count.textContent = items.length || '';
+    list.innerHTML = '';
+
+    for (const p of items) {
+        const shortId  = p.taskId.slice(0, 8);
+        const risk     = p.riskLevel || 'unknown';
+        const score    = p.overallScore ? Math.round(p.overallScore * 100) + '%' : '?';
+        const ver      = p.verification || {};
+        const codeId   = `code-${shortId}`;
+
+        const scorePills = ['logos','thalamus','nemesis','rsm'].map(k => {
+            const v = ver[k];
+            if (!v) return '';
+            const cls  = v.pass ? 'pass' : 'fail';
+            const conf = v.confidence != null ? Math.round(v.confidence * 100) : '?';
+            return `<span class="score-pill ${cls}" title="${escHtml(v.notes||'')}">${k[0].toUpperCase()} ${conf}%</span>`;
+        }).join('');
+
+        const card = document.createElement('div');
+        card.className = 'proposal-card';
+        card.dataset.taskId = p.taskId;
+        card.innerHTML = `
+            <div class="proposal-header">
+                <span class="proposal-file" title="${escHtml(p.file)}">${escHtml(p.file.split('/').pop())}</span>
+                <span class="risk-badge risk-${risk}">${risk} ${score}</span>
+            </div>
+            ${scorePills ? `<div class="score-bar">${scorePills}</div>` : ''}
+            <div class="proposal-rationale">${escHtml(p.rationale || '')}</div>
+            ${p.newCode ? `
+                <button class="proposal-code-toggle" onclick="toggleCode('${codeId}', this)">▶ View code</button>
+                <div class="proposal-code" id="${codeId}">${escHtml(p.newCode)}</div>
+            ` : ''}
+            <div class="proposal-actions">
+                <button class="btn-approve" id="approve-${shortId}" onclick="approveProposal('${p.taskId}', '${shortId}')">✓ Approve</button>
+                <button class="btn-deny"    id="deny-${shortId}"    onclick="denyProposal('${p.taskId}', '${shortId}')">✕ Deny</button>
+            </div>`;
+        list.appendChild(card);
+    }
+}
+
+function toggleCode(id, btn) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.toggle('open');
+    btn.textContent = el.classList.contains('open') ? '▼ Hide code' : '▶ View code';
+}
+
+async function approveProposal(taskId, shortId) {
+    const approveBtn = document.getElementById(`approve-${shortId}`);
+    const denyBtn    = document.getElementById(`deny-${shortId}`);
+    if (approveBtn) { approveBtn.disabled = true; approveBtn.textContent = 'Applying…'; }
+    if (denyBtn)    { denyBtn.disabled = true; }
+    try {
+        const r = await fetch(`/api/soma/proposals/${shortId}/approve`, { method: 'POST' });
+        const d = await r.json();
+        if (d.accepted) {
+            // Remove from local map — result will come back via SSE
+            _proposals.delete(taskId);
+            renderProposals();
+            addFeedItem({ label: '🧬 SOMA proposal approved', result: `Applying to ${_proposals.get(taskId)?.file || shortId}…` });
+        } else {
+            if (approveBtn) { approveBtn.disabled = false; approveBtn.textContent = '✓ Approve'; }
+            if (denyBtn)    { denyBtn.disabled = false; }
+        }
+    } catch (err) {
+        if (approveBtn) { approveBtn.disabled = false; approveBtn.textContent = '✓ Approve'; }
+        if (denyBtn)    { denyBtn.disabled = false; }
+        console.error('Approve failed:', err);
+    }
+}
+
+async function denyProposal(taskId, shortId) {
+    const approveBtn = document.getElementById(`approve-${shortId}`);
+    const denyBtn    = document.getElementById(`deny-${shortId}`);
+    if (approveBtn) { approveBtn.disabled = true; }
+    if (denyBtn)    { denyBtn.disabled = true; denyBtn.textContent = 'Denying…'; }
+    try {
+        await fetch(`/api/soma/proposals/${shortId}`, { method: 'DELETE' });
+        _proposals.delete(taskId);
+        renderProposals();
+    } catch (err) {
+        if (approveBtn) { approveBtn.disabled = false; }
+        if (denyBtn)    { denyBtn.disabled = false; denyBtn.textContent = '✕ Deny'; }
+    }
+}
+
+async function loadProposals() {
+    try {
+        const list = await fetch('/api/soma/proposals').then(r => r.json());
+        _proposals.clear();
+        for (const p of (list || [])) _proposals.set(p.taskId, p);
+        renderProposals();
+    } catch {}
+}
+
 // ── Boot ─────────────────────────────────────────────────────────────────────
 loadStatus();
 loadGoals();
+loadProposals();
 connectSSE();
 setInterval(loadStatus, 20000);
 setInterval(loadGoals, 15000);
+setInterval(loadProposals, 30000);
 </script>
 </body>
 </html>

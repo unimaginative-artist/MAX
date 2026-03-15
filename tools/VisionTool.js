@@ -15,8 +15,8 @@ export const createVisionTool = (max) => ({
 
     actions: {
         async inspect({ url, instruction = "Describe what you see on this page." }) {
-            if (!max.brain._smart.geminiKey) {
-                return { success: false, error: "Vision requires a configured Gemini API key (Smart Tier)." };
+            if (!max.brain._smart.openaiKey) {
+                return { success: false, error: "Vision requires a configured OpenAI API key (Smart Tier)." };
             }
 
             console.log(`[VisionTool] 👁️  Looking at: ${url}`);
@@ -44,7 +44,7 @@ export const createVisionTool = (max) => ({
                 await fs.mkdir(path.dirname(tmpPath), { recursive: true });
                 await page.screenshot({ path: tmpPath, fullPage: false });
 
-                // Read image as base64 for Gemini
+                // Read image as base64 for OpenAI
                 const imageBuffer = await fs.readFile(tmpPath);
                 const base64Image = imageBuffer.toString('base64');
 
@@ -52,33 +52,45 @@ export const createVisionTool = (max) => ({
                 await browser.close();
                 await fs.unlink(tmpPath).catch(() => {});
 
-                console.log(`[VisionTool] 🧠 Processing visual data...`);
+                console.log(`[VisionTool] 🧠 Processing visual data via OpenAI...`);
 
-                // We must use the raw Gemini API format for multimodal requests
+                // OpenAI Multimodal Format
                 const body = {
-                    contents: [{
-                        parts: [
-                            { text: instruction },
-                            { inlineData: { mimeType: "image/png", data: base64Image } }
-                        ]
-                    }],
-                    generationConfig: { temperature: 0.2, maxOutputTokens: 1024 }
+                    model: max.brain._smart.openaiModel || "gpt-4o",
+                    messages: [
+                        {
+                            role: "user",
+                            content: [
+                                { type: "text", text: instruction },
+                                {
+                                    type: "image_url",
+                                    image_url: {
+                                        url: `data:image/png;base64,${base64Image}`
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                    max_tokens: 1024
                 };
 
-                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${max.brain._smart.geminiModel}:generateContent?key=${max.brain._smart.geminiKey}`, {
+                const res = await fetch(`${max.brain._smart.openaiUrl}/chat/completions`, {
                     method:  'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type':  'application/json',
+                        'Authorization': `Bearer ${max.brain._smart.openaiKey}`
+                    },
                     body:    JSON.stringify(body),
                     signal:  AbortSignal.timeout(60000)
                 });
 
                 if (!res.ok) {
                     const err = await res.text();
-                    return { success: false, error: `Vision API failed: ${err}` };
+                    return { success: false, error: `OpenAI Vision API failed: ${err}` };
                 }
 
                 const data = await res.json();
-                const analysis = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'No visual analysis returned.';
+                const analysis = data.choices?.[0]?.message?.content?.trim() || 'No visual analysis returned.';
 
                 return { success: true, url, analysis };
 

@@ -83,6 +83,15 @@ export class CuriosityEngine {
         }
     }
 
+    // ─── Check if a curiosity result is worth converting to a GoalEngine goal ─
+    // Returns true when the insight is long and contains action-worthy signals.
+    // Keeps the bar high so not every curiosity task floods the goal queue.
+    signalsGoal(result) {
+        if (!result || result.length < 300) return false;
+        const actionWords = /\b(should|must|critical|important|investigate|issue|problem|bug|vulnerability|improve|fix|consider|missing|broken|dangerous|review|refactor|optimize)\b/i;
+        return actionWords.test(result);
+    }
+
     _extractTopics(text) {
         // Simple keyword extraction — look for technical terms in backticks or quotes
         const backtickMatches = text.match(/`([^`]+)`/g)?.map(m => m.replace(/`/g, '')) || [];

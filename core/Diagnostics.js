@@ -19,9 +19,14 @@ export class DiagnosticsSystem {
 
     async runAll() {
         console.log('[Diagnostics] 🔍 Running system-wide architectural audit...');
-        for (const scanner of this.scanners) {
-            await scanner().catch(err => console.error(`[Diagnostics] Scanner error: ${err.message}`));
-        }
+        // Run all scanners in parallel so slow ones don't block the pass
+        await Promise.allSettled(this.scanners.map(s => s())).then(results => {
+            results.forEach((r, i) => {
+                if (r.status === 'rejected') {
+                    console.error(`[Diagnostics] Scanner #${i} failed: ${r.reason?.message || r.reason}`);
+                }
+            });
+        });
     }
 
     /**
@@ -49,9 +54,13 @@ export class DiagnosticsSystem {
     async _scanTestCoverage() {
         const coreDir = path.join(process.cwd(), 'core');
         const testDir = path.join(process.cwd(), 'tests');
-        
+
         const files = await fs.readdir(coreDir);
+        let goalsQueued = 0;
+        const MAX_TEST_GOALS = 3;  // cap: don't flood the goal queue
+
         for (const file of files) {
+            if (goalsQueued >= MAX_TEST_GOALS) break;
             if (!file.endsWith('.js')) continue;
             const testFile = file.replace('.js', '.test.js');
             const hasTest = await fs.access(path.join(testDir, testFile)).then(() => true).catch(() => false);
@@ -63,6 +72,7 @@ export class DiagnosticsSystem {
                     source: 'test_scanner',
                     type: 'testing'
                 });
+                goalsQueued++;
             }
         }
     }

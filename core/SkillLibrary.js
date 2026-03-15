@@ -20,6 +20,20 @@ export class SkillLibrary {
         this._skills = [];  // [{id, name, trigger, summary, goalType, steps, successRate, usedCount, lastUsed}]
     }
 
+    // ─── Prune stale / low-signal skills ──────────────────────────────────
+    // Removes skills unused for 30+ days that were never reinforced (used < 3x).
+    // These are one-off flukes — keeping them would pollute recall results.
+    prune() {
+        const STALE_MS = 30 * 24 * 60 * 60 * 1000;
+        const before   = this._skills.length;
+        this._skills   = this._skills.filter(s => {
+            const age = Date.now() - (s.lastUsed || 0);
+            return !(age > STALE_MS && s.usedCount < 3);
+        });
+        const pruned = before - this._skills.length;
+        if (pruned > 0) console.log(`[SkillLibrary] 🗑️  Pruned ${pruned} stale skill(s)`);
+    }
+
     // ─── Load persisted skills on boot ────────────────────────────────────
     async initialize() {
         try {
@@ -27,6 +41,7 @@ export class SkillLibrary {
             const raw  = await fs.readFile(SKILLS_FILE, 'utf8');
             const data = JSON.parse(raw);
             this._skills = data.skills || [];
+            this.prune();  // drop stale skills from prior sessions on boot
             if (this._skills.length > 0) {
                 console.log(`[SkillLibrary] ✅ Loaded ${this._skills.length} skills`);
             }
@@ -88,7 +103,8 @@ Return ONLY a JSON object:
                 });
             }
 
-            // Keep top MAX_SKILLS by composite score
+            // Keep top MAX_SKILLS by composite score; prune stale entries
+            this.prune();
             this._skills.sort((a, b) => (b.successRate * b.usedCount) - (a.successRate * a.usedCount));
             if (this._skills.length > MAX_SKILLS) this._skills.pop();
 

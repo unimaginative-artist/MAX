@@ -377,11 +377,18 @@ export class AgentLoop extends EventEmitter {
     }
 
     // ─── Execute a single step ────────────────────────────────────────────
-    async _executeStep(step, goal) {
+    async _executeStep(step, goal, stepResultMap = new Map()) {
         const action   = step.action;
         const toolName = step.tool || 'brain';
 
         console.log(`  [AgentLoop] Step ${step.step}: ${action.slice(0, 70)} [${toolName}]`);
+
+        // ── Inject outputs from dependency steps into the prompt context ──
+        const depContext = (step.dependsOn || [])
+            .map(d => stepResultMap.get(Number(d)))
+            .filter(Boolean)
+            .map(r => `Step ${r.step} result: ${(r.result || '').slice(0, 400)}`)
+            .join('\n');
 
         // ── Approval gate ─────────────────────────────────────────────────
         if (this.config.requireApproval && this._needsApproval(toolName, action)) {
@@ -399,9 +406,10 @@ export class AgentLoop extends EventEmitter {
 
             if (toolName === 'brain') {
                 // Think through this step — use smart tier for coding tasks
+                const depNote = depContext ? `\n\nPRIOR STEP OUTPUTS:\n${depContext}` : '';
                 const resObj = await withTimeout(
                     this.max.brain.think(
-                        `Complete this step concisely:\n\nGOAL: ${goal.title}\nSTEP: ${action}`,
+                        `Complete this step concisely:\n\nGOAL: ${goal.title}\nSTEP: ${action}${depNote}`,
                         {
                             systemPrompt: `You are MAX completing an autonomous task step. Be concrete and brief.`,
                             temperature:  isCoding ? 0.2 : 0.4,
@@ -415,18 +423,24 @@ export class AgentLoop extends EventEmitter {
                 result = resObj.text;
             } else {
                 // Parse tool and action from step.tool (format: "tool" or "tool.action")
-                const [tName, tAction] = toolName.includes('.') ? toolName.split('.') : [toolName, 'run'];
+                // Prefer step.action_name (from params schema) over the dot-notation fallback
+                const [tName, tDotAction] = toolName.includes('.') ? toolName.split('.') : [toolName, 'run'];
+                const tAction = step.action_name || tDotAction;
                 const tool = this.max.tools.get(tName);
 
                 if (tool) {
+                    // step.params is the authoritative source (set by the planner).
+                    // Legacy fallbacks ensure old plans without params still work.
+                    const toolParams = {
+                        command:  action,       // shell fallback: action as command
+                        filePath: step.path || step.file,
+                        content:  step.content,
+                        query:    action,       // web fallback
+                        cwd:      process.cwd(),
+                        ...(step.params || {})  // planner-specified params win
+                    };
                     const toolResult = await withTimeout(
-                        this.max.tools.execute(tName, tAction, {
-                            command:  action,  // for shell
-                            filePath: step.path || step.file,
-                            content:  step.content,
-                            query:    action,  // for web
-                            cwd:      process.cwd()
-                        }),
+                        this.max.tools.execute(tName, tAction, toolParams),
                         timeoutMs,
                         `${tName}.${tAction}`
                     );
@@ -817,7 +831,7 @@ Root cause guide:
 
     // ─── Detect coding steps — route these to smart tier ─────────────────
     _isCodingStep(step, goal) {
-        const codingTools = ['file.write', 'file.edit', 'shell', 'coderunner', 'lab'];
+        const codingTools = ['file.write', 'file.edit', 'shell', 'shell.run', 'shell.start', 'coderunner', 'lab'];
         const codingWords = ['write', 'implement', 'create', 'code', 'fix', 'refactor',
                              'edit', 'debug', 'build', 'generate', 'patch', 'update'];
 
@@ -832,14 +846,26 @@ Root cause guide:
     }
 
     // ─── Approval gate ────────────────────────────────────────────────────
+    // autoApproveLevel:
+    //   'read'  — only reads are auto-approved; shell/write/git all need approval
+    //   'write' — reads + writes auto-approved; only git.push, git.commit, file.delete gated
+    //   'all'   — nothing requires approval (fully autonomous)
     _needsApproval(tool, action) {
         if (this.config.autoApproveLevel === 'all') return false;
-        if (this.config.autoApproveLevel === 'write' && tool === 'file' && action.includes('read')) return false;
 
+        if (this.config.autoApproveLevel === 'write') {
+            // Gate only truly destructive/irreversible operations
+            if (tool === 'file'  && action === 'delete')  return true;
+            if (tool === 'git'   && (action === 'commit' || action === 'push')) return true;
+            return false;
+        }
+
+        // Default 'read' level: gate shell, git, file.write, file.delete
+        // Fix: check both tool AND action for dot-notation rules
         const destructive = REQUIRES_APPROVAL.some(r => {
             if (r.includes('.')) {
                 const [t, a] = r.split('.');
-                return tool === t;
+                return tool === t && action === a;
             }
             return tool === r;
         });
