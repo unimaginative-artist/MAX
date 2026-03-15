@@ -90,6 +90,13 @@ export class KnowledgeBase {
     // INGESTION
     // ═══════════════════════════════════════════════════════════════════════
 
+    // Lightweight shortcut for storing a plain-text insight (used by ReflectionEngine, AgentLoop)
+    async remember(text, metadata = {}) {
+        if (!text?.trim()) return;
+        const name = metadata.source ? `${metadata.source}_${Date.now()}` : `memory_${Date.now()}`;
+        return this.ingest(text, { name, metadata });
+    }
+
     // ingest() is the main entry point — handles file, directory, URL, or raw text
     async ingest(source, { name = null, metadata = {} } = {}) {
         if (!this._ready) throw new Error('KnowledgeBase not initialized');

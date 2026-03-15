@@ -7,7 +7,7 @@
 //            fallback: smart tier (so nothing is ever silent)
 //
 //   smart → large Ollama model (OLLAMA_MODEL_SMART)
-//            → Gemini (GEMINI_API_KEY)
+//            → DeepSeek (DEEPSEEK_API_KEY)
 //            → OpenAI-compatible (OPENAI_API_KEY)
 //            fallback: fast tier
 //
@@ -16,9 +16,9 @@
 //
 // Config (config/api-keys.env):
 //   OLLAMA_MODEL_FAST=gemma3:4b        # background tasks
-//   OLLAMA_MODEL_SMART=llama3.1:8b     # deep reasoning (optional — falls to Gemini)
-//   GEMINI_API_KEY=...                 # smart tier
-//   OPENAI_API_KEY=...                 # smart tier
+//   OLLAMA_MODEL_SMART=llama3.1:8b     # deep reasoning (optional — falls to DeepSeek)
+//   DEEPSEEK_API_KEY=...               # smart tier (primary cloud brain)
+//   OPENAI_API_KEY=...                 # smart tier (fallback + vision)
 //   OPENAI_MODEL=gpt-4o                # smart tier model override
 //   OPENAI_BASE_URL=...                # optional — for local OpenAI-compatible servers
 // ═══════════════════════════════════════════════════════════════════════════

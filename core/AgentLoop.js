@@ -336,7 +336,15 @@ export class AgentLoop extends EventEmitter {
             reward:  goalSuccess ? 0.9 : -0.2
         });
 
-        // ── 5. Update goal state ──────────────────────────────────────────
+        // ── 5. Consolidate outcome into knowledge base ────────────────────
+        if (goalSummary && this.max.kb?._ready) {
+            const entry = goalSuccess
+                ? `Completed: "${goal.title}"\n${goalSummary}`
+                : `Failed: "${goal.title}"\nReason: ${goalSummary}`;
+            this.max.kb.remember(entry, { source: 'agent_loop', goalType: goal.type }).catch(() => {});
+        }
+
+        // ── 6. Update goal state ──────────────────────────────────────────
         if (goal.source === 'tasks.md' && goalSuccess) {
             profile?.completeTask(goal.title);
         } else if (goals?._active?.has(goal.id)) {

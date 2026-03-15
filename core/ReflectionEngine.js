@@ -20,10 +20,11 @@ const REFLECT_EVERY_N  = 10;   // deep reflection every N conversation turns
 const MAX_RECENT_TURNS = 20;   // rolling window for pattern analysis
 
 export class ReflectionEngine {
-    constructor(brain, goalEngine, outcomeTracker) {
+    constructor(brain, goalEngine, outcomeTracker, kb = null) {
         this.brain    = brain;
         this.goals    = goalEngine;
         this.outcomes = outcomeTracker;
+        this.kb       = kb;
 
         this._turnCount   = 0;
         this._recentTurns = [];  // rolling window
@@ -181,6 +182,20 @@ Return null for improvementGoal if no clear goal is identified.`;
             this._selfModel.lastDeepReflect  = new Date().toISOString();
             this._selfModel.totalReflections++;
             this._save();
+
+            // Write key insights to knowledge base
+            if (this.kb?._ready && (reflection.weaknesses?.length || reflection.strengths?.length)) {
+                const parts = [`Reflection #${this._selfModel.totalReflections}:`];
+                if (reflection.strengths?.length)  parts.push(`Strengths: ${reflection.strengths.join('; ')}`);
+                if (reflection.weaknesses?.length) parts.push(`Areas to improve: ${reflection.weaknesses.join('; ')}`);
+                if (reflection.promptPatch)        parts.push(`Behavioral adjustment: ${reflection.promptPatch}`);
+                this.kb.remember(parts.join('\n'), { source: 'deep_reflection' }).catch(() => {});
+            }
+
+            // Every 3rd deep reflection, run dreaming consolidation
+            if (this._selfModel.totalReflections % 3 === 0) {
+                this.dream(this.kb).catch(() => {});
+            }
 
             // Record outcome
             this.outcomes?.record({

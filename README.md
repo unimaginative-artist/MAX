@@ -25,7 +25,7 @@ He watches your workspace in real-time, writes his own tests, audits his own cod
 | **Sentinel** | Real-time file watcher — detects workspace changes, re-indexes files, proactively audits core code edits |
 | **ArtifactManager** | Prevents context bloat — large code outputs stored externally and replaced with pointers in chat history |
 | **TestGenerator** | Writes and runs Jest unit tests autonomously — EvolutionArbiter won't self-modify until tests pass |
-| **VisionTool** | Takes screenshots via Puppeteer, analyzes them with Gemini multimodal vision |
+| **VisionTool** | Takes screenshots via Puppeteer, analyzes them with OpenAI multimodal vision |
 | **RAG / KnowledgeBase** | Ingest files, folders, and URLs — hybrid BM25 + vector retrieval injected into every response |
 | **Hybrid memory** | 3-tier (hot/warm/cold) + BM25 full-text + vector semantic search, survives restarts |
 | **Engineering swarm** | Breaks large tasks into parallel workers, synthesizes results |
@@ -35,7 +35,7 @@ He watches your workspace in real-time, writes his own tests, audits his own cod
 | **ToolCreator** | MAX writes new tools at runtime — generates, validates, and loads them without restarting |
 | **SelfCodeInspector** | Scans its own source for TODOs/FIXMEs, queues them as improvement goals |
 | **Tools** | File I/O, shell, web search, git, API caller, vision — all safety-hardened |
-| **Local-first** | Runs on Ollama — no cloud required. Gemini and OpenAI supported as fallbacks |
+| **Local-first** | Runs on Ollama — no cloud required. DeepSeek and OpenAI supported as cloud backends |
 
 ---
 
@@ -51,7 +51,7 @@ npm install
 
 # Configure (add at least one LLM backend)
 cp config/api-keys.env.example config/api-keys.env
-# edit config/api-keys.env — minimum: point at Ollama or add a Gemini key
+# edit config/api-keys.env — minimum: point at Ollama or add a DeepSeek/OpenAI key
 
 # Chat mode (first run triggers onboarding)
 node launcher.mjs
@@ -70,7 +70,7 @@ node launcher.mjs --mode api
 - **Node.js** 18+
 - **One AI backend** (pick any):
   - [Ollama](https://ollama.com) — fully local, free. `ollama pull llama3.2` to get started
-  - Gemini API key — fast, generous free tier
+  - DeepSeek API key — fast and cheap cloud option (`deepseek-reasoner` for smart tier)
   - Any OpenAI-compatible endpoint
 
 ---
@@ -82,15 +82,15 @@ MAX runs two parallel LLM tiers so background work never slows your conversation
 | Tier | Used for | Default model |
 |------|----------|---------------|
 | **Fast** | Background tasks, curiosity exploration, reflection scoring | `llama3.2` (small Ollama model) |
-| **Smart** | User chat, reasoning, swarm, debate | Ollama large → Gemini → OpenAI |
+| **Smart** | User chat, reasoning, swarm, debate | Ollama large → DeepSeek → OpenAI |
 
 Configure both in `config/api-keys.env`:
 
 ```bash
 OLLAMA_MODEL_FAST=gemma3:4b       # background work
-OLLAMA_MODEL_SMART=llama3.1:8b   # deep reasoning (optional — falls back to Gemini)
-GEMINI_API_KEY=...
-OPENAI_API_KEY=...
+OLLAMA_MODEL_SMART=llama3.1:8b   # deep reasoning (optional — falls back to DeepSeek)
+DEEPSEEK_API_KEY=...              # primary cloud brain (deepseek-reasoner)
+OPENAI_API_KEY=...                # fallback + vision
 ```
 
 ---
@@ -246,6 +246,9 @@ Generated tools are saved to `tools/generated/` and reloaded on next boot. Safet
 /approve         — approve a pending destructive action
 /deny            — deny it
 /reflect         — force a deep self-reflection right now
+/run <cmd>       — run a shell command directly from the REPL
+/ps              — list background processes started this session
+/kill <name>     — kill a named background process
 /inspect         — scan own source for TODOs/FIXMEs, queue as improvement goals
 /reason <text>   — run multi-strategy analysis (causal, counterfactual, world simulation, etc.)
 /createtool      — ask MAX to generate a new tool at runtime
@@ -334,7 +337,7 @@ MAX/
 │   ├── WebTool.js            — DuckDuckGo HTML scraping + page fetch + cache
 │   ├── GitTool.js            — git ops via execFile (injection-safe)
 │   ├── ApiTool.js            — HTTP API caller
-│   └── VisionTool.js         — Puppeteer screenshots + Gemini multimodal visual analysis
+│   └── VisionTool.js         — Puppeteer screenshots + OpenAI multimodal visual analysis
 ├── swarm/
 │   └── SwarmCoordinator.js   — parallel worker orchestration
 ├── debate/
