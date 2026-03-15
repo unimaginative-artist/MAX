@@ -726,6 +726,12 @@ async function chatMode(max, opts) {
     console.log('  Self-edit: /self edit <path> <instruction>  →  /self test  →  /self commit | /self rollback');
     console.log('─'.repeat(60) + '\n');
 
+    // Opening line — lets Barry know MAX is ready and responsive
+    const status = max.brain?.getStatus?.();
+    const backend = status?.smart?.backend || 'local';
+    const model   = status?.smart?.model   || 'unknown';
+    console.log(`MAX: Online. Running on ${backend} (${model}). What are we building?\n`);
+
     ask();
 }
 
