@@ -102,12 +102,13 @@ export class Heartbeat extends EventEmitter {
         const drive = this.max?.drive;
         const driveStatus = drive?.getStatus?.();
 
-        // ── AgentLoop gets priority when tension is high ──────────────────
-        // Tension above 40% = MAX is feeling the urge to DO something
-        const tensionHigh = driveStatus && driveStatus.tension > 0.4;
+        // ── AgentLoop: run when tension is high OR goals are waiting ─────
+        // Tension > 40% = urgency signal. Pending goals = always worth running.
+        const tensionHigh     = driveStatus && driveStatus.tension > 0.4;
+        const hasPendingGoals = this.max?.goals?.getNext(this.max?.drive) != null;
 
-        if (tensionHigh && this.max?.agentLoop) {
-            console.log(`[Heartbeat] ⚡ Tension ${(driveStatus.tension * 100).toFixed(0)}% — running AgentLoop`);
+        if ((tensionHigh || hasPendingGoals) && this.max?.agentLoop) {
+            console.log(`[Heartbeat] ⚡ ${hasPendingGoals ? 'Goals pending' : `Tension ${(driveStatus.tension * 100).toFixed(0)}%`} — running AgentLoop`);
             try {
                 const result = await this.max.agentLoop.runCycle();
                 if (result) {
@@ -149,6 +150,28 @@ export class Heartbeat extends EventEmitter {
                         label:  `🔍 Explored: ${curiosityTask.label}`,
                         result: typeof result === 'string' ? result : JSON.stringify(result)
                     });
+
+                    // ── Curiosity → Goal pipeline ─────────────────────────
+                    // If the insight surfaces something actionable, convert it
+                    // to a GoalEngine goal so MAX actively investigates it.
+                    if (this.max?.goals && this.max.curiosity?.signalsGoal?.(result)) {
+                        const goalTitle = `Investigate: ${curiosityTask.label}`;
+                        const alreadyQueued = this.max.goals.listActive()
+                            .some(g => g.title.toLowerCase().includes(
+                                curiosityTask.label.toLowerCase().slice(0, 25)
+                            ));
+                        if (!alreadyQueued) {
+                            this.max.goals.addGoal({
+                                title:       goalTitle,
+                                description: `Curiosity surfaced this: ${result.slice(0, 200)}`,
+                                type:        'research',
+                                priority:    0.55,
+                                source:      'curiosity'
+                            });
+                            console.log(`[Heartbeat] 🎯 Curiosity → goal: "${goalTitle}"`);
+                        }
+                    }
+
                 } catch (err) {
                     console.error('[Heartbeat] Brain error during curiosity task:', err.message);
                 }
@@ -156,6 +179,14 @@ export class Heartbeat extends EventEmitter {
         } else {
             drive?.onIdleTick();
             this.emit('idle');
+
+            // ── Auto-generate goals (~10% of idle ticks) ──────────────────
+            // Keeps MAX self-directed even when there are no pending goals.
+            if (this.max?.goals && Math.random() < 0.10) {
+                this.max.goals.generateGoals({
+                    profileContext: this.max.profile?.buildContextBlock()
+                }).catch(() => {});
+            }
 
             // ── Proactive surfacing (~15% of idle ticks) ──
             if (Math.random() < 0.15) {

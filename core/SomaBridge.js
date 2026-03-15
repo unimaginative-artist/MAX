@@ -70,10 +70,11 @@ export class SomaBridge {
                     method:  'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body:    JSON.stringify({
-                        message:     prompt,
-                        temperature: options.temperature,
-                        maxTokens:   options.maxTokens,
-                        persona:     options.persona,
+                        message:      prompt,
+                        systemPrompt: options.systemPrompt,   // pass MAX's tool manifest + state
+                        temperature:  options.temperature,
+                        maxTokens:    options.maxTokens,
+                        persona:      options.persona,
                         deepThinking: options.deepThinking || false,
                     })
                 }),
@@ -138,6 +139,53 @@ export class SomaBridge {
             return Array.isArray(data) ? data : (data.results || data.memories || []);
         } catch {
             return [];
+        }
+    }
+
+    // ── SOMA Goal Injection ───────────────────────────────────────────────
+
+    /**
+     * Inject a goal directly into SOMA's agentic loop.
+     * This makes MAX a true co-pilot — able to steer SOMA's focus.
+     * goal: { title, description, type, priority }
+     */
+    async injectGoal(goal) {
+        if (!this._available) return { success: false, error: 'SOMA offline' };
+        try {
+            const { default: fetch } = await import('node-fetch');
+            const r = await Promise.race([
+                fetch(`${this.baseUrl}/api/goals`, {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body:    JSON.stringify(goal)
+                }),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000))
+            ]);
+            if (!r.ok) return { success: false, error: `SOMA ${r.status}` };
+            const data = await r.json();
+            console.log(`[SomaBridge] 🎯 Goal injected into SOMA: "${goal.title}"`);
+            return { success: true, goalId: data.id };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    }
+
+    /**
+     * Fetch live SOMA daemon/agent status.
+     * Returns health, active agents, pending goals, last error.
+     */
+    async getSomaStatus() {
+        if (!this._available) return null;
+        try {
+            const { default: fetch } = await import('node-fetch');
+            const r = await Promise.race([
+                fetch(`${this.baseUrl}/api/system/status`),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))
+            ]);
+            if (!r.ok) return null;
+            return await r.json();
+        } catch {
+            return null;
         }
     }
 

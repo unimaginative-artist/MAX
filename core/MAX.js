@@ -22,7 +22,7 @@ import { ReflectionEngine }   from './ReflectionEngine.js';
 import { PersonaEngine }      from '../personas/PersonaEngine.js';
 import { ToolRegistry }       from '../tools/ToolRegistry.js';
 import { FileTools }          from '../tools/FileTools.js';
-import { ShellTool }          from '../tools/ShellTool.js';
+import { ShellTool, getRunningProcesses } from '../tools/ShellTool.js';
 import { WebTool }            from '../tools/WebTool.js';
 import { GitTool }            from '../tools/GitTool.js';
 import { ApiTool }            from '../tools/ApiTool.js';
@@ -105,6 +105,9 @@ export class MAX {
 
         // System prompt cache — rebuilt only when persona or drive state changes
         this._promptCache     = { key: null, prompt: null };
+
+        // Project context — detected once at startup from package.json / README
+        this._projectContext  = null;
     }
 
     async initialize() {
@@ -215,6 +218,38 @@ export class MAX {
             } catch { /* fresh start */ }
         }
 
+        // Project auto-detection — read package.json and/or README from cwd
+        try {
+            const cwd = process.cwd();
+            const pkgPath  = path.join(cwd, 'package.json');
+            const readmePath = [
+                path.join(cwd, 'README.md'),
+                path.join(cwd, 'readme.md'),
+                path.join(cwd, 'README.txt')
+            ].find(p => fs.existsSync(p));
+
+            const parts = [];
+            if (fs.existsSync(pkgPath)) {
+                try {
+                    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                    parts.push(`Project: ${pkg.name || 'unknown'} v${pkg.version || '?'}`);
+                    if (pkg.description) parts.push(`Description: ${pkg.description}`);
+                    const deps = Object.keys(pkg.dependencies || {}).slice(0, 12).join(', ');
+                    if (deps) parts.push(`Dependencies: ${deps}`);
+                    const scripts = Object.keys(pkg.scripts || {}).join(', ');
+                    if (scripts) parts.push(`Scripts: ${scripts}`);
+                } catch { /* malformed package.json */ }
+            }
+            if (readmePath) {
+                const readme = fs.readFileSync(readmePath, 'utf8').slice(0, 600).trim();
+                if (readme) parts.push(`README:\n${readme}`);
+            }
+            if (parts.length > 0) {
+                this._projectContext = parts.join('\n');
+                console.log(`[MAX] 📁 Project detected: ${parts[0]}`);
+            }
+        } catch { /* non-fatal */ }
+
         this.reasoning = new ReasoningChamber(this.brain);
         this.evolution = new EvolutionArbiter();
         await this.evolution.initialize();
@@ -238,9 +273,10 @@ export class MAX {
             name:        'goals',
             description: `Queue and manage autonomous investigation/task goals.
 Actions:
-  add    → queue a goal and start working on it: TOOL:goals:add:{"title":"Investigate X","description":"...","type":"research|task|fix","priority":0.8}
-  list   → see active goals: TOOL:goals:list:{}
-  status → goal engine stats: TOOL:goals:status:{}
+  add         → queue a goal and start working on it: TOOL:goals:add:{"title":"Investigate X","description":"...","type":"research|task|fix","priority":0.8}
+  list        → see active goals: TOOL:goals:list:{}
+  status      → goal engine stats: TOOL:goals:status:{}
+  inject_soma → inject a goal directly into SOMA's agentic loop: TOOL:goals:inject_soma:{"title":"Fix SOMA memory pressure","description":"...","priority":0.9}
 
 USE THIS when the user asks you to investigate, figure out, or diagnose something that needs multi-step exploration rather than a direct answer.`,
             actions: {
@@ -251,7 +287,11 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
                     return { success: true, id, message: `Goal queued: "${title}" — starting investigation` };
                 },
                 list:   async () => ({ success: true, goals: this.goals.listActive().slice(0, 10).map(g => ({ id: g.id, title: g.title, status: g.status, priority: g.priority })) }),
-                status: async () => ({ success: true, ...this.goals.getStatus() })
+                status: async () => ({ success: true, ...this.goals.getStatus() }),
+                inject_soma: async ({ title, description = '', type = 'task', priority = 0.8 }) => {
+                    if (!this.soma?.available) return { success: false, error: 'SOMA bridge not active' };
+                    return this.soma.injectGoal({ title, description, type, priority });
+                }
             }
         });
 
@@ -292,13 +332,32 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
 
         // Morning briefing at 8am daily (only if notifier is enabled)
         if (this.notifier.enabled) {
-            this.scheduler.add({
-                id:       'morning_briefing',
-                label:    'Morning briefing → Discord',
-                cron:     '0 8 * * *',
-                fn:       () => this.notifier.briefing(this)
+            this.scheduler.addJob({
+                id:      'morning_briefing',
+                label:   'Morning briefing → Discord',
+                every:   '24h',
+                type:    'custom',
+                handler: () => this.notifier.briefing(this)
             });
         }
+
+        // Recurring diagnostics — catch issues introduced mid-session
+        this.scheduler.addJob({
+            id:      'diagnostics_hourly',
+            label:   'Hourly system diagnostics scan',
+            every:   '1h',
+            type:    'custom',
+            handler: () => this.diagnostics.runAll()
+        });
+
+        // Task outcome reflection — every 4h, analyze what worked and what didn't
+        this.scheduler.addJob({
+            id:      'reflect_task_outcomes',
+            label:   'Reflect on recent task outcomes',
+            every:   '4h',
+            type:    'custom',
+            handler: () => this.reflection?.reflectOnTaskOutcomes?.().catch(() => {})
+        });
 
         // ─── Truly non-blocking background tasks ───
         (async () => {
@@ -422,9 +481,10 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
         if (this.soma?.available) {
             try {
                 result = await this.soma.think(historyText, {
-                    temperature: options.temperature ?? 0.7,
-                    maxTokens:   maxTok,
-                    timeout:     30_000
+                    systemPrompt: finalSystemPrompt + memoryContext + kbContext,
+                    temperature:  options.temperature ?? 0.7,
+                    maxTokens:    maxTok,
+                    timeout:      30_000
                 });
             } catch {
                 // SOMA failed — fall through to local brain
@@ -624,12 +684,35 @@ Think deeper about the engineering implications. What are edge cases, gotchas, o
     async _processToolCalls(text) {
         if (!text.includes('TOOL:')) return text;
 
+        // ── Print PLAN: block before tools run ──────────────────────────
+        const planMatch = text.match(/^PLAN:\s*\n((?:\s*\d+\..+\n?)+)/m);
+        if (planMatch) {
+            process.stdout.write('\n  \x1b[36m📋 PLAN\x1b[0m\n');
+            const planLines = planMatch[1].trim().split('\n');
+            for (const pl of planLines) {
+                process.stdout.write(`  \x1b[90m│\x1b[0m  ${pl.trim()}\n`);
+            }
+            process.stdout.write('\n');
+        }
+
         const lines  = text.split('\n');
         const result = [];
 
         for (const line of lines) {
             const trimmed = line.trim();
             if (trimmed.startsWith('TOOL:')) {
+                // ── File write/replace — print a visible notification ────
+                const fileWriteMatch = trimmed.match(/^TOOL:file:(write|replace):(.+)/s);
+                if (fileWriteMatch) {
+                    try {
+                        const params = JSON.parse(fileWriteMatch[2].trim());
+                        const op     = fileWriteMatch[1];
+                        const fp     = params.filePath || params.path || '?';
+                        const label  = op === 'write' ? '✏️  write' : '✏️  replace';
+                        process.stdout.write(`  \x1b[33m${label}\x1b[0m  \x1b[1m${fp}\x1b[0m\n`);
+                    } catch { /* non-fatal — params might be malformed */ }
+                }
+
                 const toolResult = await this.tools.executeLLMToolCall(trimmed);
                 if (toolResult) {
                     let resultStr = typeof toolResult === 'string'
@@ -692,6 +775,21 @@ Memory: ${memory.totalMemories} stored facts | ${memory.conversationTurns} conve
             state += ` | Action success rate: ${rate}%`;
         }
 
+        // Project context
+        if (this._projectContext) {
+            state += `\n\n## Current project\n${this._projectContext}`;
+        }
+
+        // Running background processes
+        const procs = getRunningProcesses();
+        if (procs.length > 0) {
+            state += `\n\n## Background processes running\n`;
+            for (const p of procs) {
+                state += `  [${p.name}] pid ${p.pid}  ${p.command}\n`;
+            }
+            state += `Use TOOL:shell:stop:{"name":"<name>"} to kill, TOOL:shell:ps:{} to check status.`;
+        }
+
         if (this._sessionBriefing) {
             const { hoursAgo, goals: sg, insights: si, conversation: sc } = this._sessionBriefing;
             state += `\n\n## Previous session (${hoursAgo}h ago)`;
@@ -723,7 +821,27 @@ EXECUTION requests ("move this code", "edit this file", "fix X in file Y", "make
 → Never say "let me read X" and stop — if you need to read X, read it in the SAME response and keep going.
 → Only check back with the user when the task is DONE or you are genuinely blocked.
 → Always end with a clear completion signal: "Done. [what changed]. What do you want to do next?"
-Example: "Done. Moved SomaAgenticExecutor init to line 233 in extended.js. It's now in PHASE A before the heap fills. What do you want to do next?"`;
+Example: "Done. Moved SomaAgenticExecutor init to line 233 in extended.js. It's now in PHASE A before the heap fills. What do you want to do next?"
+
+SHELL requests ("run the tests", "start the server", "install X", "build it", "what's in this dir"):
+→ Use TOOL:shell:run for commands that finish (tests, installs, builds, scripts)
+→ Use TOOL:shell:start for long-running processes (servers, watchers, dev processes) — these run in the background and print output live
+→ Use TOOL:shell:stop to kill a named background process
+→ Use TOOL:shell:ps to see what's running
+→ Commands print live to the terminal — the user sees output as it runs
+→ You can run git, npm, python, node, any installed tool directly
+
+PLANNING (complex multi-step actions):
+→ For ANY action involving 3+ steps, multiple files, or significant changes:
+  1. First output a PLAN: block listing the steps (concise, numbered)
+  2. Then execute the steps with tools
+→ Format:
+  PLAN:
+  1. Read X to understand current structure
+  2. Edit Y to add the new field
+  3. Run tests to verify
+→ The plan is shown to the user BEFORE tools run so they can interrupt if needed
+→ Simple one-step actions (read one file, run one command) do NOT need a plan`;
 
 
         return state;

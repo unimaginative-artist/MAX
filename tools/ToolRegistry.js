@@ -103,7 +103,9 @@ export class ToolRegistry {
             '',
             '### Example (CORRECT):',
             'TOOL:file:read:{"filePath": "core/MAX.js"}',
-            'TOOL:shell:run:{"command": "ls -la"}',
+            'TOOL:shell:run:{"command": "npm test"}',
+            'TOOL:shell:start:{"command": "npm run dev", "name": "dev-server"}',
+            'TOOL:shell:stop:{"name": "dev-server"}',
             '',
             '### Example (WRONG - DO NOT DO THIS):',
             'TOOL:file:read core/MAX.js',
@@ -119,8 +121,11 @@ export class ToolRegistry {
                 if (t.name === 'file' && a === 'read')  example = '{"filePath": "..."}';
                 if (t.name === 'file' && a === 'write') example = '{"filePath": "...", "content": "..."}';
                 if (t.name === 'file' && a === 'replace') example = '{"filePath": "...", "oldText": "...", "newText": "..."}';
-                if (t.name === 'shell' && a === 'run')  example = '{"command": "..."}';
-                if (t.name === 'shell' && a === 'runStateful')  example = '{"command": "cd src && npm test"}';
+                if (t.name === 'shell' && a === 'run')   example = '{"command": "npm test", "timeoutMs": 120000}';
+                if (t.name === 'shell' && a === 'start') example = '{"command": "npm run dev", "name": "dev-server"}';
+                if (t.name === 'shell' && a === 'stop')  example = '{"name": "dev-server"}';
+                if (t.name === 'shell' && a === 'ps')    example = '{}';
+                if (t.name === 'shell' && a === 'cd')    example = '{"path": "../other-project"}';
                 if (t.name === 'web' && a === 'search') example = '{"query": "..."}';
                 if (t.name === 'api' && a === 'request') example = '{"url": "...", "method": "GET"}';
                 if (t.name === 'discord' && a === 'send') example = '{"channelId": "...", "message": "..."}';

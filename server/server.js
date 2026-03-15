@@ -7,6 +7,7 @@ import express from 'express';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { applyProposal, isSomaHealthy } from '../core/SomaController.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -32,6 +33,15 @@ export async function createServer(max, port = 3100) {
         if (!sseClients.size) return;
         try { broadcast({ type: 'status', ...max.getStatus() }); } catch {}
     }, 12000);
+
+    // Periodic SOMA status broadcast every 15s when SOMA is active
+    setInterval(async () => {
+        if (!sseClients.size || !max.soma?.available) return;
+        try {
+            const somaStatus = await max.soma.getSomaStatus();
+            if (somaStatus) broadcast({ type: 'soma_status', ...somaStatus });
+        } catch {}
+    }, 15000);
 
     // CORS for local frontends
     app.use((req, res, next) => {
@@ -67,6 +77,105 @@ export async function createServer(max, port = 3100) {
         req.on('close', () => sseClients.delete(res));
     });
 
+    // ── SOMA Self-Modification Proposal Queue ─────────────────────────────
+    const pendingProposals = new Map(); // taskId → proposal
+
+    function printProposal(p) {
+        const border = '═'.repeat(70);
+        const div    = '─'.repeat(70);
+        console.log(`\n╔${border}╗`);
+        console.log(`║  🧬 SOMA SELF-MODIFICATION PROPOSAL`);
+        console.log(`║  Task: ${p.taskId.slice(0, 8)}  |  Risk: ${(p.riskLevel || 'unknown').toUpperCase()}  |  Score: ${p.overallScore ? (p.overallScore * 100).toFixed(0) + '%' : '?'}`);
+        console.log(`╟${div}╢`);
+        console.log(`║  File: ${p.file}`);
+        console.log(`║  Rationale: ${p.rationale}`);
+        console.log(`╟${div}╢`);
+        if (p.verification) {
+            for (const [pass, result] of Object.entries(p.verification)) {
+                const icon = result.pass ? '✅' : '❌';
+                console.log(`║  ${icon} ${pass.toUpperCase().padEnd(10)} (${((result.confidence || 0) * 100).toFixed(0)}%)  ${result.notes || ''}`);
+            }
+            console.log(`╟${div}╢`);
+        }
+        console.log(`║  NEW CODE PREVIEW:`);
+        (p.newCode || '').split('\n').slice(0, 20).forEach(line => console.log(`║    ${line}`));
+        if ((p.newCode || '').split('\n').length > 20) console.log(`║    ... (${(p.newCode || '').split('\n').length} lines total)`);
+        console.log(`╚${border}╝`);
+        console.log(`  → /approve ${p.taskId.slice(0, 8)}   or   /deny ${p.taskId.slice(0, 8)}\n`);
+    }
+
+    // Receive proposal from SOMA
+    app.post('/api/soma/propose', (req, res) => {
+        const proposal = req.body;
+        if (!proposal?.taskId || !proposal?.file || !proposal?.newCode) {
+            return res.status(400).json({ error: 'taskId, file, newCode required' });
+        }
+        pendingProposals.set(proposal.taskId, proposal);
+        // Also index by short ID for convenience
+        pendingProposals.set(proposal.taskId.slice(0, 8), proposal);
+        printProposal(proposal);
+        broadcast({ type: 'soma_proposal', proposal });
+        res.json({ received: true, taskId: proposal.taskId });
+    });
+
+    // List pending proposals (full, for UI buttons)
+    app.get('/api/soma/proposals', (req, res) => {
+        // De-duplicate (we store both full and short-id keys)
+        const seen = new Set();
+        const list = [];
+        for (const p of pendingProposals.values()) {
+            if (!seen.has(p.taskId)) { seen.add(p.taskId); list.push(p); }
+        }
+        res.json(list);
+    });
+
+    // Approve — runs the full mechanical apply pipeline
+    app.post('/api/soma/proposals/:id/approve', async (req, res) => {
+        const proposal = pendingProposals.get(req.params.id);
+        if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
+
+        console.log(`\n[MAX] ✅ User approved proposal ${req.params.id} — beginning apply pipeline...\n`);
+        pendingProposals.delete(proposal.taskId);
+        pendingProposals.delete(proposal.taskId.slice(0, 8));
+
+        // Run apply in background — don't block the HTTP response
+        res.json({ accepted: true, taskId: proposal.taskId });
+
+        const result = await applyProposal(proposal, msg => console.log(msg));
+
+        // Notify SOMA of the result
+        const SOMA_URL = process.env.SOMA_URL || 'http://127.0.0.1:3001';
+        fetch(`${SOMA_URL}/api/soma/modification-result`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ taskId: proposal.taskId, ...result })
+        }).catch(() => {});
+
+        broadcast({ type: 'soma_proposal_result', taskId: proposal.taskId, ...result });
+    });
+
+    // Deny
+    app.delete('/api/soma/proposals/:id', (req, res) => {
+        const proposal = pendingProposals.get(req.params.id);
+        if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
+
+        pendingProposals.delete(proposal.taskId);
+        pendingProposals.delete(proposal.taskId.slice(0, 8));
+        console.log(`\n[MAX] 🚫 User denied proposal ${req.params.id} for ${proposal.file}\n`);
+
+        const SOMA_URL = process.env.SOMA_URL || 'http://127.0.0.1:3001';
+        fetch(`${SOMA_URL}/api/soma/modification-result`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ taskId: proposal.taskId, applied: false })
+        }).catch(() => {});
+
+        res.json({ denied: true });
+    });
+
+    // Expose pendingProposals for launcher commands
+    app._somaProposals = pendingProposals;
+
     // ── SOMA bridge toggle ────────────────────────────────────────────────
     // Check if SOMA is reachable right now
     app.get('/api/soma/check', async (req, res) => {
@@ -83,6 +192,37 @@ export async function createServer(max, port = 3100) {
             res.json({ available: r.ok, ready: data.status === 'healthy', active: max.soma?.available ?? false });
         } catch {
             res.json({ available: false, ready: false, active: false });
+        }
+    });
+
+    // ── SOMA event stream proxy ───────────────────────────────────────────
+    // Tails SOMA's live event/log stream and pipes it to the caller.
+    // Connect from the browser or curl: GET /api/soma/events
+    app.get('/api/soma/events', async (req, res) => {
+        if (!max.soma?.available) {
+            return res.status(503).json({ error: 'SOMA not connected' });
+        }
+
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders();
+
+        try {
+            const { default: fetch } = await import('node-fetch');
+            const upstream = await fetch(`${max.soma.baseUrl}/api/events`);
+            if (!upstream.ok) {
+                res.write(`data: ${JSON.stringify({ type: 'error', message: `SOMA returned ${upstream.status}` })}\n\n`);
+                return res.end();
+            }
+
+            upstream.body.on('data',  chunk => { try { res.write(chunk); } catch {} });
+            upstream.body.on('end',   ()    => res.end());
+            upstream.body.on('error', ()    => res.end());
+            req.on('close', ()               => upstream.body.destroy());
+        } catch (err) {
+            res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
+            res.end();
         }
     });
 

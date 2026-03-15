@@ -163,9 +163,25 @@ Rules:
 - Set dependsOn to step numbers this step requires output from (empty array if independent)
 - Independent steps (dependsOn: []) can run in parallel — use this for research, reads, and searches
 
+Tool-specific params (REQUIRED for correct execution):
+- file tool:  include "params": {"filePath": "path/to/file.js"} for read/write/replace/delete
+              include "action_name": "read" | "write" | "replace" | "list" | "search" | "delete"
+- shell tool: include "params": {"command": "exact shell command"} — action is just a description
+- web tool:   include "params": {"query": "search terms"} for search, or {"url": "..."} for fetch
+- git tool:   include "params": {"command": "status"} or similar
+- brain tool: no params needed — action is passed directly as a prompt
+
 Return a JSON array of step objects:
 [
-  { "step": 1, "action": "specific thing to do", "tool": "tool_name", "success": "observable criterion", "dependsOn": [] }
+  {
+    "step": 1,
+    "action": "human-readable description of what this step does",
+    "tool": "tool_name",
+    "action_name": "specific_action",
+    "params": { "key": "value" },
+    "success": "observable criterion",
+    "dependsOn": []
+  }
 ]
 
 Return ONLY the JSON array.`;
