@@ -520,21 +520,53 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             }
         }
         if (!result) {
-            // Stream tokens directly to caller — live output as DeepSeek generates.
-            // If the response ends up containing TOOL: calls, the raw lines will appear
-            // briefly in the terminal; the caller uses wasStreamed to decide whether to
-            // also print the final clean response.
+            // ── TOOL: lookahead filter ────────────────────────────────────────
+            // Buffer tokens until we have enough to detect 'TOOL:'. Once seen,
+            // stop forwarding to the caller — raw tool syntax must never reach the
+            // terminal. Any buffered text before the sentinel is flushed first.
+            const TOOL_SENTINEL = 'TOOL:';
+            let lookaheadBuf = '';
+            let toolSeen     = false;
+
+            const filteredToken = onToken ? (token) => {
+                if (toolSeen) return;
+                lookaheadBuf += token;
+                // Keep buffering until we have enough chars to detect the sentinel
+                while (lookaheadBuf.length >= TOOL_SENTINEL.length) {
+                    const idx = lookaheadBuf.indexOf(TOOL_SENTINEL);
+                    if (idx === 0) {
+                        // Sentinel at start — stop streaming immediately
+                        toolSeen = true; lookaheadBuf = ''; return;
+                    }
+                    if (idx > 0) {
+                        // Flush safe chars before sentinel, then stop
+                        onToken(lookaheadBuf.slice(0, idx));
+                        toolSeen = true; lookaheadBuf = ''; return;
+                    }
+                    // No sentinel found — flush all but the last (sentinel.length-1) chars
+                    const safe = lookaheadBuf.length - (TOOL_SENTINEL.length - 1);
+                    if (safe > 0) {
+                        onToken(lookaheadBuf.slice(0, safe));
+                        lookaheadBuf = lookaheadBuf.slice(safe);
+                    }
+                    break;
+                }
+            } : null;
+
             result = await this.brain.think(historyText, {
                 systemPrompt: finalSystemPrompt + memoryContext + kbContext,
                 temperature:  options.temperature ?? 0.7,
                 maxTokens:    maxTok,
                 tier:         brainTier,
-                onToken
+                onToken:      filteredToken
             });
+
+            // Flush any remaining lookahead that didn't accumulate enough chars for detection
+            if (!toolSeen && lookaheadBuf && onToken) onToken(lookaheadBuf);
 
             // wasStreamed=true means the streamed output IS the clean final response
             // wasStreamed=false means tool calls were present — caller must print clean reply
-            wasStreamed = !!(onToken && !result.text.includes('TOOL:'));
+            wasStreamed = !!(onToken && !toolSeen && !result.text.includes('TOOL:'));
         }
 
         let response = result.text;

@@ -72,7 +72,12 @@ export class ToolRegistry {
         const trimmedParams = paramsRaw.trim();
 
         try {
-            let params = parseLooseJson(trimmedParams);
+            // Strip trailing non-JSON text that LLMs sometimes append after the closing brace.
+            // e.g. TOOL:file:list:{} no?  →  trimmedParams="{} no?"  →  cleanedParams="{}"
+            const lastClose = Math.max(trimmedParams.lastIndexOf('}'), trimmedParams.lastIndexOf(']'));
+            const cleanedParams = lastClose >= 0 ? trimmedParams.slice(0, lastClose + 1) : trimmedParams;
+
+            let params = parseLooseJson(cleanedParams);
 
             // Fallback: If it wasn't JSON, wrap it in a default parameter name.
             // This fixes hallucinations where the LLM just writes TOOL:shell:run:ls -la
