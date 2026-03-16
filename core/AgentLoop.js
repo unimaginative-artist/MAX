@@ -192,6 +192,8 @@ export class AgentLoop extends EventEmitter {
                 goalSummary = stepResults.map(r => r.summary || '').filter(Boolean).join(' → ');
                 // Encode the winning plan as a skill (fire-and-forget procedural memory)
                 this.max.skills?.encodeFromRun(goal, goal.steps, this.max.brain).catch(() => {});
+                // Auto-commit any file changes made during this goal
+                this._autoCommit(goal.title).catch(() => {});
                 break;
             }
 
@@ -454,11 +456,28 @@ export class AgentLoop extends EventEmitter {
                         cwd:      process.cwd(),
                         ...(step.params || {})  // planner-specified params win
                     };
-                    const toolResult = await withTimeout(
+                    let toolResult = await withTimeout(
                         this.max.tools.execute(tName, tAction, toolParams),
                         timeoutMs,
                         `${tName}.${tAction}`
                     );
+
+                    // ── Step retry for file:replace "not found" ───────────────
+                    // Re-read the target file and ask brain to generate corrected
+                    // oldText, then retry once. Handles the common case where the
+                    // planner generated slightly wrong whitespace/indentation.
+                    if (toolResult?.success === false && tName === 'file' && tAction === 'replace'
+                            && toolResult.error?.includes('not found')) {
+                        console.log(`  [AgentLoop] 🔄 Replace failed — re-reading file and retrying...`);
+                        toolResult = await this._retryReplace(toolParams, step, goal).catch(() => toolResult);
+                    }
+
+                    // Propagate tool failures as thrown errors so search-and-retry
+                    // kicks in rather than silently reporting success on a broken step.
+                    if (toolResult?.success === false) {
+                        throw new Error(toolResult.error || `${tName}.${tAction} returned failure`);
+                    }
+
                     result = JSON.stringify(toolResult).slice(0, 500);
                 } else {
                     // Unknown tool — fall back to brain
@@ -477,26 +496,34 @@ export class AgentLoop extends EventEmitter {
             const summary = typeof result === 'string' ? result.slice(0, 200) : JSON.stringify(result).slice(0, 200);
 
             // ── Verification Gate ─────────────────────────────────────────
-            // If the step has a success criterion, ask the brain to check it.
+            // Success criterion is a substring that should appear in the output.
+            // "completed" means no output check needed (write/create steps).
             if (this.config.verifySteps && step.success && step.success !== 'completed') {
-                try {
-                    const verifyResult = await withTimeout(
-                        this.max.brain.think(
-                            `Did this step succeed?\n\nSTEP: ${action}\nSUCCESS CRITERION: ${step.success}\nOUTPUT: ${summary}\n\nReply with only YES or NO.`,
-                            { temperature: 0.0, maxTokens: 10, tier: 'fast' }
-                        ),
-                        15_000,
-                        'verify'
-                    );
-                    const verdict = verifyResult.text.trim().toUpperCase();
-                    if (verdict.startsWith('NO')) {
-                        throw new Error(`Verification failed: expected "${step.success}" but output was: ${summary.slice(0, 100)}`);
+                const criterion = step.success.toLowerCase();
+                const outputLower = summary.toLowerCase();
+                // Fast path: literal substring check (no LLM call needed)
+                const passedLiteral = outputLower.includes(criterion);
+                if (!passedLiteral) {
+                    // Slow path: ask brain only if literal check fails
+                    try {
+                        const verifyResult = await withTimeout(
+                            this.max.brain.think(
+                                `Does this output satisfy the success criterion?\n\nCRITERION: ${step.success}\nOUTPUT: ${summary}\n\nReply with only YES or NO.`,
+                                { temperature: 0.0, maxTokens: 10, tier: 'fast' }
+                            ),
+                            15_000,
+                            'verify'
+                        );
+                        const verdict = verifyResult.text.trim().toUpperCase();
+                        if (verdict.startsWith('NO')) {
+                            throw new Error(`Verification failed: expected "${step.success}" but output was: ${summary.slice(0, 100)}`);
+                        }
+                    } catch (verifyErr) {
+                        // Only treat as failure if it's our own thrown error, not a brain timeout
+                        if (verifyErr.message.startsWith('Verification failed')) throw verifyErr;
+                        // Brain timeout → skip verification, proceed
+                        console.warn(`  [AgentLoop] Verify skipped: ${verifyErr.message}`);
                     }
-                } catch (verifyErr) {
-                    // Only treat as failure if it's our own thrown error, not a brain timeout
-                    if (verifyErr.message.startsWith('Verification failed')) throw verifyErr;
-                    // Brain timeout → skip verification, proceed
-                    console.warn(`  [AgentLoop] Verify skipped: ${verifyErr.message}`);
                 }
             }
 
@@ -708,7 +735,7 @@ Reply ONLY with JSON: {"ok": true} if the plan is fine, or:
 {"ok": false, "issue": "brief description", "fix": [corrected step array]}
 
 Return {"ok": true} unless there is a clear critical flaw.`,
-                    { temperature: 0.1, maxTokens: 500, tier: 'fast' }
+                    { temperature: 0.1, maxTokens: 500, tier: 'smart' }
                 ),
                 15_000,
                 'plan validation'
@@ -825,6 +852,65 @@ Root cause guide:
         } catch {
             return null;
         }
+    }
+
+    // ─── Retry a failed file:replace by re-reading the file ──────────────
+    // Reads the current file content, asks the brain to find correct oldText,
+    // then retries the replace once. Returns the retry toolResult.
+    async _retryReplace(toolParams, step, goal) {
+        const fp = toolParams.filePath || toolParams.path;
+        if (!fp) return { success: false, error: 'No filePath to retry' };
+
+        const freshRead = await this.max.tools.execute('file', 'read', { filePath: fp });
+        if (!freshRead?.success) return { success: false, error: 'Could not re-read file for retry' };
+
+        try {
+            const correctionResult = await withTimeout(
+                this.max.brain.think(
+                    `A file:replace operation failed because oldText wasn't found. Find the correct text.\n\nFILE: ${fp}\nCONTENT (first 3000 chars):\n${freshRead.content.slice(0, 3000)}\n\nFAILED oldText:\n${toolParams.oldText}\n\nINTENDED newText:\n${toolParams.newText}\n\nGOAL: ${step.action}\n\nFind the exact text in the file that should be replaced to achieve this goal.\nRespond ONLY with JSON: {"oldText": "exact matching text from file", "newText": "replacement text"}`,
+                    { temperature: 0.1, maxTokens: 1500, tier: 'code' }
+                ),
+                30_000,
+                'replace correction'
+            );
+            const m = correctionResult.text.match(/\{[\s\S]*\}/);
+            if (!m) return { success: false, error: 'Brain could not generate corrected params' };
+
+            const corrected = JSON.parse(m[0]);
+            if (!corrected.oldText) return { success: false, error: 'No oldText in brain response' };
+
+            const retryResult = await this.max.tools.execute('file', 'replace', {
+                ...toolParams,
+                oldText: corrected.oldText,
+                newText: corrected.newText || toolParams.newText
+            });
+            if (retryResult.success) {
+                console.log(`  [AgentLoop] ✅ Replace retry succeeded`);
+            }
+            return retryResult;
+        } catch (e) {
+            return { success: false, error: `Replace retry error: ${e.message}` };
+        }
+    }
+
+    // ─── Auto-commit after successful goal ───────────────────────────────
+    // Only commits if there are staged changes in the working tree and
+    // autoApproveLevel is not 'read' (respects the user's permission config).
+    async _autoCommit(goalTitle) {
+        if (this.config.autoApproveLevel === 'read') return;  // user wants to control commits
+
+        try {
+            const cwd    = process.cwd();
+            const status = await this.max.tools.execute('git', 'status', { cwd });
+            if (!status?.success || !status.output) return;  // no changes or not a git repo
+
+            await this.max.tools.execute('git', 'add', { cwd, files: '.' });
+            const message = `AgentLoop: ${goalTitle.slice(0, 72)}`;
+            const commit  = await this.max.tools.execute('git', 'commit', { cwd, message });
+            if (commit?.success) {
+                console.log(`  [AgentLoop] 📦 Committed: "${message}"`);
+            }
+        } catch { /* non-fatal — git not available or nothing to commit */ }
     }
 
     // ─── Categorize error for smart pivot strategy ────────────────────────

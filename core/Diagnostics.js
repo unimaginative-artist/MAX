@@ -82,14 +82,23 @@ export class DiagnosticsSystem {
      * Scans for secrets or unsafe patterns.
      */
     async _scanSecurity() {
-        // Basic check for hardcoded API keys in memory/config
+        // Scan for accidentally committed real secrets (not placeholders — those are intentional).
+        // Placeholder strings like "your-openai-key-here" are valid config defaults — flagging them
+        // as a goal is useless because MAX has no key to substitute without the user providing one.
+        // If the user says "here's my key: sk-...", MAX can write it directly via file:write.
         const envPath = path.join(process.cwd(), 'config', 'api-keys.env');
         const content = await fs.readFile(envPath, 'utf8').catch(() => '');
-        
-        if (content.includes('your-key-here') || content.includes('your-openai-key')) {
+
+        // Flag lines that look like real exposed keys: sk-... / AIza... / hf_... etc.
+        // Skip comment lines and lines that are clearly placeholders.
+        const realKeyPattern = /^[A-Z_]+=(?:sk-[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_\-]{30,}|hf_[A-Za-z0-9]{20,})/m;
+        const lines = content.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+        const exposedLine = lines.find(l => realKeyPattern.test(l));
+
+        if (exposedLine) {
             this.max.goals.addGoal({
-                title: "Security: Replace placeholder API keys in config/api-keys.env",
-                priority: 0.9,
+                title: "Security: Real API key detected in config/api-keys.env — consider moving to env var",
+                priority: 0.5,  // informational — lower priority, human must decide
                 source: 'security_scanner',
                 type: 'security'
             });

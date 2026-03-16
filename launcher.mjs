@@ -100,15 +100,7 @@ function printInsight(insight) {
     if (_insights.length > 20) _insights.shift();
 
     const label = insight.label.replace(/\n.*/s, '').slice(0, 50);
-    if (_rl) {
-        const partial = _rl.line || '';
-        readline.clearLine(process.stdout, 0);
-        readline.cursorTo(process.stdout, 0);
-        console.log(`  💡 [${insight.source}] ${label}  — /expand ${id}`);
-        process.stdout.write('YOU: ' + partial);
-    } else {
-        console.log(`  💡 [${insight.source}] ${label}  — /expand ${id}`);
-    }
+    console.log(`  💡 [${insight.source}] ${label}  — /expand ${id}`);
 }
 
 function expandInsight(arg) {
@@ -175,11 +167,7 @@ async function acknowledgeQueued(max, queuedMsg) {
         if (!ack) return;
 
         if (_rl) {
-            const partial = _rl.line || '';
-            readline.clearLine(process.stdout, 0);
-            readline.cursorTo(process.stdout, 0);
-            console.log(`\nMAX: ${ack}\n`);
-            if (_spinnerTimer) process.stdout.write('YOU: ' + partial);
+            process.stdout.write(`\nMAX: ${ack}\n\n`);
         }
     } catch { /* best-effort — never block the main response */ }
 }
@@ -188,6 +176,22 @@ async function acknowledgeQueued(max, queuedMsg) {
 async function chatMode(max, opts) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
     _rl = rl;
+
+    // ── Background message queue ───────────────────────────────────────────
+    // Readline owns the terminal. Any console.log that fires while the user
+    // is typing (or while readline is active at all) tears the input line.
+    // Fix: buffer ALL background output while readline is active. Flush the
+    // queue cleanly just before the YOU: prompt is shown each turn.
+    const _origLog   = console.log.bind(console);
+    const _origError = console.error.bind(console);
+    const _bgQueue   = [];
+
+    console.log   = (...args) => { if (_rl) { _bgQueue.push(args); } else { _origLog(...args);   } };
+    console.error = (...args) => { if (_rl) { _bgQueue.push(args); } else { _origError(...args); } };
+
+    function flushBgQueue() {
+        while (_bgQueue.length > 0) _origLog(..._bgQueue.shift());
+    }
 
     let inputBuffer   = '';
     let bufferTimer   = null;
@@ -198,7 +202,10 @@ async function chatMode(max, opts) {
     let activePersona = opts.persona || null;
 
     const ask = () => {
-        if (!isThinking) process.stdout.write('YOU: ');
+        if (!isThinking) {
+            flushBgQueue();
+            process.stdout.write('YOU: ');
+        }
     };
 
     const processInput = async (input) => {
@@ -437,6 +444,44 @@ async function chatMode(max, opts) {
             isThinking = false; ask(); return;
         }
 
+        // ── /research — trigger frontier research cycle now ──────────────
+        if (line === '/research') {
+            if (!max.frontier) { console.log('[MAX] Frontier research not available.\n'); isThinking = false; ask(); return; }
+            console.log('[MAX] 🔬 Starting research cycle — this takes a few minutes...\n');
+            try {
+                const stop = startSpinner('researching');
+                const result = await max.frontier.runCycle();
+                stop();
+                if (result) {
+                    console.log(`\n[MAX] Research cycle done.`);
+                    console.log(`  Papers processed: ${result.papers}`);
+                    console.log(`  Engineering tasks generated: ${result.tasks}`);
+                    console.log(`  Results in: research.md, frontier_map.md, todo.md, system_report.md\n`);
+                } else {
+                    console.log('[MAX] Research cycle returned no results.\n');
+                }
+            } catch (err) { console.log(`[MAX] Research error: ${err.message}\n`); }
+            isThinking = false; ask(); return;
+        }
+
+        // ── /frontier — show current capability map ───────────────────────
+        if (line === '/frontier') {
+            const { readFileSync, existsSync } = await import('fs');
+            const mapPath = new URL('../frontier_map.md', import.meta.url).pathname.slice(1);
+            if (!existsSync(mapPath)) { console.log('[MAX] frontier_map.md not found — run /research first.\n'); isThinking = false; ask(); return; }
+            console.log('\n' + readFileSync(mapPath, 'utf8').slice(0, 3000) + '\n');
+            isThinking = false; ask(); return;
+        }
+
+        // ── /sysreport — show latest system report ────────────────────────
+        if (line === '/sysreport') {
+            const { readFileSync, existsSync } = await import('fs');
+            const rptPath = new URL('../system_report.md', import.meta.url).pathname.slice(1);
+            if (!existsSync(rptPath)) { console.log('[MAX] system_report.md not found — run /research first.\n'); isThinking = false; ask(); return; }
+            console.log('\n' + readFileSync(rptPath, 'utf8') + '\n');
+            isThinking = false; ask(); return;
+        }
+
         // ── /reflect — trigger deep reflection immediately ────────────────
         if (line === '/reflect') {
             if (!max.reflection) { console.log('[MAX] Reflection engine not available.\n'); isThinking = false; ask(); return; }
@@ -661,12 +706,38 @@ async function chatMode(max, opts) {
 
         // ── Chat ──
         try {
+            // Streaming: stop spinner on first token, print tokens live.
+            // If the response had tool calls (wasStreamed=false), print the final clean reply normally.
             const stop = startSpinner('thinking');
-            const res = await max.think(line, { persona: activePersona });
-            stop();
-            // Strip "MAX:" prefix if the model included it in its own response
-            const reply = (res.response || '').replace(/^(MAX|M\.A\.X):\s*/i, '').trimStart();
-            console.log('\nMAX: ' + reply);
+            let streamStarted = false;
+
+            const res = await max.think(line, {
+                persona: activePersona,
+                onToken: (token) => {
+                    if (!streamStarted) {
+                        stop();
+                        process.stdout.write('\nMAX: ');
+                        streamStarted = true;
+                    }
+                    process.stdout.write(token);
+                }
+            });
+
+            if (streamStarted) {
+                // Streamed response — just close the line.
+                // wasStreamed=false means tool calls happened; print clean final reply too.
+                process.stdout.write('\n');
+                if (!res.wasStreamed) {
+                    const reply = (res.response || '').replace(/^(?:(?:MAX|M\.A\.X)[:.]\s*)*/i, '').trimStart();
+                    console.log('\nMAX: ' + reply);
+                }
+            } else {
+                // No streaming happened (SOMA bridge path or fast tier) — print normally.
+                stop();
+                const reply = (res.response || '').replace(/^(?:(?:MAX|M\.A\.X)[:.]\s*)*/i, '').trimStart();
+                console.log('\nMAX: ' + reply);
+            }
+
             console.log(`\n[${res.persona} | tension ${(res.drive.tension * 100).toFixed(0)}%]\n`);
         } catch (err) { console.error('[MAX] Error:', err.message); }
         
@@ -696,43 +767,37 @@ async function chatMode(max, opts) {
             bufferTimer = null;
             const full = inputBuffer;
             inputBuffer = '';
-            resumeSpinner();
+            // resumeSpinner is intentionally NOT called here — processInput handles
+            // spinner state itself. Calling it here caused the spinner to flash
+            // mid-paste, making it look like the message had already sent.
             processInput(full);
-        }, 1500); // 1500ms — generous window for large Windows pastes
+        }, 3000); // 3000ms — wide window for slow Windows paste / multi-paragraph text
     });
 
     max.heartbeat.on('insight', printInsight);
     
     // ── Proactive direct messages from background systems ──
     max.heartbeat.on('message', (msg) => {
-        if (_rl) {
-            const partial = _rl.line || '';
-            readline.clearLine(process.stdout, 0);
-            readline.cursorTo(process.stdout, 0);
-            console.log(`\nMAX [background]: ${msg.text}`);
-            if (msg.details) console.log(`[${msg.details}]`);
-            console.log();
-            process.stdout.write('YOU: ' + partial);
-        } else {
-            console.log(`\nMAX [background]: ${msg.text}`);
-            if (msg.details) console.log(`[${msg.details}]`);
-            console.log();
-        }
+        console.log(`\nMAX [background]: ${msg.text}`);
+        if (msg.details) console.log(`[${msg.details}]`);
+        console.log();
     });
     
     console.log('\n' + '─'.repeat(60));
     console.log('  MAX is live. Dashboard: http://localhost:3100/dashboard');
     console.log('  Commands: /status, /persona <p>, /reason <q>, /run <cmd>, /ps, /kill <n>, /goals [list|add|clear], /reflect, /swarm, /debate, /expand, /artifacts, /pause, /resume, /quit');
+    console.log('  Research: /research (run cycle now), /frontier (capability map), /sysreport (latest report)');
     console.log('  Self-edit: /self edit <path> <instruction>  →  /self test  →  /self commit | /self rollback');
     console.log('─'.repeat(60) + '\n');
 
-    // Opening line — lets Barry know MAX is ready and responsive
-    const status = max.brain?.getStatus?.();
-    const backend = status?.smart?.backend || 'local';
-    const model   = status?.smart?.model   || 'unknown';
-    console.log(`MAX: Online. Running on ${backend} (${model}). What are we building?\n`);
-
-    ask();
+    // Delay the ready message so boot logs print first, then MAX speaks last
+    setTimeout(() => {
+        const status  = max.brain?.getStatus?.();
+        const backend = status?.smart?.backend || 'local';
+        const model   = status?.smart?.model   || 'unknown';
+        console.log(`\nMAX: Online. Running on ${backend} (${model}). What are we building?\n`);
+        ask();
+    }, 1500);
 }
 
 async function main() {

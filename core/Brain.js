@@ -1,26 +1,20 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // Brain.js — MAX's tiered LLM router
 //
-// Two tiers, each with its own fallback chain:
+// Tier routing:
 //
-//   fast  → small local Ollama model (OLLAMA_MODEL_FAST)
-//            fallback: smart tier (so nothing is ever silent)
+//   fast  → Ollama local model ONLY (heartbeats, web searches, yes/no, acks)
+//            fallback: DeepSeek if Ollama is down
 //
-//   smart → large Ollama model (OLLAMA_MODEL_SMART)
-//            → DeepSeek (DEEPSEEK_API_KEY)
-//            → OpenAI-compatible (OPENAI_API_KEY)
-//            fallback: fast tier
+//   smart → DeepSeek (deepseek-chat) — ONLY, no fallback
 //
-// Usage: brain.think(prompt, { tier: 'fast' | 'smart' })
-//        tier defaults to 'smart' — existing callers unchanged
+//   code  → DeepSeek (deepseek-reasoner) — ONLY, no fallback
 //
 // Config (config/api-keys.env):
-//   OLLAMA_MODEL_FAST=gemma3:4b        # background tasks
-//   OLLAMA_MODEL_SMART=llama3.1:8b     # deep reasoning (optional — falls to DeepSeek)
-//   DEEPSEEK_API_KEY=...               # smart tier (primary cloud brain)
-//   OPENAI_API_KEY=...                 # smart tier (fallback + vision)
-//   OPENAI_MODEL=gpt-4o                # smart tier model override
-//   OPENAI_BASE_URL=...                # optional — for local OpenAI-compatible servers
+//   OLLAMA_MODEL_FAST=qwen3:1.5b       # fast tier — heartbeats, web search, background
+//   DEEPSEEK_API_KEY=...               # smart + code tier
+//   DEEPSEEK_MODEL=deepseek-chat       # smart tier model (default)
+//   DEEPSEEK_CODE_MODEL=deepseek-reasoner  # code tier model (default)
 // ═══════════════════════════════════════════════════════════════════════════
 
 import fetch from 'node-fetch';
@@ -28,36 +22,35 @@ import fetch from 'node-fetch';
 export class Brain {
     constructor(config = {}) {
         this.ollamaUrl    = config.ollamaUrl || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-        this.timeout      = config.timeout     || 240_000;  // smart tier — 4 mins
-        this.fastTimeout  = config.fastTimeout || 180_000;  // fast tier — 3 mins
+        this.timeout      = config.timeout     || 240_000;  // smart/code tier — 4 mins
+        this.fastTimeout  = config.fastTimeout || 30_000;   // fast tier — 30s max (heartbeats/acks)
 
         // ── Fast tier config ─────────────────────────────────────────────
-        // Small local model — low latency, used for background tasks
+        // Local Ollama ONLY — heartbeats, yes/no checks, quick acks, verification
         this._fast = {
             ollamaModel: config.ollamaModelFast
                 || process.env.OLLAMA_MODEL_FAST
                 || config.ollamaModel
                 || process.env.OLLAMA_MODEL
-                || 'qwen3:8b',
+                || 'qwen3:1.5b',
             ready:   false,
             backend: null   // 'ollama' | null
         };
 
         // ── Smart tier config ────────────────────────────────────────────
-        // Best available model — used for user chat, reasoning, swarm, debate
+        // DeepSeek only — no OpenAI, no Ollama.
         this._smart = {
-            ollamaModel: config.ollamaModelSmart
-                || process.env.OLLAMA_MODEL_SMART
-                || null,   // null = skip Ollama for smart tier, go straight to API
-            openaiKey:   config.openaiKey  || process.env.OPENAI_API_KEY,
-            openaiUrl:   config.openaiUrl  || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
-            openaiModel: config.openaiModel || process.env.OPENAI_MODEL   || 'gpt-4o',
-            deepseekKey: config.deepseekKey || process.env.DEEPSEEK_API_KEY,
-            deepseekUrl: config.deepseekUrl || process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
-            deepseekModel: config.deepseekModel || process.env.DEEPSEEK_MODEL || 'deepseek-reasoner',
+            deepseekKey:       config.deepseekKey       || process.env.DEEPSEEK_API_KEY,
+            deepseekUrl:       config.deepseekUrl       || process.env.DEEPSEEK_BASE_URL  || 'https://api.deepseek.com',
+            deepseekModel:     config.deepseekModel     || process.env.DEEPSEEK_MODEL      || 'deepseek-chat',
+            deepseekCodeModel: config.deepseekCodeModel || process.env.DEEPSEEK_CODE_MODEL || 'deepseek-reasoner',
             ready:   false,
-            backend: null   // 'ollama' | 'openai' | 'deepseek' | null
+            backend: null   // 'deepseek' | null
         };
+
+        // Circuit breaker — after N fast-tier timeouts, stop hitting Ollama this session
+        this._fastFailures = 0;
+        this._fastDisabled = false;
 
         // Convenience: _ready is true if at least one tier works
         this._ready = false;
@@ -65,38 +58,31 @@ export class Brain {
 
     // ─── Initialize — probe all backends ─────────────────────────────────
     async initialize() {
-        const ollamaOk = await this._checkOllama();
+        const ollamaModels = await this._checkOllama();
 
-        // Fast tier
-        if (ollamaOk) {
-            this._fast.ready   = true;
-            this._fast.backend = 'ollama';
-            console.log(`[Brain] ⚡ Fast tier  — Ollama / ${this._fast.ollamaModel}`);
+        // Fast tier — only mark ready if the specific model is actually pulled
+        if (ollamaModels) {
+            const modelName = this._fast.ollamaModel.split(':')[0].toLowerCase();
+            const hasModel  = ollamaModels.some(m => m.toLowerCase().includes(modelName));
+            if (hasModel) {
+                this._fast.ready   = true;
+                this._fast.backend = 'ollama';
+                console.log(`[Brain] ⚡ Fast tier  — Ollama / ${this._fast.ollamaModel}`);
+            } else {
+                console.log(`[Brain] ⚠️  Fast tier  — Ollama running but model "${this._fast.ollamaModel}" not found (run: ollama pull ${this._fast.ollamaModel})`);
+            }
         } else {
-            console.log('[Brain] ⚠️  Fast tier  — Ollama unavailable (will use smart as fallback)');
+            console.log('[Brain] ⚠️  Fast tier  — Ollama not running (fast calls will use DeepSeek)');
         }
 
-        // Smart tier — try in order: Ollama large → DeepSeek → OpenAI
-        if (this._smart.ollamaModel && ollamaOk) {
-            this._smart.ready   = true;
-            this._smart.backend = 'ollama';
-            console.log(`[Brain] 🧠 Smart tier — Ollama / ${this._smart.ollamaModel}`);
-        } else if (this._validKey(this._smart.deepseekKey)) {
+        // Smart tier — DeepSeek only.
+        if (this._validKey(this._smart.deepseekKey)) {
             this._smart.ready   = true;
             this._smart.backend = 'deepseek';
             console.log(`[Brain] 🧠 Smart tier — DeepSeek / ${this._smart.deepseekModel}`);
-        } else if (this._validKey(this._smart.openaiKey)) {
-            this._smart.ready   = true;
-            this._smart.backend = 'openai';
-            console.log(`[Brain] 🧠 Smart tier — OpenAI-compatible / ${this._smart.openaiModel}`);
-        } else if (ollamaOk) {
-            // No API keys — fall back smart to the same Ollama model as fast
-            this._smart.ready        = true;
-            this._smart.backend      = 'ollama';
-            this._smart.ollamaModel  = this._fast.ollamaModel;
-            console.log(`[Brain] 🧠 Smart tier — Ollama / ${this._smart.ollamaModel} (same as fast — add API key to upgrade)`);
+            console.log(`[Brain] 💻 Code  tier — DeepSeek / ${this._smart.deepseekCodeModel}`);
         } else {
-            console.log('[Brain] ⚠️  Smart tier — no backend available');
+            console.log('[Brain] ⚠️  Smart tier — no API key (add DEEPSEEK_API_KEY to config/api-keys.env)');
         }
 
         this._ready = this._fast.ready || this._smart.ready;
@@ -108,7 +94,8 @@ export class Brain {
 
     // ─── Core inference ───────────────────────────────────────────────────
     // tier: 'fast' | 'smart' | 'code' — code goes straight to DeepSeek, bypassing local Ollama
-    async think(prompt, { systemPrompt = '', temperature = 0.7, maxTokens = 2048, tier = 'smart' } = {}) {
+    // onToken: optional (token: string) => void callback for streaming output
+    async think(prompt, { systemPrompt = '', temperature = 0.7, maxTokens = 2048, tier = 'smart', onToken = null } = {}) {
         if (!this._ready) throw new Error('Brain not initialized — call initialize() first');
 
         // Hard token budget guard — prevents context overflow errors.
@@ -131,94 +118,59 @@ export class Brain {
         if (tier === 'fast') {
             result = await this._runFast(prompt, systemPrompt, temperature, maxTokens);
         } else if (tier === 'code') {
-            result = await this._runCode(prompt, systemPrompt, temperature, maxTokens);
+            result = await this._runCode(prompt, systemPrompt, temperature, maxTokens, onToken);
         } else {
-            result = await this._runSmart(prompt, systemPrompt, temperature, maxTokens);
+            result = await this._runSmart(prompt, systemPrompt, temperature, maxTokens, onToken);
         }
 
         // Return object with text and performance metadata
         return result;
     }
 
-    // ─── Fast tier execution ──────────────────────────────────────────────
+    // ─── Fast tier execution — Ollama only, falls back to DeepSeek ───────
     async _runFast(prompt, systemPrompt, temperature, maxTokens) {
-        if (this._fast.ready && this._fast.backend === 'ollama') {
+        if (this._fast.ready && this._fast.backend === 'ollama' && !this._fastDisabled) {
             try {
                 return await this._ollama(this._fast.ollamaModel, prompt, systemPrompt, temperature, maxTokens, this.fastTimeout);
             } catch (err) {
-                console.warn(`[Brain] Fast tier error: ${err.message} — falling back to smart`);
-                // skipOllama=true: Ollama just failed, don't try it again in smart's fallback chain
-                return this._runSmart(prompt, systemPrompt, temperature, Math.min(maxTokens, 512), true);
+                this._fastFailures++;
+                if (this._fastFailures >= 2) {
+                    this._fastDisabled = true;
+                    console.warn(`[Brain] ⚡ Fast tier disabled for this session — Ollama unresponsive (using DeepSeek for fast calls)`);
+                } else {
+                    console.warn(`[Brain] Fast tier (Ollama) error: ${err.message} — falling back to DeepSeek`);
+                }
             }
         }
+        // Ollama down/disabled — use DeepSeek with capped tokens
         return this._runSmart(prompt, systemPrompt, temperature, Math.min(maxTokens, 512));
     }
 
-    // ─── Code tier — DeepSeek first, qwen3:8b fallback ───────────────────
-    async _runCode(prompt, systemPrompt, temperature, maxTokens) {
-        const t = this._smart;
-        // DeepSeek is strong at code — try it first
-        if (this._validKey(t.deepseekKey)) {
-            try {
-                return await this._deepseek(prompt, systemPrompt, temperature, maxTokens);
-            } catch (err) {
-                console.warn(`[Brain] DeepSeek error: ${err.message} — trying next`);
-            }
+    // ─── Code tier — deepseek-reasoner (deep thinking for code) ──────────
+    async _runCode(prompt, systemPrompt, temperature, maxTokens, onToken = null) {
+        if (this._validKey(this._smart.deepseekKey)) {
+            return this._deepseek(prompt, systemPrompt, temperature, maxTokens, this._smart.deepseekCodeModel, onToken);
         }
-        if (this._validKey(t.openaiKey)) {
-            try {
-                return await this._openai(prompt, systemPrompt, temperature, maxTokens);
-            } catch (err) {
-                console.warn(`[Brain] OpenAI error: ${err.message} — falling back to local`);
-            }
-        }
-        // Fallback: local qwen3:8b
-        return this._runSmart(prompt, systemPrompt, temperature, maxTokens);
+        throw new Error('Code tier unavailable — add DEEPSEEK_API_KEY to config/api-keys.env');
     }
 
-    // ─── Smart tier execution ─────────────────────────────────────────────
-    // skipOllama: true when called as fallback from _runFast (Ollama already failed)
-    async _runSmart(prompt, systemPrompt, temperature, maxTokens, skipOllama = false) {
-        const t = this._smart;
-
-        if (!skipOllama && t.ready && t.backend === 'ollama' && t.ollamaModel) {
-            try {
-                return await this._ollama(t.ollamaModel, prompt, systemPrompt, temperature, maxTokens);
-            } catch (err) {
-                console.warn(`[Brain] Smart Ollama error: ${err.message} — trying next`);
-            }
+    // ─── Smart tier execution — DeepSeek only ────────────────────────────
+    async _runSmart(prompt, systemPrompt, temperature, maxTokens, onToken = null) {
+        if (this._validKey(this._smart.deepseekKey)) {
+            return this._deepseek(prompt, systemPrompt, temperature, maxTokens, null, onToken);
         }
-
-        if (this._validKey(t.deepseekKey)) {
-            try {
-                return await this._deepseek(prompt, systemPrompt, temperature, maxTokens);
-            } catch (err) {
-                console.warn(`[Brain] DeepSeek error: ${err.message} — trying next`);
-            }
-        }
-
-        if (this._validKey(t.openaiKey)) {
-            try {
-                return await this._openai(prompt, systemPrompt, temperature, maxTokens);
-            } catch (err) {
-                console.warn(`[Brain] OpenAI error: ${err.message} — trying fast fallback`);
-            }
-        }
-
-        // Last resort: fast Ollama — but only if it hasn't already failed this request
-        if (!skipOllama && this._fast.ready) {
-            return this._ollama(this._fast.ollamaModel, prompt, systemPrompt, temperature, Math.min(maxTokens, 512));
-        }
-
-        throw new Error('All LLM backends failed');
+        throw new Error('Smart tier unavailable — add DEEPSEEK_API_KEY to config/api-keys.env');
     }
 
     // ─── Backend implementations ──────────────────────────────────────────
-    async _deepseek(prompt, systemPrompt, temperature, maxTokens) {
+    async _deepseek(prompt, systemPrompt, temperature, maxTokens, modelOverride = null, onToken = null) {
         const start = Date.now();
         const messages = [];
         if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
         messages.push({ role: 'user', content: prompt });
+
+        const model = modelOverride || this._smart.deepseekModel;
+        const useStream = !!onToken;
 
         const res = await fetch(`${this._smart.deepseekUrl}/chat/completions`, {
             method:  'POST',
@@ -226,18 +178,62 @@ export class Brain {
                 'Content-Type':  'application/json',
                 'Authorization': `Bearer ${this._smart.deepseekKey}`
             },
-            body:   JSON.stringify({ 
-                model: this._smart.deepseekModel, 
-                messages, 
-                temperature, 
-                max_tokens: maxTokens 
+            body: JSON.stringify({
+                model,
+                messages,
+                temperature,
+                max_tokens: maxTokens,
+                stream: useStream
             }),
             signal: AbortSignal.timeout(this.timeout)
         });
+
         if (!res.ok) {
             const err = await res.text();
             throw new Error(`DeepSeek ${res.status}: ${err}`);
         }
+
+        if (useStream) {
+            // SSE streaming — fire onToken per chunk, return full text when done
+            let fullText = '';
+            let totalTokens = 0;
+            const decoder = new TextDecoder();
+            let partial = '';  // carry-over for chunks split across SSE boundaries
+
+            for await (const chunk of res.body) {
+                partial += decoder.decode(chunk, { stream: true });
+                const lines = partial.split('\n');
+                // Keep the last (potentially incomplete) line as carry-over
+                partial = lines.pop();
+
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    const raw = line.slice(6).trim();
+                    if (raw === '[DONE]') continue;
+                    try {
+                        const parsed = JSON.parse(raw);
+                        const token = parsed.choices?.[0]?.delta?.content;
+                        if (token) {
+                            fullText += token;
+                            onToken(token);
+                        }
+                        if (parsed.usage) totalTokens = parsed.usage.total_tokens || 0;
+                    } catch { /* partial JSON chunk — skip */ }
+                }
+            }
+
+            return {
+                text: fullText.trim(),
+                metadata: {
+                    model,
+                    tokens:  totalTokens,
+                    latency: Date.now() - start,
+                    backend: 'deepseek'
+                }
+            };
+        }
+
+        // Non-streaming path (unchanged)
         const data = await res.json();
         return {
             text: data.choices?.[0]?.message?.content?.trim() || '',
@@ -297,44 +293,17 @@ export class Brain {
         };
     }
 
-    async _openai(prompt, systemPrompt, temperature, maxTokens) {
-        const start = Date.now();
-        const messages = [];
-        if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
-        messages.push({ role: 'user', content: prompt });
-
-        const res = await fetch(`${this._smart.openaiUrl}/chat/completions`, {
-            method:  'POST',
-            headers: {
-                'Content-Type':  'application/json',
-                'Authorization': `Bearer ${this._smart.openaiKey}`
-            },
-            body:   JSON.stringify({ model: this._smart.openaiModel, messages, temperature, max_tokens: maxTokens }),
-            signal: AbortSignal.timeout(this.timeout)
-        });
-        if (!res.ok) {
-            const err = await res.text();
-            throw new Error(`OpenAI ${res.status}: ${err}`);
-        }
-        const data = await res.json();
-        return {
-            text: data.choices?.[0]?.message?.content?.trim() || '',
-            metadata: {
-                model:   data.model,
-                tokens:  data.usage?.total_tokens || 0,
-                latency: Date.now() - start,
-                backend: 'openai'
-            }
-        };
-    }
 
     // ─── Helpers ──────────────────────────────────────────────────────────
+    // Returns array of model name strings if Ollama is reachable, null otherwise
     async _checkOllama() {
         try {
             const res = await fetch(`${this.ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
-            return res.ok;
+            if (!res.ok) return null;
+            const data = await res.json();
+            return (data.models || []).map(m => m.name || m.model || '');
         } catch {
-            return false;
+            return null;
         }
     }
 
@@ -343,16 +312,11 @@ export class Brain {
     }
 
     getStatus() {
-        let smartModel = this._smart.ollamaModel;
-        if (!smartModel) {
-            if (this._smart.backend === 'deepseek') smartModel = this._smart.deepseekModel;
-            else if (this._smart.backend === 'openai')   smartModel = this._smart.openaiModel;
-        }
-
         return {
-            ready:       this._ready,
-            fast:  { backend: this._fast.backend,  model: this._fast.ollamaModel,  ready: this._fast.ready  },
-            smart: { backend: this._smart.backend, model: smartModel, ready: this._smart.ready }
+            ready: this._ready,
+            fast:  { backend: this._fast.backend,  model: this._fast.ollamaModel,     ready: this._fast.ready  },
+            smart: { backend: this._smart.backend, model: this._smart.deepseekModel,  ready: this._smart.ready },
+            code:  { backend: this._smart.backend, model: this._smart.deepseekCodeModel, ready: this._smart.ready },
         };
     }
 }
