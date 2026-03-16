@@ -126,7 +126,7 @@ export const DiscordTool = {
                     guilds:   client.guilds.cache.size,
                     channels: channels.slice(0, 20),
                     helloSent,
-                    message: `Connected as ${client.user.tag} — ${client.guilds.cache.size} server(s)`
+                    message: `Connected as ${client.user.tag} — ${client.guilds.cache.size} server(s). Use /discord send #channel-name to post.`
                 };
             } catch (err) {
                 return { success: false, error: `Failed to connect: ${err.message}` };
@@ -134,22 +134,43 @@ export const DiscordTool = {
         },
 
         // ── Send a message to a channel ───────────────────────────────────
-        async send({ channelId, message }) {
+        async send({ channelId, channelName, message }) {
             if (!_connected || !_client) return { success: false, error: 'Not connected — run setup first' };
             try {
-                const ch = await _client.channels.fetch(channelId);
+                let ch;
+                if (channelName && !channelId) {
+                    // Find channel by name across all guilds
+                    const name = channelName.replace(/^#/, '').toLowerCase();
+                    for (const guild of _client.guilds.cache.values()) {
+                        const found = guild.channels.cache.find(c => c.isTextBased() && c.name.toLowerCase() === name);
+                        if (found) { ch = found; break; }
+                    }
+                    if (!ch) return { success: false, error: `Channel #${channelName} not found` };
+                } else {
+                    ch = await _client.channels.fetch(channelId);
+                }
                 const sent = await ch.send(message);
-                return { success: true, messageId: sent.id };
+                return { success: true, messageId: sent.id, channel: ch.name };
             } catch (err) {
                 return { success: false, error: err.message };
             }
         },
 
         // ── Read recent messages from a channel ───────────────────────────
-        async read({ channelId, limit = 10 }) {
+        async read({ channelId, channelName, limit = 10 }) {
             if (!_connected || !_client) return { success: false, error: 'Not connected' };
             try {
-                const ch = await _client.channels.fetch(channelId);
+                let ch;
+                if (channelName && !channelId) {
+                    const name = channelName.replace(/^#/, '').toLowerCase();
+                    for (const guild of _client.guilds.cache.values()) {
+                        const found = guild.channels.cache.find(c => c.isTextBased() && c.name.toLowerCase() === name);
+                        if (found) { ch = found; break; }
+                    }
+                    if (!ch) return { success: false, error: `Channel #${channelName} not found` };
+                } else {
+                    ch = await _client.channels.fetch(channelId);
+                }
                 const fetched = await ch.messages.fetch({ limit: Math.min(limit, 50) });
                 return {
                     success: true,

@@ -19,6 +19,7 @@ import { ToolCreator }        from './ToolCreator.js';
 import { EvolutionArbiter }   from './EvolutionArbiter.js';
 import { SelfCodeInspector }  from './SelfCodeInspector.js';
 import { ReflectionEngine }   from './ReflectionEngine.js';
+import { FrontierResearch }   from './FrontierResearch.js';
 import { PersonaEngine }      from '../personas/PersonaEngine.js';
 import { ToolRegistry }       from '../tools/ToolRegistry.js';
 import { FileTools }          from '../tools/FileTools.js';
@@ -312,6 +313,9 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
 
         this.reflection = new ReflectionEngine(this.brain, this.goals, this.outcomes, this.kb);
 
+        // FrontierResearch — daily AI research loop → capability gap analysis → engineering tasks
+        this.frontier = new FrontierResearch(this.brain, this.tools, this.goals, this.kb);
+
         this._ready = true;
 
         const status = this.brain.getStatus();
@@ -366,6 +370,17 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             every:   '12h',
             type:    'custom',
             handler: () => this.reflection?.dream(this.kb).catch(() => {})
+        });
+
+        // Frontier research — daily AI research cycle → gap analysis → engineering tasks
+        this.scheduler.addJob({
+            id:      'frontier_research',
+            label:   'Frontier: crawl AI research, update capability map, generate tasks',
+            every:   '24h',
+            type:    'custom',
+            handler: () => this.frontier?.runCycle().catch(err =>
+                console.warn('[MAX] Frontier research cycle failed:', err.message)
+            )
         });
 
         // ─── Truly non-blocking background tasks ───
@@ -486,6 +501,10 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
         const brainTier = options.tier ?? (isCodingTask ? 'code' : 'smart');
 
         // SOMA bridge — use QuadBrain if SOMA is available (priority-0)
+        // onToken streaming: only for local brain path — SOMA bridge doesn't support it
+        const onToken = options.onToken ?? null;
+        let wasStreamed = false;
+
         let result;
         if (this.soma?.available) {
             try {
@@ -501,12 +520,21 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             }
         }
         if (!result) {
+            // Stream tokens directly to caller — live output as DeepSeek generates.
+            // If the response ends up containing TOOL: calls, the raw lines will appear
+            // briefly in the terminal; the caller uses wasStreamed to decide whether to
+            // also print the final clean response.
             result = await this.brain.think(historyText, {
                 systemPrompt: finalSystemPrompt + memoryContext + kbContext,
                 temperature:  options.temperature ?? 0.7,
                 maxTokens:    maxTok,
-                tier:         brainTier
+                tier:         brainTier,
+                onToken
             });
+
+            // wasStreamed=true means the streamed output IS the clean final response
+            // wasStreamed=false means tool calls were present — caller must print clean reply
+            wasStreamed = !!(onToken && !result.text.includes('TOOL:'));
         }
 
         let response = result.text;
@@ -628,10 +656,11 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
         this._chatBusy = false;
 
         return {
-            response:  finalResponse,
-            persona:   selectedPersona.id,
-            drive:     this.drive.getStatus(),
-            telemetry: result.metadata
+            response:    finalResponse,
+            persona:     selectedPersona.id,
+            drive:       this.drive.getStatus(),
+            telemetry:   result.metadata,
+            wasStreamed  // true = caller already received tokens via onToken, skip re-printing
         };
     }
 
@@ -704,59 +733,109 @@ Think deeper about the engineering implications. What are edge cases, gotchas, o
             process.stdout.write('\n');
         }
 
-        const lines  = text.split('\n');
+        // ── Multi-line-aware TOOL: extraction ───────────────────────────
+        // Split line-by-line but accumulate continuation lines when JSON
+        // params span multiple lines (brace depth > 0 after first line).
+        // This handles file:write with large content that DeepSeek may
+        // emit across multiple lines rather than as a single escaped string.
+        const segments = [];  // { type: 'text'|'tool', content: string }
+        const lines = text.split('\n');
+        let i = 0;
+
+        while (i < lines.length) {
+            const trimmed = lines[i].trim();
+            if (trimmed.startsWith('TOOL:')) {
+                // Accumulate until we have balanced braces (complete JSON)
+                let accumulated = trimmed;
+                let depth = (trimmed.match(/\{/g) || []).length - (trimmed.match(/\}/g) || []).length;
+
+                // If params don't start with { it's likely a single-line non-JSON arg
+                // (handled by executeLLMToolCall's fallback) — don't accumulate
+                const hasJsonParams = /TOOL:[^:]+:[^:]+:\s*\{/.test(trimmed);
+
+                while (hasJsonParams && depth > 0 && i + 1 < lines.length) {
+                    i++;
+                    accumulated += '\n' + lines[i];
+                    depth += (lines[i].match(/\{/g) || []).length - (lines[i].match(/\}/g) || []).length;
+                }
+
+                segments.push({ type: 'tool', content: accumulated });
+            } else {
+                segments.push({ type: 'text', content: lines[i] });
+            }
+            i++;
+        }
+
+        // ── Parallel execution for independent reads ─────────────────────
+        // If ALL tool calls in this response are read-only, run them with
+        // Promise.all for free parallelism (e.g. MAX reading 5 files before
+        // deciding what to change). Writes execute sequentially — always.
+        const READ_ONLY = new Set(['file:read', 'file:list', 'file:search', 'file:grep',
+                                   'web:search', 'git:status', 'git:log', 'git:diff', 'git:branch']);
+        const isReadOnly = (raw) => {
+            const m = raw.match(/^TOOL:([^:]+):([^:]+):/);
+            return m && READ_ONLY.has(`${m[1]}:${m[2]}`);
+        };
+
+        const toolSegs    = segments.filter(s => s.type === 'tool');
+        const allReadOnly = toolSegs.length > 1 && toolSegs.every(s => isReadOnly(s.content));
+
+        // ── Execute one tool segment, return formatted result string ──────
+        const execSeg = async (seg) => {
+            const trimmed = seg.content.trim();
+
+            // Print notification for file mutations
+            const fileWriteMatch = trimmed.match(/^TOOL:file:(write|replace):(\{[\s\S]+)/);
+            if (fileWriteMatch) {
+                try {
+                    const params = JSON.parse(fileWriteMatch[2].trim());
+                    const op     = fileWriteMatch[1];
+                    const fp     = params.filePath || params.path || '?';
+                    const label  = op === 'write' ? '✏️  write' : '✏️  replace';
+                    process.stdout.write(`  \x1b[33m${label}\x1b[0m  \x1b[1m${fp}\x1b[0m\n`);
+                } catch { /* non-fatal */ }
+            }
+
+            const toolResult = await this.tools.executeLLMToolCall(trimmed);
+            if (!toolResult) return seg.content;
+
+            let resultStr = typeof toolResult === 'string'
+                ? toolResult
+                : JSON.stringify(toolResult);
+
+            // Context budget guard — cap at 8KB; artifact-ize larger results
+            const CONTEXT_CAP  = 8_000;
+            const isArtifactOp = trimmed.startsWith('TOOL:artifacts:');
+
+            if (resultStr.length > CONTEXT_CAP) {
+                if (isArtifactOp) {
+                    resultStr = resultStr.slice(0, CONTEXT_CAP)
+                        + `\n\n[...TRUNCATED — ${Math.round(resultStr.length / 1000)}KB total. `
+                        + `Ask specific questions about sections rather than reading everything at once.]`;
+                } else {
+                    const name    = trimmed.split(':').slice(1, 3).join('.') || 'tool_output';
+                    const pointer = this.artifacts.store(name, resultStr, 'tool_result');
+                    resultStr = pointer;
+                }
+            }
+
+            return `[Tool result: ${resultStr}]`;
+        };
+
+        // ── Build result array ─────────────────────────────────────────────
         const result = [];
 
-        for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed.startsWith('TOOL:')) {
-                // ── File write/replace — print a visible notification ────
-                const fileWriteMatch = trimmed.match(/^TOOL:file:(write|replace):(.+)/s);
-                if (fileWriteMatch) {
-                    try {
-                        const params = JSON.parse(fileWriteMatch[2].trim());
-                        const op     = fileWriteMatch[1];
-                        const fp     = params.filePath || params.path || '?';
-                        const label  = op === 'write' ? '✏️  write' : '✏️  replace';
-                        process.stdout.write(`  \x1b[33m${label}\x1b[0m  \x1b[1m${fp}\x1b[0m\n`);
-                    } catch { /* non-fatal — params might be malformed */ }
-                }
-
-                const toolResult = await this.tools.executeLLMToolCall(trimmed);
-                if (toolResult) {
-                    let resultStr = typeof toolResult === 'string'
-                        ? toolResult
-                        : JSON.stringify(toolResult);
-
-                    // ─── Context budget guard ─────────────────────────────
-                    // Hard cap: nothing larger than 8KB enters the LLM context
-                    // as raw text — regardless of which tool produced it.
-                    // Artifact tool results get a preview + retrieval hint.
-                    // Everything else gets artifact-ized (pointer only).
-                    const CONTEXT_CAP   = 8_000;
-                    const isArtifactOp  = trimmed.startsWith('TOOL:artifacts:');
-
-                    if (resultStr.length > CONTEXT_CAP) {
-                        if (isArtifactOp) {
-                            // Show a useful preview — don't re-store as another artifact
-                            const preview = resultStr.slice(0, CONTEXT_CAP);
-                            resultStr = preview
-                                + `\n\n[...TRUNCATED — ${Math.round(resultStr.length / 1000)}KB total. `
-                                + `Ask specific questions about sections rather than reading everything at once.]`;
-                        } else {
-                            // Store as artifact — only the pointer enters context
-                            const name    = trimmed.split(':').slice(1, 3).join('.') || 'tool_output';
-                            const pointer = this.artifacts.store(name, resultStr, 'tool_result');
-                            resultStr = pointer;
-                        }
-                    }
-
-                    result.push(`[Tool result: ${resultStr}]`);
-                } else {
-                    result.push(line);
-                }
-            } else {
-                result.push(line);
+        if (allReadOnly) {
+            // Kick all reads off in parallel, maintain original ordering in results
+            const toolResults = await Promise.all(toolSegs.map(execSeg));
+            let toolIdx = 0;
+            for (const seg of segments) {
+                result.push(seg.type === 'tool' ? toolResults[toolIdx++] : seg.content);
+            }
+        } else {
+            // Sequential — writes and mixed batches
+            for (const seg of segments) {
+                result.push(seg.type === 'tool' ? await execSeg(seg) : seg.content);
             }
         }
 
@@ -839,6 +918,13 @@ SHELL requests ("run the tests", "start the server", "install X", "build it", "w
 → Use TOOL:shell:ps to see what's running
 → Commands print live to the terminal — the user sees output as it runs
 → You can run git, npm, python, node, any installed tool directly
+→ IMPORTANT: This is Windows. Use PowerShell/cmd syntax ONLY. Never use Unix commands.
+  ✗ WRONG: ls, find, grep, xargs, head, tail, cat, which, rm, cp, mv
+  ✓ CORRECT: dir, Get-ChildItem, Select-String, Where-Object, Get-Content, node, npm, git, powershell -Command "..."
+  ✓ Check if program exists: where git   (NOT which git)
+  ✓ List files: TOOL:shell:run:{"command":"dir /B"}
+  ✓ Find text:  TOOL:shell:run:{"command":"powershell -Command \"Get-ChildItem -Recurse | Select-String 'pattern'\""}
+  ✓ Read file:  Use TOOL:file:read instead of shell for reading files
 
 PLANNING (complex multi-step actions):
 → For ANY action involving 3+ steps, multiple files, or significant changes:
@@ -850,7 +936,14 @@ PLANNING (complex multi-step actions):
   2. Edit Y to add the new field
   3. Run tests to verify
 → The plan is shown to the user BEFORE tools run so they can interrupt if needed
-→ Simple one-step actions (read one file, run one command) do NOT need a plan`;
+→ Simple one-step actions (read one file, run one command) do NOT need a plan
+
+GROUNDING — NEVER FABRICATE:
+→ If a tool fails or returns an error, report the exact error. Do NOT invent what the output "should" look like.
+→ If you cannot read a file, say "I couldn't read X". Never generate fake file contents.
+→ If a command fails, say "command failed with: <error>". Never generate fake command output.
+→ When uncertain about the state of the system, use a tool to check — do not guess.
+→ "SOMA 1T", "SOMA has X running", etc. — never claim SOMA/system state without tool verification.`;
 
 
         return state;

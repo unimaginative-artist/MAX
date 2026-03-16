@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check core/AgentLoop.js && node --check core/Heartbeat.js && node --check core/Diagnostics.js && node --check core/SomaBridge.js && node --check core/MAX.js && echo \"All syntax OK\")",
+      "Bash(node --check core/GoalEngine.js && node --check core/AgentLoop.js && node --check core/SomaBridge.js && node --check core/MAX.js && echo \"All OK\")",
+      "Bash(node --check core/MAX.js && node --check core/CuriosityEngine.js && node --check core/Heartbeat.js && node --check core/SkillLibrary.js && node --check server/server.js && node --check launcher.mjs && echo \"All OK\")",
+      "Bash(node --check tools/ShellTool.js && node --check tools/ToolRegistry.js && node --check core/MAX.js && echo \"All OK\")",
+      "Bash(node --check core/AgentLoop.js && echo \"OK\")",
+      "Read(//c/Users/barry/Desktop/SOMA/core/**)",
+      "Bash(grep -i \"\\\\.js$\")",
+      "Bash(grep:*)",
+      "Bash(git rm:*)",
+      "Bash(git add:*)",
+      "Bash(ls:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git stash:*)",
+      "Bash(ollama list:*)",
+      "Bash(curl:*)",
+      "Bash(ollama rm:*)",
+      "Bash(cd:*)"
+    ]
+  }
+}

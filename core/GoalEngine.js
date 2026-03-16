@@ -159,14 +159,18 @@ ${goal.description ? `DETAILS: ${goal.description}\n` : ''}${toolLine}${skillBlo
 Rules:
 - Each step must use one of the listed tools
 - Actions must be specific and executable (e.g. "run: npm install" not "install dependencies")
-- Success criterion must be observable (e.g. "exit code 0" not "it works")
+- Success criterion must be text that should appear in the output (e.g. "output contains 'git version'" not "exit code 0")
+  Use "completed" as the success value for write/create steps where there is no expected output text
 - Set dependsOn to step numbers this step requires output from (empty array if independent)
 - Independent steps (dependsOn: []) can run in parallel — use this for research, reads, and searches
 
 Tool-specific params (REQUIRED for correct execution):
 - file tool:  include "params": {"filePath": "path/to/file.js"} for read/write/replace/delete
               include "action_name": "read" | "write" | "replace" | "list" | "search" | "delete"
-- shell tool: include "params": {"command": "exact shell command"} — action is just a description
+- shell tool: include "action_name": "run", "params": {"command": "exact shell command"}
+  WINDOWS ONLY — never use Unix commands (ls/find/grep/xargs/head/cat/rm/cp/mv)
+  Use: dir, powershell -Command "Get-ChildItem ...", node, npm, git
+  NEVER add >/dev/null, >nul, or 2>&1 redirects — run commands plainly
 - web tool:   include "params": {"query": "search terms"} for search, or {"url": "..."} for fetch
 - git tool:   include "params": {"command": "status"} or similar
 - brain tool: no params needed — action is passed directly as a prompt
@@ -187,7 +191,7 @@ Return a JSON array of step objects:
 Return ONLY the JSON array.`;
 
         try {
-            const result = await this.brain.think(prompt, { temperature: 0.15, maxTokens: 600, tier: 'fast' });
+            const result = await this.brain.think(prompt, { temperature: 0.15, maxTokens: 600, tier: 'smart' });
             const raw    = result.text;
             const match  = raw.match(/\[[\s\S]*\]/);
             if (match) {

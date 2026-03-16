@@ -13,6 +13,7 @@ export class SomaBridge {
         this._lastCheck  = 0;
         this._checkEvery = 60_000;  // re-probe every 60s if it was down
         this.stats       = { calls: 0, hits: 0, errors: 0, avgLatencyMs: 0 };
+        this._offlineLogged = false;  // suppress repeated offline warnings
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
@@ -37,9 +38,20 @@ export class SomaBridge {
         } catch {
             this._available = false;
         }
+        const wasAvailable = this._ready;
         this._ready     = this._available;
         this._lastCheck = Date.now();
-        console.log(`[SomaBridge] ${this._available ? '✅ SOMA connected — using QuadBrain' : '⚠️  SOMA offline — using local brain'}`);
+
+        if (this._available) {
+            // Log every time SOMA comes (back) online
+            console.log('[SomaBridge] ✅ SOMA connected — using QuadBrain');
+            this._offlineLogged = false;
+        } else if (!this._offlineLogged) {
+            // Log only once per offline period
+            console.log('[SomaBridge] ⚠️  SOMA offline — using local brain');
+            this._offlineLogged = true;
+        }
+
         return this._available;
     }
 

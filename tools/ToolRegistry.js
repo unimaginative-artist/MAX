@@ -118,9 +118,10 @@ export class ToolRegistry {
             for (const a of t.actions) {
                 // Heuristic for examples based on action name
                 let example = '{}';
-                if (t.name === 'file' && a === 'read')  example = '{"filePath": "..."}';
-                if (t.name === 'file' && a === 'write') example = '{"filePath": "...", "content": "..."}';
+                if (t.name === 'file' && a === 'read')   example = '{"filePath": "...", "startLine": 10, "endLine": 50}';
+                if (t.name === 'file' && a === 'write')  example = '{"filePath": "...", "content": "..."}';
                 if (t.name === 'file' && a === 'replace') example = '{"filePath": "...", "oldText": "...", "newText": "..."}';
+                if (t.name === 'file' && a === 'grep')   example = '{"dir": ".", "pattern": "async function", "filePattern": ".js"}';
                 if (t.name === 'shell' && a === 'run')   example = '{"command": "npm test", "timeoutMs": 120000}';
                 if (t.name === 'shell' && a === 'start') example = '{"command": "npm run dev", "name": "dev-server"}';
                 if (t.name === 'shell' && a === 'stop')  example = '{"name": "dev-server"}';
