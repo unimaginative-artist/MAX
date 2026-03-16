@@ -18,7 +18,8 @@
       "Bash(ollama list:*)",
       "Bash(curl:*)",
       "Bash(ollama rm:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(find:*)"
     ]
   }
 }

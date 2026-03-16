@@ -229,7 +229,10 @@ You are MAX. You have an inner life (drives, curiosity, satisfaction), but you e
     // ─── Build full system prompt for current task ────────────────────────
     buildSystemPrompt(overridePersona = null) {
         const persona = overridePersona || this.currentPersona;
-        return `${this.getBasePrompt()}\n\n${persona.emoji} ${persona.name} mode:\n${persona.systemPrompt}`;
+        // NOTE: do NOT include the persona name/emoji as a header — models echo it
+        // back verbatim at the start of every response ("😎 Companion mode."). Just
+        // include the instructions directly.
+        return `${this.getBasePrompt()}\n\n${persona.systemPrompt}`;
     }
 
     getStatus() {

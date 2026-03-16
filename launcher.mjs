@@ -47,6 +47,7 @@ const INNER     = BOX_WIDTH - 4;
 const _insights = [];
 let   _insightId = 0;
 let   _rl        = null;
+let   _origLog   = console.log.bind(console);   // module-level so printBgGroup/expandInsight can use it
 
 function stripMarkdown(text) {
     return text
@@ -96,11 +97,22 @@ function printFullInsight(insight, id) {
 function printInsight(insight) {
     _insightId++;
     const id    = _insightId;
-    _insights.push({ id, insight });
-    if (_insights.length > 20) _insights.shift();
+    _insights.push({ id, type: 'insight', insight });
+    if (_insights.length > 30) _insights.shift();
 
     const label = insight.label.replace(/\n.*/s, '').slice(0, 50);
     console.log(`  💡 [${insight.source}] ${label}  — /expand ${id}`);
+}
+
+// ─── Collapsible background group ─────────────────────────────────────────
+// Called by flushBgQueue when 3+ consecutive same-source messages are queued.
+// Prints a single collapsed line; /expand N shows all lines.
+function printBgGroup(source, lines) {
+    _insightId++;
+    const id = _insightId;
+    _insights.push({ id, type: 'bg_group', source, lines });
+    if (_insights.length > 30) _insights.shift();
+    _origLog(`  ⊕ [${source}] ${lines.length} events  — /expand ${id}`);
 }
 
 function expandInsight(arg) {
@@ -112,10 +124,21 @@ function expandInsight(arg) {
         entry = _insights.find(e => e.id === id);
     }
     if (!entry) {
-        console.log(`[MAX] No insight #${arg || 'last'} found.\n`);
+        console.log(`[MAX] No entry #${arg || 'last'} found.\n`);
         return;
     }
-    printFullInsight(entry.insight, entry.id);
+    if (entry.type === 'bg_group') {
+        const border = '─'.repeat(BOX_WIDTH);
+        _origLog(`\n  ┌${border}`);
+        _origLog(`  │  [${entry.source}] ${entry.lines.length} events  #${entry.id}`);
+        _origLog(`  ├${border}`);
+        for (const line of entry.lines) {
+            _origLog(`  │  ${line}`);
+        }
+        _origLog(`  └${border}\n`);
+    } else {
+        printFullInsight(entry.insight, entry.id);
+    }
 }
 
 // ─── Thinking spinner ─────────────────────────────────────────────────────
@@ -172,6 +195,30 @@ async function acknowledgeQueued(max, queuedMsg) {
     } catch { /* best-effort — never block the main response */ }
 }
 
+// ─── Clean LLM reply — strip persona announcements and MAX: prefixes ─────
+// DeepSeek sometimes echoes the persona name ("😎 Companion mode.") or the
+// agent name ("MAX: ") at the start of its response. Strip both.
+function cleanReply(text) {
+    return text
+        // Strip repeated "MAX:" / "M.A.X:" prefixes
+        .replace(/^(?:(?:MAX|M\.A\.X)[:.]\s*)*/i, '')
+        // Strip persona mode announcements on their own line, with or without emoji
+        // e.g. "😎 Companion mode.\n\n" / "Grinder mode activated.\n"
+        .replace(/^[^\w\n]{0,4}(?:Companion|Grinder|Architect|Paranoid|Breaker|Explainer|Devil(?:'s Advocate)?)\s+mode[^.\n]*[.\n]+\n*/i, '')
+        .trimStart();
+}
+
+// ─── Background noise filter — patterns suppressed from terminal output ──
+// These are high-frequency internal events that flood the terminal without
+// adding actionable information during a chat session.
+const BG_SUPPRESS = [
+    /^\[KnowledgeBase\].*Ingested "/,          // per-file ingestion spam (50+ lines on boot)
+    /^\[KnowledgeBase\].*Ingested "agent_loop/, // artifact ingestion
+    /^\[GoalEngine\] ⚠️.*Duplicate goal/,       // duplicate goal warnings
+    /^\[CodeIndexer\] 📁 Found \d+ source/,     // "indexing in progress" mid-line
+    /^\[Diagnostics\] 🔍 Running system-wide/,  // fires twice on boot
+];
+
 // ─── Chat mode ───────────────────────────────────────────────────────────
 async function chatMode(max, opts) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
@@ -182,15 +229,49 @@ async function chatMode(max, opts) {
     // is typing (or while readline is active at all) tears the input line.
     // Fix: buffer ALL background output while readline is active. Flush the
     // queue cleanly just before the YOU: prompt is shown each turn.
-    const _origLog   = console.log.bind(console);
+    _origLog = console.log.bind(console);   // update module-level ref before overriding console.log
     const _origError = console.error.bind(console);
     const _bgQueue   = [];
 
-    console.log   = (...args) => { if (_rl) { _bgQueue.push(args); } else { _origLog(...args);   } };
+    console.log   = (...args) => {
+        const msg = args.map(a => (typeof a === 'string' ? a : String(a))).join(' ');
+        if (BG_SUPPRESS.some(p => p.test(msg))) return;  // drop high-frequency noise
+        if (_rl) { _bgQueue.push(args); } else { _origLog(...args); }
+    };
     console.error = (...args) => { if (_rl) { _bgQueue.push(args); } else { _origError(...args); } };
 
     function flushBgQueue() {
-        while (_bgQueue.length > 0) _origLog(..._bgQueue.shift());
+        if (_bgQueue.length === 0) return;
+
+        // Extract the [ModuleName] prefix from a log message for grouping
+        const getSource = (args) => {
+            const msg = args.map(a => typeof a === 'string' ? a : String(a)).join(' ');
+            const m = msg.match(/^\[([^\]]+)\]/);
+            return { source: m ? m[1] : '', msg };
+        };
+
+        // Group consecutive messages with the same source prefix
+        const groups = [];
+        for (const args of _bgQueue) {
+            const { source, msg } = getSource(args);
+            const last = groups[groups.length - 1];
+            if (last && last.source === source) {
+                last.items.push({ args, msg });
+            } else {
+                groups.push({ source, items: [{ args, msg }] });
+            }
+        }
+        _bgQueue.length = 0;
+
+        for (const group of groups) {
+            if (group.items.length >= 3) {
+                // Collapse into a single expandable line
+                printBgGroup(group.source, group.items.map(i => i.msg));
+            } else {
+                // Small group — show normally
+                for (const { args } of group.items) _origLog(...args);
+            }
+        }
     }
 
     let inputBuffer   = '';
@@ -724,17 +805,14 @@ async function chatMode(max, opts) {
             });
 
             if (streamStarted) {
-                // Streamed response — just close the line.
-                // wasStreamed=false means tool calls happened; print clean final reply too.
                 process.stdout.write('\n');
                 if (!res.wasStreamed) {
-                    const reply = (res.response || '').replace(/^(?:(?:MAX|M\.A\.X)[:.]\s*)*/i, '').trimStart();
+                    const reply = cleanReply(res.response || '');
                     console.log('\nMAX: ' + reply);
                 }
             } else {
-                // No streaming happened (SOMA bridge path or fast tier) — print normally.
                 stop();
-                const reply = (res.response || '').replace(/^(?:(?:MAX|M\.A\.X)[:.]\s*)*/i, '').trimStart();
+                const reply = cleanReply(res.response || '');
                 console.log('\nMAX: ' + reply);
             }
 
