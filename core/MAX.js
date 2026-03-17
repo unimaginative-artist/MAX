@@ -274,15 +274,15 @@ export class MAX {
             name:        'goals',
             description: `Queue and manage autonomous investigation/task goals.
 Actions:
-  add         → queue a goal and start working on it: TOOL:goals:add:{"title":"Investigate X","description":"...","type":"research|task|fix","priority":0.8}
+  add         → queue a goal and start working on it: TOOL:goals:add:{"title":"Fix X","description":"...","type":"research|task|fix","priority":0.8,"verifyCommand":"node --check core/X.js"}
   list        → see active goals: TOOL:goals:list:{}
   status      → goal engine stats: TOOL:goals:status:{}
   inject_soma → inject a goal directly into SOMA's agentic loop: TOOL:goals:inject_soma:{"title":"Fix SOMA memory pressure","description":"...","priority":0.9}
 
 USE THIS when the user asks you to investigate, figure out, or diagnose something that needs multi-step exploration rather than a direct answer.`,
             actions: {
-                add: async ({ title, description = '', type = 'research', priority = 0.8 }) => {
-                    const id = this.goals.addGoal({ title, description, type, priority, source: 'user' });
+                add: async ({ title, description = '', type = 'research', priority = 0.8, verifyCommand = null }) => {
+                    const id = this.goals.addGoal({ title, description, type, priority, source: 'user', ...(verifyCommand ? { verifyCommand } : {}) });
                     // Trigger AgentLoop on next tick — non-blocking
                     setImmediate(() => this.agentLoop?.runCycle().catch(() => {}));
                     return { success: true, id, message: `Goal queued: "${title}" — starting investigation` };
@@ -292,6 +292,61 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
                 inject_soma: async ({ title, description = '', type = 'task', priority = 0.8 }) => {
                     if (!this.soma?.available) return { success: false, error: 'SOMA bridge not active' };
                     return this.soma.injectGoal({ title, description, type, priority });
+                }
+            }
+        });
+
+        // ── Scratchpad tool — per-task working memory ─────────────────────
+        // MAX can jot down what he's tried, what failed, and what to do next.
+        // Gets injected into re-thinks so he doesn't forget mid-task.
+        const _scratchpad = new Map();
+        this.tools.register({
+            name:        'scratchpad',
+            description: `Working memory for complex tasks — write notes about what you've tried and what you know.
+Use this to avoid repeating failed approaches and to track progress across tool turns.
+TOOL:scratchpad:write:{"key": "task-name", "content": "Tried X → failed because Y. Plan: try Z next."}
+TOOL:scratchpad:read:{"key": "task-name"}
+TOOL:scratchpad:clear:{"key": "task-name"}`,
+            actions: {
+                write: ({ key = 'default', content = '' }) => {
+                    _scratchpad.set(key, content);
+                    return { success: true, message: `Scratchpad "${key}" updated` };
+                },
+                read:  ({ key = 'default' }) => ({
+                    success: true,
+                    content: _scratchpad.get(key) || '(empty)',
+                    key
+                }),
+                list:  () => ({
+                    success: true,
+                    keys: [..._scratchpad.keys()],
+                    entries: Object.fromEntries(_scratchpad)
+                }),
+                clear: ({ key = 'default' }) => {
+                    _scratchpad.delete(key);
+                    return { success: true };
+                }
+            }
+        });
+        // Expose scratchpad on `this` so AgentLoop can inject active entries into context
+        this._scratchpad = _scratchpad;
+
+        // Register swarm as a tool — prevents MAX from hallucinating "node swarm.mjs"
+        // The swarm is built-in: break a task into parallel subtasks and synthesize results.
+        this.tools.register({
+            name:        'swarm',
+            description: `Run a task using MAX's built-in parallel swarm (decompose → parallel workers → synthesize).
+IMPORTANT: The swarm is IN-PROCESS. Do NOT spawn "node swarm.mjs" or any shell process — that file does not exist.
+Just call: TOOL:swarm:run:{"task": "Refactor the authentication module to use JWT"}`,
+            actions: {
+                run: async ({ task, workers }) => {
+                    if (!task) return { success: false, error: 'task is required' };
+                    try {
+                        const result = await this.swarmThink(task, { workers });
+                        return { success: true, synthesis: result.synthesis, subtasks: result.subtasks?.length };
+                    } catch (err) {
+                        return { success: false, error: err.message };
+                    }
                 }
             }
         });
@@ -576,16 +631,21 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
         let toolTurns = 0;
         const maxToolTurns = 6;  // enough for real multi-step work, not enough to spiral
         const turnResults  = [];
-        const seenToolCalls = new Set();  // dedup: never execute the exact same call twice
+        const seenToolCalls   = new Set();  // dedup: never execute the exact same call twice
+        let consecutiveFailures = 0;        // #5: track repeated failures for diagnosis forcing
 
         while (response.includes('TOOL:') && toolTurns < maxToolTurns) {
             // Extract all TOOL: lines in this response
             const toolLines = response.split('\n').filter(l => l.trim().startsWith('TOOL:'));
 
-            // If every tool call in this response has already been executed, we're looping — stop
-            const allSeen = toolLines.every(l => seenToolCalls.has(l.trim()));
-            if (allSeen && toolLines.length > 0) {
-                console.warn('[MAX] Tool loop detected — same calls repeating, breaking');
+            // Loop detection:
+            // - If ALL tool calls are repeated → definitely looping, break
+            // - If any WRITE/DESTRUCTIVE call is repeated → break (never re-run side effects)
+            const DESTRUCTIVE = /^TOOL:shell:(start|run|stop):|^TOOL:file:(write|replace|delete):/;
+            const allSeen     = toolLines.every(l => seenToolCalls.has(l.trim()));
+            const anyDestructiveRepeat = toolLines.some(l => DESTRUCTIVE.test(l.trim()) && seenToolCalls.has(l.trim()));
+            if ((allSeen || anyDestructiveRepeat) && toolLines.length > 0) {
+                console.warn('[MAX] Tool loop detected — breaking (allSeen=%s, destructiveRepeat=%s)', allSeen, anyDestructiveRepeat);
                 break;
             }
             toolLines.forEach(l => seenToolCalls.add(l.trim()));
@@ -593,7 +653,23 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             toolTurns++;
             const processed = await this._processToolCalls(response);
             turnResults.push(processed);
-            
+
+            // ── #2: Failure detection — build a diagnostic hint for the re-think ──
+            const hasFailed = /\[pre-flight ✗\]|\[replace ✗|\[write ✗|"success"\s*:\s*false|error.*failed|MODULE_NOT_FOUND|ENOENT|EACCES/i.test(processed);
+            if (hasFailed) consecutiveFailures++;
+            else consecutiveFailures = 0;
+
+            // ── #5: Diagnosis forcing — after 2 consecutive failures, hard-redirect ──
+            const diagnosisHint = consecutiveFailures >= 2
+                ? `\n\n## ⚠️ STOP — You have failed ${consecutiveFailures} times in a row\n` +
+                  `DO NOT retry the same action again.\n` +
+                  `First: read the error message above carefully.\n` +
+                  `Then: use file:list or file:grep to understand the actual state of the codebase.\n` +
+                  `Then: form a NEW plan based on what you actually find — not what you assumed.`
+                : hasFailed
+                ? `\n\n## ⚠️ The last action failed\nBefore retrying, diagnose WHY it failed. Read the error carefully. Do not repeat the same call.`
+                : ``;
+
             // Add this intermediate turn to context so the next "think" sees the results
             this._context.push({ role: 'assistant', content: processed });
 
@@ -610,13 +686,20 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
                 })
                 .join('\n\n');
 
-            // Think again with the results
-            // Append a task-continuation directive so the model knows to keep going
-            // rather than just acknowledging the tool output.
+            // ── #4: Inject active scratchpad entries into re-think ────────
+            let scratchpadContext = '';
+            if (this._scratchpad?.size > 0) {
+                const entries = [...this._scratchpad.entries()]
+                    .map(([k, v]) => `[${k}]\n${v}`)
+                    .join('\n\n');
+                scratchpadContext = `\n\n## Your working notes (scratchpad)\n${entries}`;
+            }
+
+            // Think again with the results + any failure/diagnosis hints
             const continuationHint = '\n\n## Tool results are now in context above\nContinue the task. Call more tools if needed, or write your final response if done.';
             result = await this.brain.think(updatedHistory, {
-                systemPrompt: systemPrompt + memoryContext + kbContext + continuationHint,
-                temperature: 0.4, // lower temp for reasoning
+                systemPrompt: systemPrompt + memoryContext + kbContext + scratchpadContext + continuationHint + diagnosisHint,
+                temperature: hasFailed ? 0.3 : 0.4,  // lower temp when diagnosing
                 maxTokens:   8192
             });
             response = result.text;
@@ -819,6 +902,28 @@ Think deeper about the engineering implications. What are edge cases, gotchas, o
         // ── Execute one tool segment, return formatted result string ──────
         const execSeg = async (seg) => {
             const trimmed = seg.content.trim();
+
+            // ── Pre-flight: verify node scripts exist before running ────────
+            // "node foo.mjs" on a missing file → immediately return an actionable error
+            // instead of letting node throw MODULE_NOT_FOUND and triggering a retry spiral.
+            const shellMatch = trimmed.match(/^TOOL:shell:(run|start):\{(.+)\}$/s);
+            if (shellMatch) {
+                try {
+                    const sp = JSON.parse(`{${shellMatch[2]}}`);
+                    const cmd = (sp.command || '').trim();
+                    const nodeScript = cmd.match(/^node\s+["']?([^\s"']+\.(mjs|js|cjs))["']?/i);
+                    if (nodeScript) {
+                        const { default: fs } = await import('fs');
+                        const scriptPath = nodeScript[1];
+                        const fullPath = path.isAbsolute(scriptPath)
+                            ? scriptPath
+                            : path.join(process.cwd(), scriptPath);
+                        if (!fs.existsSync(fullPath)) {
+                            return `[pre-flight ✗] Cannot run "node ${scriptPath}" — the file does not exist at ${fullPath}. Use TOOL:file:list to see what files are available. Do NOT create a new file just to run it — check if there is an existing in-process API or tool instead.`;
+                        }
+                    }
+                } catch { /* non-fatal — fall through to normal execution */ }
+            }
 
             // Print notification for file mutations
             const fileWriteMatch = trimmed.match(/^TOOL:file:(write|replace):(\{[\s\S]+)/);
