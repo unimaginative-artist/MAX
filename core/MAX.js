@@ -489,16 +489,17 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             ? systemPrompt + `\n\n## Confidence: LOW on this query (${conf.reason})\nBe explicit about uncertainty. Use "I believe", "I'm not certain", "you should verify this". Never state uncertain facts confidently.`
             : systemPrompt;
 
-        // Think — cap tokens based on whether this looks like a code/analysis task.
-        // Conversational turns don't need 8K token responses; capping reduces timeout risk.
-        const needsLongReply = /\b(explain|analyse|analyze|investigate|compare|summarize|list all|implement|write|refactor|how does|why does)\b/i.test(userMessage)
-            || userMessage.length > 120;
-        const maxTok = options.maxTokens ?? (needsLongReply ? 4096 : 1024);
-
         // Coding requests → DeepSeek (better at code than qwen3:8b)
         const isCodingTask = /\b(write|create|build|implement|code|function|class|script|fix|debug|refactor|edit|update|add|remove|rename)\b/i.test(userMessage)
             && /\b(file|code|function|class|method|module|component|api|route|test|script|bug|error|import|export|variable|const|let|async|await)\b/i.test(userMessage);
         const brainTier = options.tier ?? (isCodingTask ? 'code' : 'smart');
+
+        // Think — cap tokens based on whether this looks like a code/analysis task.
+        // Conversational turns don't need 8K token responses; capping reduces timeout risk.
+        // Code-tier tasks get 8K: PLAN + multiple TOOL calls + reasoning can easily fill 4K.
+        const needsLongReply = /\b(explain|analyse|analyze|investigate|compare|summarize|list all|implement|write|refactor|how does|why does)\b/i.test(userMessage)
+            || userMessage.length > 120;
+        const maxTok = options.maxTokens ?? (isCodingTask ? 8192 : needsLongReply ? 4096 : 1024);
 
         // SOMA bridge — use QuadBrain if SOMA is available (priority-0)
         // onToken streaming: only for local brain path — SOMA bridge doesn't support it
@@ -610,8 +611,11 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
                 .join('\n\n');
 
             // Think again with the results
+            // Append a task-continuation directive so the model knows to keep going
+            // rather than just acknowledging the tool output.
+            const continuationHint = '\n\n## Tool results are now in context above\nContinue the task. Call more tools if needed, or write your final response if done.';
             result = await this.brain.think(updatedHistory, {
-                systemPrompt: systemPrompt + memoryContext + kbContext,
+                systemPrompt: systemPrompt + memoryContext + kbContext + continuationHint,
                 temperature: 0.4, // lower temp for reasoning
                 maxTokens:   8192
             });
@@ -850,6 +854,34 @@ Think deeper about the engineering implications. What are edge cases, gotchas, o
                     resultStr = pointer;
                 }
             }
+
+            // ── Format result for readability ──────────────────────────────
+            // Raw JSON is hard for the model to parse. Format by tool type:
+            // - file:read   → show content directly with a header
+            // - shell:run   → show stdout/stderr directly
+            // - everything  → clean JSON fallback
+            try {
+                const parsed = typeof toolResult === 'object' ? toolResult : JSON.parse(resultStr);
+                const toolMatch = trimmed.match(/^TOOL:([^:]+):([^:]+):/);
+                const tName = toolMatch?.[1], tAction = toolMatch?.[2];
+
+                if (tName === 'file' && tAction === 'read' && parsed.success && parsed.content != null) {
+                    const lineInfo = parsed.startLine != null ? ` (lines ${parsed.startLine}–${parsed.endLine})` : ` (${parsed.totalLines} lines)`;
+                    resultStr = `[file:read → ${parsed.path || ''}${lineInfo}]\n${parsed.content}\n[end file:read]`;
+                } else if (tName === 'shell' && tAction === 'run' && parsed.stdout != null) {
+                    const out = (parsed.stdout || '').trim();
+                    const err = (parsed.stderr || '').trim();
+                    resultStr = `[shell exit ${parsed.exitCode ?? 0}]${out ? '\n' + out : ''}${err ? '\n[stderr]\n' + err : ''}`;
+                } else if (tName === 'file' && (tAction === 'write' || tAction === 'replace')) {
+                    resultStr = parsed.success
+                        ? `[${tAction} ✓ ${parsed.path || ''}]`
+                        : `[${tAction} ✗ ${parsed.error || 'failed'}${parsed.hint ? ' — hint: ' + parsed.hint : ''}]`;
+                } else if (tName === 'file' && tAction === 'grep' && Array.isArray(parsed.matches)) {
+                    resultStr = parsed.matches.length === 0
+                        ? '[grep: no matches]'
+                        : `[grep: ${parsed.matches.length} match(es)]\n` + parsed.matches.map(m => `${m.file}:${m.line}: ${m.text}`).join('\n');
+                }
+            } catch { /* keep resultStr as-is on parse failure */ }
 
             return `[Tool result: ${resultStr}]`;
         };
