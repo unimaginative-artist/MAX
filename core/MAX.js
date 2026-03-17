@@ -154,6 +154,33 @@ export class MAX {
         this.tools.register(createSelfEvolutionTool(this));
         this.tools.register(this.lab.asTool());
 
+        // ── SOMA tool proxy — GUI, screen, vision, audio via SOMA's arbiters ──
+        // These proxy directly to SOMA's registered ToolRegistry over HTTP.
+        // SOMA must be running at SOMA_URL. Falls back gracefully if offline.
+        this.tools.register({
+            name: 'soma_tools',
+            description: `Proxy to SOMA's hardware + perception tool suite.
+Available actions:
+  screenshot      → capture the screen: TOOL:soma_tools:screenshot:{}
+  vision_scan     → detect objects/text on screen: TOOL:soma_tools:vision_scan:{"source":"screen","threshold":0.7}
+  computer_control → click, type, move mouse: TOOL:soma_tools:computer_control:{"actionType":"click","label":"Submit"}
+                     actionType options: mouse_move | click | type | browser
+                     click by label (from vision_scan) or by x,y coords
+  visual_task     → autonomous see-and-click loop: TOOL:soma_tools:visual_task:{"instruction":"Click the login button"}
+  audio_listen    → capture and transcribe audio via Whisper: TOOL:soma_tools:audio_listen:{}
+  call_any        → call any SOMA tool by name: TOOL:soma_tools:call_any:{"tool":"tool_name","args":{}}
+
+Requires SOMA running at SOMA_URL. Returns {success, result} or {success:false, error}.`,
+            actions: {
+                screenshot:       async (args) => this.soma.callTool('screenshot', args),
+                vision_scan:      async (args) => this.soma.callTool('vision_scan', args),
+                computer_control: async (args) => this.soma.callTool('computer_control', args),
+                visual_task:      async (args) => this.soma.callTool('visual_task', args),
+                audio_listen:     async (args) => this.soma.callTool('audio_listen', args),
+                call_any:         async ({ tool, args = {} }) => this.soma.callTool(tool, args),
+            }
+        });
+
         // Wire integration callbacks → heartbeat insights
         console.log('[MAX] ♻️  Connecting integrations...');
         DiscordTool.onMessage = (msg) => {

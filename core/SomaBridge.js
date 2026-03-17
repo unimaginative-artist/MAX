@@ -201,6 +201,38 @@ export class SomaBridge {
         }
     }
 
+    // ── Tool Proxy ───────────────────────────────────────────────────────
+
+    /**
+     * Execute any SOMA tool by name.
+     * Gives MAX access to SOMA's full tool suite: computer_control, vision_scan,
+     * visual_task, screenshot, audio, whisper, and all 14+ registered tools.
+     *
+     * Usage:
+     *   await somaBridge.callTool('vision_scan', { source: 'screen' })
+     *   await somaBridge.callTool('computer_control', { actionType: 'click', label: 'Submit' })
+     *   await somaBridge.callTool('visual_task', { instruction: 'Click the login button' })
+     */
+    async callTool(toolName, args = {}, timeoutMs = 15000) {
+        if (!this._available) return { success: false, error: 'SOMA offline' };
+        try {
+            const { default: fetch } = await import('node-fetch');
+            const r = await Promise.race([
+                fetch(`${this.baseUrl}/api/tools/execute`, {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body:    JSON.stringify({ name: toolName, args })
+                }),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs))
+            ]);
+            if (!r.ok) return { success: false, error: `SOMA ${r.status}` };
+            const data = await r.json();
+            return { success: true, result: data.result ?? data };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    }
+
     // ── Diagnostics & Engineering ────────────────────────────────────────
 
     /**
