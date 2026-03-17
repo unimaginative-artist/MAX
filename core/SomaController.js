@@ -14,7 +14,7 @@ const execAsync = promisify(exec);
 
 const SOMA_DIR   = process.env.SOMA_DIR   || 'C:/Users/barry/Desktop/SOMA';
 const SOMA_URL   = process.env.SOMA_URL   || 'http://127.0.0.1:3001';
-const SOMA_START = process.env.SOMA_START || 'node server/soma-server.js';
+const SOMA_START = process.env.SOMA_START || 'launcher_ULTRA.mjs';
 
 let somaProcess = null;
 
@@ -59,7 +59,7 @@ export async function stopSoma() {
 
 // ─── Start SOMA ───────────────────────────────────────────────────────────
 export async function startSoma() {
-    somaProcess = spawn('node', ['server/soma-server.js'], {
+    somaProcess = spawn('node', ['launcher_ULTRA.mjs'], {
         cwd: SOMA_DIR,
         detached: false,
         stdio: 'ignore'
