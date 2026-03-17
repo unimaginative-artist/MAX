@@ -188,13 +188,47 @@ export class AgentLoop extends EventEmitter {
             }
 
             if (!failed) {
-                goalSuccess = true;
-                goalSummary = stepResults.map(r => r.summary || '').filter(Boolean).join(' → ');
-                // Encode the winning plan as a skill (fire-and-forget procedural memory)
-                this.max.skills?.encodeFromRun(goal, goal.steps, this.max.brain).catch(() => {});
-                // Auto-commit any file changes made during this goal
-                this._autoCommit(goal.title).catch(() => {});
-                break;
+                // ── #3: verifyCommand — run a smoke test to confirm success ──
+                // Goals can include a verifyCommand like "node --check file.js" or
+                // "curl -s http://localhost:3100/health". If it fails, the goal is
+                // marked incomplete and MAX gets another attempt with the failure context.
+                if (goal.verifyCommand) {
+                    try {
+                        console.log(`  [AgentLoop] 🔍 Verifying: ${goal.verifyCommand}`);
+                        const verifyResult = await withTimeout(
+                            this.max.tools.execute('shell', 'run', {
+                                command:   goal.verifyCommand,
+                                timeoutMs: 15_000
+                            }),
+                            18_000,
+                            'verify'
+                        );
+                        const passed = verifyResult?.exitCode === 0 || verifyResult?.success !== false;
+                        if (!passed) {
+                            const errOut = (verifyResult?.stderr || verifyResult?.stdout || 'non-zero exit').slice(0, 200);
+                            failed      = true;
+                            failReason  = `verifyCommand failed: ${errOut}`;
+                            console.log(`  [AgentLoop] ❌ Verification failed: ${failReason}`);
+                            // Don't break — fall through to the replan logic below
+                        } else {
+                            console.log(`  [AgentLoop] ✅ Verification passed`);
+                        }
+                    } catch (verifyErr) {
+                        console.warn(`  [AgentLoop] ⚠️  Verify error (non-fatal): ${verifyErr.message}`);
+                        // Don't fail the goal on verify timeout/error — treat as passed
+                    }
+                }
+
+                if (!failed) {
+                    goalSuccess = true;
+                    goalSummary = stepResults.map(r => r.summary || '').filter(Boolean).join(' → ');
+                    // Encode the winning plan as a skill (fire-and-forget procedural memory)
+                    this.max.skills?.encodeFromRun(goal, goal.steps, this.max.brain).catch(() => {});
+                    // Auto-commit any file changes made during this goal
+                    this._autoCommit(goal.title).catch(() => {});
+                    break;
+                }
+                // else: fall through with failed=true and failReason set from verifyCommand
             }
 
             // ── Smart error categorization — choose pivot strategy ────────
