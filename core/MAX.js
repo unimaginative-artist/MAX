@@ -219,6 +219,9 @@ Reply naturally and concisely. Plain text only — no markdown headers, no bulle
         autoConnectDiscord().catch(() => {});
         autoConnectEmail().catch(() => {});
 
+        // Wire Notifier to DiscordTool (shared client, no duplicate connection)
+        this.notifier.setDiscordTool(DiscordTool);
+
         // Higher systems
         this.swarm     = new SwarmCoordinator(this.brain, this.tools);
         this.debate    = new DebateEngine(this.brain);
@@ -786,7 +789,8 @@ Just call: TOOL:swarm:run:{"task": "Refactor the authentication module to use JW
                 : ``;
 
             // Add this intermediate turn to context so the next "think" sees the results
-            this._context.push({ role: 'assistant', content: processed });
+            // Strip any "MAX:" prefix the LLM may have echoed — avoids compounding on re-think
+            this._context.push({ role: 'assistant', content: processed.replace(/^(?:(?:MAX|M\.A\.X)[:.]\s*)*/i, '') });
 
             // Re-build history — cap each turn's content so one huge tool result
             // can't blow out the context on the next re-think
@@ -850,7 +854,8 @@ Just call: TOOL:swarm:run:{"task": "Refactor the authentication module to use JW
         }
 
         // Update context and memory (MaxMemory also extracts workspace signals)
-        this._context.push({ role: 'assistant', content: response }); // full text (including tool traces) goes to context so brain has full picture
+        // Strip any "MAX:" prefix the LLM echoed — prevents compounding across turns
+        this._context.push({ role: 'assistant', content: response.replace(/^(?:(?:MAX|M\.A\.X)[:.]\s*)*/i, '') }); // full text (including tool traces) goes to context so brain has full picture
         this.memory.addConversation('user',      userMessage,       selectedPersona.id);
         this.memory.addConversation('assistant', finalResponse, selectedPersona.id);
 

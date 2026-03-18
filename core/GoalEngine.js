@@ -160,7 +160,9 @@ ${goal.description ? `DETAILS: ${goal.description}\n` : ''}${toolLine}${skillBlo
 MANDATORY Verification (Phase 3 Evolution):
 - If type is 'fix' or 'task', the LAST STEP MUST be a verification.
 - Use 'lab:run' to run tests, or 'lab:generate' if no test exists for the modified file.
-- If it's a shell script or CLI, use 'shell:run' with a specific verification command.
+- If it's a shell script or CLI, use 'shell:run' with a REAL command that already exists (e.g. "node -e \"require('./file')\"", "npm test", "git status").
+- NEVER invent benchmark scripts, test files, or commands that don't already exist in the project.
+- For non-code goals (config, credentials, connections), use 'brain' to summarize what was done instead of a shell command.
 - The goal is not finished until you prove it works with output evidence.
 
 Rules:

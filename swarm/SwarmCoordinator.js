@@ -6,6 +6,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { EventEmitter } from 'events';
+import { commandPolicy } from '../core/CommandPolicyEngine.js';
 
 export class SwarmCoordinator extends EventEmitter {
     constructor(brain, toolRegistry, config = {}) {
@@ -104,6 +105,17 @@ export class SwarmCoordinator extends EventEmitter {
             if (subtask.tools?.length) {
                 for (const toolCall of subtask.tools) {
                     const { tool, action, params } = toolCall;
+
+                    // Policy gate: validate shell commands before execution
+                    if (tool === 'shell' && params?.command) {
+                        const policy = commandPolicy.validate(params.command, params.cwd || process.cwd());
+                        if (!policy.allowed) {
+                            console.warn(`  [Swarm] 🚫 Command blocked by policy: ${policy.reason}`);
+                            toolResults[`${tool}.${action}`] = { success: false, skipped: true, reason: policy.reason };
+                            continue;
+                        }
+                    }
+
                     toolResults[`${tool}.${action}`] = await this.tools.execute(tool, action, params);
                 }
             }
