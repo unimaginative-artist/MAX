@@ -792,13 +792,24 @@ async function chatMode(max, opts) {
             const stop = startSpinner('thinking');
             let streamStarted = false;
 
+            let streamBuf = '';
+            let streamPrefixStripped = false;
             const res = await max.think(line, {
                 persona: activePersona,
                 onToken: (token) => {
                     if (!streamStarted) {
                         stop();
-                        process.stdout.write('\nMAX: ');
                         streamStarted = true;
+                    }
+                    if (!streamPrefixStripped) {
+                        streamBuf += token;
+                        // Wait until we have enough to detect a "MAX:" prefix
+                        if (streamBuf.length < 20 && !streamBuf.includes('\n')) return;
+                        streamBuf = streamBuf.replace(/^(?:(?:MAX|M\.A\.X)[:.]\s*)*/i, '');
+                        streamPrefixStripped = true;
+                        process.stdout.write('\nMAX: ' + streamBuf);
+                        streamBuf = '';
+                        return;
                     }
                     process.stdout.write(token);
                 }

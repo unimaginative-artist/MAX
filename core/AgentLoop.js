@@ -16,6 +16,11 @@
 import { EventEmitter } from 'events';
 import fs   from 'fs/promises';
 import path from 'path';
+import { commandPolicy }  from './CommandPolicyEngine.js';
+import { LoopSelector }   from './LoopSelector.js';
+import { ExploreLoop }    from './loops/ExploreLoop.js';
+import { BuildLoop }      from './loops/BuildLoop.js';
+import { ReflectLoop }    from './loops/ReflectLoop.js';
 
 // Actions that require human approval before running
 const REQUIRES_APPROVAL = ['shell', 'git.commit', 'git.push', 'file.delete', 'file.write'];
@@ -49,6 +54,14 @@ export class AgentLoop extends EventEmitter {
         this._interrupted     = false;  // set by interrupt() to pause at next wave boundary
         this._interruptFile   = path.join(process.cwd(), '.max', 'interrupt_state.json');
         this._toolFailures    = new Map(); // toolName -> count (Level 4 Meta-Correction)
+
+        // ── Loop dispatch infrastructure ──────────────────────────────────
+        this._selector = new LoopSelector();
+        this._loops    = {
+            explore: new ExploreLoop(),
+            build:   new BuildLoop(),
+            reflect: new ReflectLoop()
+        };
 
         this.stats = {
             cyclesRun:    0,
@@ -112,6 +125,21 @@ export class AgentLoop extends EventEmitter {
             // Nothing to do — let drive build tension
             drive?.onIdleTick();
             return null;
+        }
+
+        // ── 1.5 Route to specialized loop if applicable ───────────────────
+        const { loop, confidence, rationale } = this._selector.classify(goal);
+        if (loop !== 'default') {
+            console.log(`  [AgentLoop] 🔀 Loop: ${loop} (confidence: ${(confidence * 100).toFixed(0)}% — ${rationale})`);
+            const loopHandler = this._loops[loop];
+            if (loopHandler) {
+                try {
+                    return await loopHandler.run(goal, this.max);
+                } catch (err) {
+                    console.warn(`  [AgentLoop] ⚠️  ${loop} loop error — falling back to default: ${err.message}`);
+                    // fall through to default linear execution
+                }
+            }
         }
 
         // ── 2. Decompose into steps if needed ─────────────────────────────
@@ -529,6 +557,17 @@ export class AgentLoop extends EventEmitter {
                         cwd:      process.cwd(),
                         ...(step.params || {})  // planner-specified params win
                     };
+
+                    // Policy gate: validate shell commands before execution
+                    if (tName === 'shell' && toolParams.command) {
+                        const policy = commandPolicy.validate(String(toolParams.command), toolParams.cwd || process.cwd());
+                        if (!policy.allowed) {
+                            console.warn(`  [AgentLoop] 🚫 Command blocked by policy: ${policy.reason}`);
+                            stepResult = `Blocked — ${policy.reason}`;
+                            continue;
+                        }
+                    }
+
                     let toolResult = await withTimeout(
                         this.max.tools.execute(tName, tAction, toolParams),
                         timeoutMs,
