@@ -563,8 +563,7 @@ export class AgentLoop extends EventEmitter {
                         const policy = commandPolicy.validate(String(toolParams.command), toolParams.cwd || process.cwd());
                         if (!policy.allowed) {
                             console.warn(`  [AgentLoop] 🚫 Command blocked by policy: ${policy.reason}`);
-                            stepResult = `Blocked — ${policy.reason}`;
-                            continue;
+                            return { step: step.step, success: false, result: '', summary: `Blocked — ${policy.reason}` };
                         }
                     }
 
