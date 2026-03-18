@@ -22,6 +22,10 @@ const execAsync = promisify(exec);
 // ─── Persistent state ─────────────────────────────────────────────────────
 let _cwd   = process.cwd();          // survives across calls in the same session
 let _procs = new Map();              // name → { pid, proc, command, started, log }
+let _env   = { ...process.env };     // survives across calls
+
+export function getCwd() { return _cwd; }
+export function getEnv() { return _env; }
 
 // ─── Blocked patterns — only truly dangerous / irreversible ops ───────────
 // Deliberately narrow. python -c, node -e, curl, etc. are legitimate dev tools.
@@ -124,15 +128,25 @@ export const ShellTool = {
             const cdMatch = command.match(/^\s*cd\s+([^\s&;|"']+|"[^"]+"|'[^']+')(?:\s*&&\s*(.+))?$/);
             if (cdMatch) {
                 const target = cdMatch[1].replace(/^["']|["']$/g, '');
-                // Resolve relative to current _cwd
                 const path = await import('path');
-                const newCwd = path.default.resolve(_cwd, target);
-                _cwd = newCwd;
+                _cwd = path.default.resolve(_cwd, target);
                 if (!cdMatch[2]) {
                     return { success: true, command, cwd: _cwd, stdout: '', stderr: '', note: `Working directory → ${_cwd}` };
                 }
                 command = cdMatch[2].trim();
                 runCwd  = _cwd;
+            }
+
+            // Handle export/set: update persistent env
+            const envMatch = command.match(/^\s*(?:export|set)\s+([a-zA-Z_][a-zA-Z0-9_]*)=([^&;|"']+|"[^"]+"|'[^']+')(?:\s*&&\s*(.+))?$/);
+            if (envMatch) {
+                const key = envMatch[1];
+                const val = envMatch[2].replace(/^["']|["']$/g, '');
+                _env[key] = val;
+                if (!envMatch[3]) {
+                    return { success: true, command, env: { [key]: val }, note: `Env set: ${key}=${val}` };
+                }
+                command = envMatch[3].trim();
             }
 
             printShellHeader(command);
@@ -146,7 +160,7 @@ export const ShellTool = {
                 const proc  = spawn(
                     isWin ? 'cmd.exe' : 'bash',
                     isWin ? ['/c', command] : ['-c', command],
-                    { cwd: runCwd, env: process.env }
+                    { cwd: runCwd, env: _env }
                 );
 
                 const timer = setTimeout(() => {

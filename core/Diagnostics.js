@@ -13,8 +13,27 @@ export class DiagnosticsSystem {
             this._scanPerformance.bind(this),
             this._scanTestCoverage.bind(this),
             this._scanSecurity.bind(this),
-            this._scanSomaKernel.bind(this)
+            this._scanSomaKernel.bind(this),
+            this._scanMemoryPressure.bind(this)
         ];
+    }
+
+    /**
+     * Section 8: MemoryScanner.
+     * Detects high memory pressure.
+     */
+    async _scanMemoryPressure() {
+        const os = await import('os');
+        const free = os.freemem() / 1024 / 1024;
+        if (free < 500) {
+            this.max.goals.addGoal({
+                title: `Memory Pressure: Only ${free.toFixed(0)}MB free. Check for leaks.`,
+                priority: 0.8,
+                source: 'memory_scanner',
+                type: 'optimization'
+            });
+        }
+
     }
 
     async runAll() {

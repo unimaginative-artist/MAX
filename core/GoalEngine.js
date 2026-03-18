@@ -154,7 +154,14 @@ export class GoalEngine {
         const prompt = `Break this goal into 3-6 concrete, executable steps.
 
 GOAL: ${goal.title}
+TYPE: ${goal.type}
 ${goal.description ? `DETAILS: ${goal.description}\n` : ''}${toolLine}${skillBlock}${memoryContext}${outcomeContext}
+
+MANDATORY Verification (Phase 3 Evolution):
+- If type is 'fix' or 'task', the LAST STEP MUST be a verification.
+- Use 'lab:run' to run tests, or 'lab:generate' if no test exists for the modified file.
+- If it's a shell script or CLI, use 'shell:run' with a specific verification command.
+- The goal is not finished until you prove it works with output evidence.
 
 Rules:
 - Each step must use one of the listed tools
@@ -311,29 +318,40 @@ Return ONLY the JSON array.`;
             ? this.outcomes.query({ limit: 5 }).map(o => `${o.action}: ${o.success ? 'success' : 'fail'}`).join(', ')
             : '';
 
-        const prompt = `You are MAX, an autonomous engineering agent. Generate 3 NEW goals worth pursuing.
+        const prompt = `You are MAX, an autonomous engineering AI agent working for Barry.
+Barry's current challenge: "${userContext || 'building a fully agentic AI system (SOMA)'}"
 
 Current active goals:
 ${activeList}
 
 Recent outcomes: ${recentOutcomes || 'none'}
-${userContext}
 
-Generate goals that are:
-- Concrete and achievable in one session
-- Useful for an engineering agent or the user's current project
-- Different from existing active goals
+Generate 3 NEW, CONCRETE goals MAX can execute RIGHT NOW using his tools (file, shell, web, git, api, brain).
+Goals must be:
+- Specific enough to execute with tools — not vague research ideas
+- Achievable in one session (30 min or less)
+- Actually useful to Barry's project (SOMA/MAX improvement, code quality, automation)
+- Different from existing active goals above
 
-Return JSON array:
+Good examples:
+- "Audit MAX's AgentLoop for silent failure modes and document them in .max/audit.md"
+- "Read SOMA's extended.js and write a summary of what loads and when into .max/soma-notes.md"
+- "Check if MAX's Discord auto-respond is wired correctly by reading DiscordTool.js and MAX.js"
+- "Scan the MAX codebase for TODO comments and create goals for each"
+
+Bad examples (too vague, can't execute with tools):
+- "Investigate system architecture patterns"
+- "Research AI capabilities"
+
+Return JSON array ONLY:
 [
   {
-    "title": "short goal title",
-    "description": "one sentence of what to actually do",
+    "title": "short action-oriented title",
+    "description": "exactly what to do and what tool to use",
     "type": "task|research|improvement|fix",
     "priority": 0.1-1.0
   }
-]
-Return ONLY the JSON array.`;
+]`;
 
         try {
             const result = await this.brain.think(prompt, { temperature: 0.8, maxTokens: 512, tier: 'fast' });

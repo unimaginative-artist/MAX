@@ -18,12 +18,14 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import fetch from 'node-fetch';
+import { EconomicsEngine } from './EconomicsEngine.js';
 
 export class Brain {
     constructor(config = {}) {
         this.ollamaUrl    = config.ollamaUrl || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
         this.timeout      = config.timeout     || 240_000;  // smart/code tier — 4 mins
         this.fastTimeout  = config.fastTimeout || 30_000;   // fast tier — 30s max (heartbeats/acks)
+        this.economics    = new EconomicsEngine();
 
         // ── Fast tier config ─────────────────────────────────────────────
         // Local Ollama ONLY — heartbeats, yes/no checks, quick acks, verification
@@ -112,6 +114,14 @@ export class Brain {
             const boundary  = truncated.indexOf('\n\nUSER:');
             prompt = boundary > 0 ? truncated.slice(boundary) : truncated;
             console.warn(`[Brain] ✂️  Prompt truncated to fit context window (budget: ${Math.round(promptBudget / 1000)}K chars)`);
+        }
+
+        // Pragmatic model selection if urgency/complexity is provided
+        if (tier === 'pragmatic') {
+            const recommended = this.economics.recommendModel('task', { urgency: 0.5, complexity: 0.5 });
+            if (recommended === 'ollama') tier = 'fast';
+            else if (recommended === 'deepseek-reasoner') tier = 'code';
+            else tier = 'smart';
         }
 
         let result;
@@ -222,7 +232,7 @@ export class Brain {
                 }
             }
 
-            return {
+            const result = {
                 text: fullText.trim(),
                 metadata: {
                     model,
@@ -231,10 +241,14 @@ export class Brain {
                     backend: 'deepseek'
                 }
             };
+            this.economics.recordUsage(model, prompt.length / 4, totalTokens);
+            return result;
         }
 
         // Non-streaming path (unchanged)
         const data = await res.json();
+        const usage = data.usage || { prompt_tokens: prompt.length / 4, completion_tokens: 0 };
+        this.economics.recordUsage(model, usage.prompt_tokens, usage.completion_tokens);
         return {
             text: data.choices?.[0]?.message?.content?.trim() || '',
             metadata: {
@@ -281,6 +295,8 @@ export class Brain {
         });
         if (!res.ok) throw new Error(`Ollama ${res.status}`);
         const data = await res.json();
+
+        this.economics.recordUsage('ollama', data.prompt_eval_count || 0, data.eval_count || 0);
 
         return {
             text: data.message?.content?.trim() || '',

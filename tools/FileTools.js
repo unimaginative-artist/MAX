@@ -4,7 +4,7 @@
 
 import fs   from 'fs/promises';
 import path  from 'path';
-import vm    from 'vm';
+import { execSync } from 'child_process';
 
 export const FileTools = {
     name: 'file',
@@ -260,7 +260,12 @@ function verifySyntax(filePath, content) {
     if (ext === '.json') {
         try { JSON.parse(content); } catch (e) { return e.message; }
     } else if (ext === '.js' || ext === '.mjs' || ext === '.cjs') {
-        try { new vm.Script(content); } catch (e) { return e.message; }
+        try {
+            // node --check is the only reliable way to verify ESM syntax
+            execSync(`node --check "${filePath}"`, { stdio: 'ignore' });
+        } catch (e) {
+            return `Syntax check failed: ${e.message}`;
+        }
     }
     return null;
 }

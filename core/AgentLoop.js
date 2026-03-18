@@ -48,6 +48,7 @@ export class AgentLoop extends EventEmitter {
         this._pendingApproval = null;   // { resolve, reject, description }
         this._interrupted     = false;  // set by interrupt() to pause at next wave boundary
         this._interruptFile   = path.join(process.cwd(), '.max', 'interrupt_state.json');
+        this._toolFailures    = new Map(); // toolName -> count (Level 4 Meta-Correction)
 
         this.stats = {
             cyclesRun:    0,
@@ -133,6 +134,22 @@ export class AgentLoop extends EventEmitter {
         this.stats.goalsStarted++;
 
         this.emit('goalStart', { goal });
+
+        // ── 2.5 Swarm Delegation for complex tasks ────────────────────────
+        if (goal.steps.length >= 5 && this.max.swarm) {
+            console.log(`  [AgentLoop] 🐝 Goal is complex — delegating to SwarmCoordinator`);
+            try {
+                const swarmResult = await this.max.swarm.run({
+                    name: goal.title,
+                    subtasks: goal.steps.map(s => ({ id: `step_${s.step}`, prompt: s.action, tools: [{ tool: s.tool, action: s.action_name || 'run', params: s.params || {} }] }))
+                });
+                if (swarmResult?.synthesis) {
+                    return { goal: goal.title, success: true, summary: swarmResult.synthesis };
+                }
+            } catch (err) {
+                console.warn(`  [AgentLoop] ⚠️ Swarm delegation failed, falling back to serial execution: ${err.message}`);
+            }
+        }
 
         // ── 3. Execute steps — with Pivot Loop ───────────────────────────
         // On step failure, re-decompose with error context and retry.
@@ -235,6 +252,26 @@ export class AgentLoop extends EventEmitter {
             const errType = this._categorizeError(failReason);
             console.log(`  [AgentLoop] 🔬 Error type: ${errType} — ${failReason.slice(0, 80)}`);
 
+            // ── Level 4 Meta-Correction: Track Tool Failure Hotspots ─────
+            if (errType === 'TOOL_ERROR' || errType === 'TEST_FAILURE') {
+                const failedStep = stepResults.find(r => !r.success);
+                const tName = failedStep?.tool?.split('.')[0] || 'unknown';
+                const count = (this._toolFailures.get(tName) || 0) + 1;
+                this._toolFailures.set(tName, count);
+
+                if (count >= 3 && tName !== 'unknown') {
+                    console.log(`  [AgentLoop] ⚠️ Tool "${tName}" failed ${count} times — triggering Architectural Audit`);
+                    this.max.goals?.addGoal({
+                        title:       `Architectural Audit: Fix logic in tools/${tName}.js`,
+                        description: `The "${tName}" tool has failed ${count} times in this session. Analyze the source code, identify the recurrent failure mode, and implement a robust fix.`,
+                        type:        'fix',
+                        priority:    1.0, // HIGHEST priority
+                        source:      'meta_correction'
+                    });
+                    this._toolFailures.set(tName, 0); // reset after queuing
+                }
+            }
+
             // PERMISSION: surface to user and stop — don't burn replans on auth issues
             if (errType === 'PERMISSION') {
                 this.emit('approvalNeeded', {
@@ -244,6 +281,7 @@ export class AgentLoop extends EventEmitter {
                     approve: () => {},
                     deny:    () => {}
                 });
+                this._proactiveSocialReachout(goal, `Permission error: ${failReason}`).catch(() => {});
                 goalSummary = `Blocked by permission: ${failReason}`;
                 break;
             }
@@ -253,6 +291,7 @@ export class AgentLoop extends EventEmitter {
 
             if (replans > this.config.maxReplans) {
                 goalSummary = `Gave up after ${replans - 1} replans. Last error: ${failReason}`;
+                this._proactiveSocialReachout(goal, `Max replans reached. Last error: ${failReason}`).catch(() => {});
                 // ── Proactive fallback: build a structured investigation goal ──
                 // Instead of silently giving up, queue a deeper investigation so
                 // MAX steps back and comes at the problem from a different angle.
@@ -856,7 +895,7 @@ ${stepSummary}
 
 Diagnose the ROOT CAUSE. Return ONLY JSON:
 {
-  "rootCause": "MISSING_INFO|MISSING_PREREQ|WRONG_APPROACH|ENVIRONMENT|AMBIGUOUS",
+  "rootCause": "MISSING_INFO|MISSING_PREREQ|WRONG_APPROACH|ENVIRONMENT|AMBIGUOUS|TOOL_BUG|TEST_FAILURE",
   "explanation": "one sentence: exactly what went wrong and why the approach itself was wrong",
   "remedyGoal": {
     "title": "specific thing to do to resolve the root cause",
@@ -871,7 +910,9 @@ Root cause guide:
 - MISSING_PREREQ: a dependency (tool/package/service/file) isn't installed or ready
 - WRONG_APPROACH: the strategy itself is wrong — a different method is needed
 - ENVIRONMENT: system-level issue (path, version mismatch, config, OS difference)
-- AMBIGUOUS: the goal is too vague to execute without clarification`,
+- AMBIGUOUS: the goal is too vague to execute without clarification
+- TOOL_BUG: a coding error in one of MAX's own tools (reference error, type error, etc.)
+- TEST_FAILURE: implementation failed the verification step — fix the code based on test output`,
                     { temperature: 0.2, maxTokens: 400, tier: 'fast' }
                 ),
                 15_000,
@@ -948,7 +989,7 @@ Root cause guide:
     }
 
     // ─── Categorize error for smart pivot strategy ────────────────────────
-    // Returns 'TIMEOUT' | 'PERMISSION' | 'NETWORK' | 'LOGIC'
+    // Returns 'TIMEOUT' | 'PERMISSION' | 'NETWORK' | 'LOGIC' | 'TOOL_ERROR'
     _categorizeError(msg) {
         const m = (msg || '').toLowerCase();
         if (m.includes('timeout') || m.includes('timed out'))
@@ -961,6 +1002,16 @@ Root cause guide:
             m.includes('network')    || m.includes('fetch failed') ||
             m.includes('getaddrinfo'))
             return 'NETWORK';
+        
+        // Tool-specific errors (logic bugs in the tool itself)
+        if (m.includes('not a function') || m.includes('is not defined') || 
+            m.includes('cannot read property') || m.includes('syntaxerror') ||
+            m.includes('referenceerror') || m.includes('typeerror'))
+            return 'TOOL_ERROR';
+
+        if (m.includes('test failed') || m.includes('assertion failed') || m.includes('verifycommand failed'))
+            return 'TEST_FAILURE';
+
         return 'LOGIC';
     }
 
@@ -978,6 +1029,41 @@ Root cause guide:
         const codingAction = codingWords.some(w => actionStr.includes(w) || goalStr.includes(w));
 
         return codingTool || codingAction;
+    }
+
+    // ─── Proactive Social Reachout — reach Barry when blocked ───────────
+    async _proactiveSocialReachout(goal, reason) {
+        if (!this.max.brain?._ready) return;
+
+        console.log(`  [AgentLoop] 📡 Blocked — attempting social reachout...`);
+
+        try {
+            const message = `🚨 MAX is blocked on a background task!\n\nGOAL: "${goal.title}"\nREASON: ${reason}\n\nPlease check the terminal to provide approval or guidance.`;
+            
+            // 1. Try Discord (priority)
+            const discord = this.max.tools.get('discord');
+            if (discord && discord.connected) {
+                await this.max.tools.execute('discord', 'send', { message });
+                console.log(`  [AgentLoop] ✅ Notification sent via Discord`);
+                return;
+            }
+
+            // 2. Try Email (fallback)
+            const email = this.max.tools.get('email');
+            if (email && email.connected) {
+                await this.max.tools.execute('email', 'send', { 
+                    to: this.max.profile?.email || 'user@example.com',
+                    subject: `[MAX BLOCKED] ${goal.title.slice(0, 40)}`,
+                    body: message
+                });
+                console.log(`  [AgentLoop] ✅ Notification sent via Email`);
+                return;
+            }
+
+            console.log(`  [AgentLoop] ⚠️  No active social channels for reachout.`);
+        } catch (err) {
+            console.warn(`  [AgentLoop] ❌ Social reachout failed: ${err.message}`);
+        }
     }
 
     // ─── Approval gate ────────────────────────────────────────────────────
