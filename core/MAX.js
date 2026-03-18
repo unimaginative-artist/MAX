@@ -15,6 +15,7 @@ import { OutcomeTracker }     from './OutcomeTracker.js';
 import { ReasoningChamber }   from './ReasoningChamber.js';
 import { GoalEngine }         from './GoalEngine.js';
 import { AgentLoop }          from './AgentLoop.js';
+import { RoadmapEngine }      from './RoadmapEngine.js';
 import { ToolCreator }        from './ToolCreator.js';
 import { EvolutionArbiter }   from './EvolutionArbiter.js';
 import { SelfCodeInspector }  from './SelfCodeInspector.js';
@@ -190,6 +191,22 @@ Requires SOMA running at SOMA_URL. Returns {success, result} or {success:false, 
                 result: msg.content
             });
         };
+
+        // Auto-respond loop: monitored channels → brain → reply back to Discord
+        DiscordTool.onRespond = async (msg) => {
+            try {
+                const prompt = `You are MAX, an autonomous AI assistant responding in Discord.
+Channel: #${msg.channel} | User: ${msg.author}
+Message: ${msg.content}
+
+Reply naturally and concisely. Plain text only — no markdown headers, no bullet spam.`;
+                const response = await this.brain.think(prompt, { temperature: 0.8 });
+                return response?.text?.trim() || null;
+            } catch (err) {
+                console.warn('[Discord] Auto-respond brain error:', err.message);
+                return null;
+            }
+        };
         EmailTool.onMessage = (email) => {
             this.heartbeat.emit('insight', {
                 source: 'email',
@@ -279,7 +296,7 @@ Requires SOMA running at SOMA_URL. Returns {success, result} or {success:false, 
         } catch { /* non-fatal */ }
 
         this.reasoning = new ReasoningChamber(this.brain);
-        this.evolution = new EvolutionArbiter();
+        this.evolution = new EvolutionArbiter({ swarm: this.swarm });
         await this.evolution.initialize();
 
         await this.world.initialize();
@@ -295,6 +312,40 @@ Requires SOMA running at SOMA_URL. Returns {success, result} or {success:false, 
 
         this.goals     = new GoalEngine(this.brain, this.outcomes, this.memory);
         this.goals.initialize();
+
+        this.roadmap   = new RoadmapEngine(this);
+        await this.roadmap.initialize();
+
+        // ── Bootstrap goals — seed on first run or after goals are exhausted ──
+        // Without this, AgentLoop waits for the probabilistic idle-cycle generation
+        // which can take 10-30min to fire. Seeding gives MAX work from tick 1.
+        if (this.goals.listActive().length === 0) {
+            const bootstrapGoals = [
+                {
+                    title:       'Read tasks.md and identify next actionable item',
+                    description: 'Read .max/tasks.md to find Barry\'s current priorities. For each unfinished task, check if it is specific enough to execute with tools. Queue the top actionable task as a new goal.',
+                    type:        'task',
+                    priority:    0.9,
+                    source:      'auto'
+                },
+                {
+                    title:       'Audit MAX codebase for TODO and FIXME comments',
+                    description: 'Search core/, tools/, and memory/ directories for TODO/FIXME comments. Write a summary to .max/audit-todos.md listing file, line, and the comment text.',
+                    type:        'improvement',
+                    priority:    0.7,
+                    source:      'auto'
+                },
+                {
+                    title:       'Verify SOMA bridge and document available tools',
+                    description: 'Check if SOMA is running at SOMA_URL by calling its /health endpoint. If online, list the available tools from /api/tools. Write findings to .max/soma-status.md.',
+                    type:        'research',
+                    priority:    0.65,
+                    source:      'auto'
+                }
+            ];
+            for (const goal of bootstrapGoals) this.goals.addGoal(goal);
+            console.log(`[MAX] 🌱 Seeded ${bootstrapGoals.length} bootstrap goals`);
+        }
 
         // Register goals as a tool so MAX can queue investigation plans from chat
         this.tools.register({
@@ -465,6 +516,17 @@ Just call: TOOL:swarm:run:{"task": "Refactor the authentication module to use JW
             )
         });
 
+        // Roadmap sync — daily parsing of plan.md/frontier_map.md
+        this.scheduler.addJob({
+            id:      'sync_roadmap',
+            label:   'Roadmap: parse plans and inject strategic goals',
+            every:   '24h',
+            type:    'custom',
+            handler: () => this.roadmap?.sync().catch(err =>
+                console.warn('[MAX] Roadmap sync failed:', err.message)
+            )
+        });
+
         // ─── Truly non-blocking background tasks ───
         (async () => {
             console.log('[MAX] 🧵 Launching background worker thread...');
@@ -488,6 +550,21 @@ Just call: TOOL:swarm:run:{"task": "Refactor the authentication module to use JW
                     result: `Detected ${change.type}. Memory index updated.`
                 });
             });
+            this.sentinel.on('significantChange', (change) => {
+                if (change.file === 'plan.md' || change.file === 'frontier_map.md') {
+                    console.log(`[MAX] 🛡️  Roadmap update detected — syncing...`);
+                    this.roadmap?.sync().catch(() => {});
+                } else if (change.type === 'created' || change.type === 'modified') {
+                    // Proactive Goal Injection
+                    this.goals?.addGoal({
+                        title:       `Audit and document: ${change.file}`,
+                        description: `Sentinel detected a significant ${change.type} in ${change.file}. Audit the change for logic errors and update documentation if necessary.`,
+                        type:        'improvement',
+                        priority:    0.6,
+                        source:      'sentinel'
+                    });
+                }
+            });
             this.sentinel.on('insight', (i) => this.heartbeat.emit('insight', i));
 
             // First inspection
@@ -501,6 +578,17 @@ Just call: TOOL:swarm:run:{"task": "Refactor the authentication module to use JW
             // Diagnostics audit — feeding the Goal Economy (Section 2)
             await new Promise(r => setTimeout(r, 5000));
             await this.diagnostics.runAll().catch(() => {});
+
+            // ── Eager AgentLoop — don't wait for the first heartbeat tick ──────
+            // Heartbeat interval is tension-based: 30s (100%) to 5min (0%).
+            // On boot, tension = 0 → 5min wait before AgentLoop ever runs.
+            // We have goals now (bootstrap + self-inspection), so fire immediately.
+            if (this.goals?.getNext(this.drive) != null && this.agentLoop && !this._chatBusy) {
+                console.log('[MAX] ⚡ Eager start — running first AgentLoop cycle now');
+                this.agentLoop.runCycle().catch(err =>
+                    console.error('[MAX] Eager AgentLoop error:', err.message)
+                );
+            }
         })().catch(err => console.error('[MAX] Background startup error:', err.message));
 
         console.log('[MAX] Ready.\n');
@@ -1268,6 +1356,7 @@ ${recent}`,
             selfInspector: this.selfInspector?.getStatus(),
             reflection:    this.reflection?.getStatus(),
             kb:            this.kb?.getStatus(),
+            roadmap:       this.roadmap?.getStatus(),
             skills:        this.skills?.getStatus(),
             soma:          this.soma?.getStatus(),
             notifier:      this.notifier?.getStatus()

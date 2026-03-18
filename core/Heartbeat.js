@@ -129,7 +129,10 @@ export class Heartbeat extends EventEmitter {
             this.stats.lastTask = curiosityTask.label;
             this.stats.tasksExecuted++;
 
-            drive?.onTaskExecuted();
+            // NOTE: intentionally NOT calling drive.onTaskExecuted() here.
+            // Curiosity is background enrichment, not real work. If we reset
+            // tension on every curiosity tick it never reaches 40% and AgentLoop
+            // never fires. Tension should only drop when AgentLoop does real work.
             this.emit('task', curiosityTask);
 
             if (this.max?.brain?._ready && curiosityTask.prompt) {
@@ -180,12 +183,16 @@ export class Heartbeat extends EventEmitter {
             drive?.onIdleTick();
             this.emit('idle');
 
-            // ── Auto-generate goals (~10% of idle ticks) ──────────────────
-            // Keeps MAX self-directed even when there are no pending goals.
-            if (this.max?.goals && Math.random() < 0.10) {
-                this.max.goals.generateGoals({
-                    profileContext: this.max.profile?.buildContextBlock()
-                }).catch(() => {});
+            // ── Auto-generate goals — always if queue is empty, else 20% chance ──
+            // Old: 10% random chance on idle only = goals almost never generated.
+            // New: guaranteed generation when queue is empty so MAX always has work.
+            if (this.max?.goals) {
+                const hasGoals = this.max.goals.getNext() != null;
+                if (!hasGoals || Math.random() < 0.20) {
+                    this.max.goals.generateGoals({
+                        profileContext: this.max.profile?.buildContextBlock()
+                    }).catch(() => {});
+                }
             }
 
             // ── Proactive surfacing (~15% of idle ticks) ──

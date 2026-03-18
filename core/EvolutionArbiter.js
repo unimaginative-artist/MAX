@@ -15,11 +15,14 @@ export class EvolutionArbiter {
         this.baseDir    = process.cwd();
         this.stagingDir = path.join(this.baseDir, '.max', 'evolution', 'staging');
         this.backupDir  = path.join(this.baseDir, '.max', 'evolution', 'backups');
+        this.swarm      = config.swarm || null;
     }
 
     async initialize() {
         await fs.mkdir(this.stagingDir, { recursive: true });
         await fs.mkdir(this.backupDir, { recursive: true });
+        // Ensure staging is treated as ESM so node --check works for .js files
+        await fs.writeFile(path.join(this.stagingDir, 'package.json'), JSON.stringify({ type: 'module' }));
     }
 
     /**
@@ -84,7 +87,83 @@ export class EvolutionArbiter {
             };
         }
 
+        // 4.5 Runtime Runtime Validation (Level 4 Dry Run)
+        // Ensure the file can actually be imported/required without crashing.
+        // This catches runtime bugs that static checks (node --check) miss.
+        try {
+            console.log(`[Evolution] 🏃 Running runtime dry-run (import check)...`);
+            const dryRunScript = `import * as mod from './${path.basename(stagedPath)}'; console.log('Import successful');`;
+            const scriptPath = path.join(this.stagingDir, 'dry_run.js');
+            await fs.writeFile(scriptPath, dryRunScript);
+            
+            await execAsync(`node "${scriptPath}"`, { cwd: this.stagingDir });
+            await fs.unlink(scriptPath).catch(() => {});
+        } catch (err) {
+            return {
+                success: false,
+                error: `Runtime Crash Detected: The change caused an error during import.`,
+                details: err.stderr || err.message
+            };
+        }
+
+        // 5. Adversarial Peer Review (Level 4 Evolution)
+        if (this.swarm) {
+            const review = await this.adversarialReview(stagedPath);
+            if (!review.success) {
+                return { success: false, error: `Adversarial Review Rejected: ${review.reason}` };
+            }
+        }
+
         return { success: true };
+    }
+
+    /**
+     * Phase 2.5: Swarm Review (Architect vs maintainer)
+     */
+    async adversarialReview(stagedPath) {
+        console.log(`[Evolution] 🐝 Starting adversarial swarm review...`);
+        const filename = path.basename(stagedPath);
+        const content  = await fs.readFile(stagedPath, 'utf8');
+
+        try {
+            const task = {
+                name: `Review Evolution: ${filename}`,
+                subtasks: [
+                    {
+                        id: 'Architect',
+                        prompt: `Review this proposed change to ${filename}. Does it improve the system architecture? Is it idiomatic? 
+CODE:
+${content}`
+                    },
+                    {
+                        id: 'SecurityAuditor',
+                        prompt: `Act as a paranoid security and stability auditor. Find any ways this change to ${filename} could break the system, introduce leaks, or crash the agent.
+CODE:
+${content}
+
+Return a DISCOVERY: {"riskSeverity": 0.0-1.0, "reason": "..."} if you find issues.`
+                    }
+                ]
+            };
+
+            const result = await this.swarm.run(task);
+            
+            // If the SecurityAuditor found a high risk, reject
+            const securityResult = result.results.find(r => r.id === 'SecurityAuditor');
+            const risk = securityResult?.discoveries?.riskSeverity || 0;
+
+            if (risk > 0.7) {
+                const reason = securityResult?.discoveries?.reason || 'High risk detected';
+                console.warn(`[Evolution] ❌ Swarm Rejected change: ${reason}`);
+                return { success: false, reason };
+            }
+
+            console.log(`[Evolution] ✅ Swarm Approved change`);
+            return { success: true };
+        } catch (err) {
+            console.warn(`[Evolution] ⚠️ Review failed (ignoring): ${err.message}`);
+            return { success: true }; // don't block on swarm failure
+        }
     }
 
     /**

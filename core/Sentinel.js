@@ -96,6 +96,18 @@ export class Sentinel extends EventEmitter {
             // 2. Alert the Heartbeat so the user sees an insight
             this.emit('change', { file, type });
 
+            // ── 4. Significant Change Detection ───────────────────────────
+            const isSignificant = (
+                file === 'plan.md' || 
+                file === 'package.json' || 
+                (type === 'created' && (file.startsWith('core/') || file.startsWith('tools/')))
+            );
+
+            if (isSignificant) {
+                console.log(`[Sentinel] ⚠️  Significant change detected: ${file}`);
+                this.emit('significantChange', { file, type });
+            }
+
             // 3. Proactive Mini-Audit
             // If it's a core file, we might want to run a quick brain check
             if (file.startsWith('core/') || file.startsWith('tools/')) {
