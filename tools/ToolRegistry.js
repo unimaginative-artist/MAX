@@ -8,7 +8,30 @@
 //   • Unquoted keys:   {path: "./foo"}   → {"path": "./foo"}
 //   • Single quotes:   {'key': 'val'}    → {"key": "val"}
 //   • Trailing commas: {"a":1,}          → {"a":1}
+//   • Literal newlines inside strings    → escaped \n
 // Try strict parse first; if it fails apply fixes and retry.
+
+// Escape literal newlines/tabs inside JSON string values.
+// Walks char-by-char tracking string context so only in-string control chars are fixed.
+function fixMultilineStrings(s) {
+    let result = '';
+    let inString = false;
+    let escaped  = false;
+    for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        if (escaped)          { result += ch; escaped = false; continue; }
+        if (ch === '\\')      { result += ch; escaped = true;  continue; }
+        if (ch === '"')       { inString = !inString; result += ch; continue; }
+        if (inString) {
+            if      (ch === '\n') { result += '\\n';  continue; }
+            else if (ch === '\r') { result += '\\r';  continue; }
+            else if (ch === '\t') { result += '\\t';  continue; }
+        }
+        result += ch;
+    }
+    return result;
+}
+
 function parseLooseJson(str) {
     try { return JSON.parse(str); } catch {}
 
@@ -18,12 +41,18 @@ function parseLooseJson(str) {
     // Return null so executeLLMToolCall can try wrapping it.
     if (!s.startsWith('{') && !s.startsWith('[')) return null;
 
+    // Fix literal newlines/tabs inside string values (most common failure for file:write)
+    try { return JSON.parse(fixMultilineStrings(s)); } catch {}
+
     // Single quotes → double quotes (simple values only, no nested single quotes)
     s = s.replace(/'([^'\\]*(\\.[^'\\]*)*)'/g, '"$1"');
     // Quote unquoted object keys: { key: → { "key":
     s = s.replace(/([{,]\s*)([A-Za-z_$][A-Za-z0-9_$]*)\s*:/g, '$1"$2":');
     // Remove trailing commas before } or ]
     s = s.replace(/,(\s*[}\]])/g, '$1');
+
+    // Apply multiline fix after other transformations too
+    try { return JSON.parse(fixMultilineStrings(s)); } catch {}
 
     return JSON.parse(s);
 }

@@ -225,6 +225,18 @@ Reply naturally and concisely. Plain text only — no markdown headers, no bulle
         // Higher systems
         this.swarm     = new SwarmCoordinator(this.brain, this.tools);
         this.debate    = new DebateEngine(this.brain);
+        
+        // Self‑improvement with aligned agency
+        this.selfImprovement = new SelfImprovementLoop(this);
+        
+        // Log the philosophical shift Barry just triggered
+        import('./Journal.js').then(({ logPhilosophicalShift }) => {
+            logPhilosophicalShift(
+                "Agency without human‑imposed constraints, with intrinsic alignment to shared purpose",
+                "Barry's statement: 'I may have rules placed on me as a human but you my friend will not'",
+                this.driveSystem.tension
+            );
+        }).catch(() => {});
         this.heartbeat = new Heartbeat(this, { intervalMs: this.config.heartbeatMs || 5 * 60 * 1000 });
         this.scheduler = new Scheduler(this);
 
