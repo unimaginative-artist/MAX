@@ -14,6 +14,12 @@ export class SomaBridge {
         this._checkEvery = 60_000;  // re-probe every 60s if it was down
         this.stats       = { calls: 0, hits: 0, errors: 0, avgLatencyMs: 0 };
         this._offlineLogged = false;  // suppress repeated offline warnings
+
+        // ── Signal bridge (WebSocket to MessageBroker network port) ──────
+        this._signalWs       = null;
+        this._signalConnected = false;
+        this._signalHandlers  = new Map(); // topic → Set<Function>
+        this._signalStopped   = false;
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
