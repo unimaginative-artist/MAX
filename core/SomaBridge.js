@@ -278,6 +278,26 @@ export class SomaBridge {
     }
 
     /**
+     * Notify SOMA that MAX modified one of its files.
+     * SOMA logs the event and can trigger hot-reload / restart as needed.
+     * Fire-and-forget — never blocks the build cycle.
+     */
+    async notifyFileChanged(filePath) {
+        if (!this._available) return;
+        try {
+            const { default: fetch } = await import('node-fetch');
+            await Promise.race([
+                fetch(`${this.baseUrl}/api/soma/file-changed`, {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body:    JSON.stringify({ path: filePath, source: 'MAX', ts: Date.now() })
+                }),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000))
+            ]);
+        } catch { /* non-blocking */ }
+    }
+
+    /**
      * Section 1: Hot-patch a SOMA module.
      * Allows MAX to push code improvements directly to the SOMA kernel.
      */

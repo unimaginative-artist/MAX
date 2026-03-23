@@ -969,6 +969,32 @@ Think deeper about the engineering implications. What are edge cases, gotchas, o
         });
     }
 
+    // ─── Isolated agentic think — for BuildLoop / background tasks ────────
+    // Runs the full agentic tool loop (TOOL: calls → real side effects) in a
+    // private context that does NOT pollute the main conversation history.
+    //
+    // This is what makes BuildLoop actually write files instead of describing
+    // what it would write. The LLM sees the full tools manifest + state context
+    // and is instructed to call tools, not narrate.
+    //
+    // Returns { text, toolCallsMade }
+    async taskThink(prompt, options = {}) {
+        if (!this._ready) throw new Error('MAX not initialized');
+
+        const savedContext = this._context;
+        this._context = [];  // isolated — won't appear in /history or session briefings
+        try {
+            const result = await this.think(prompt, options);
+            // Harvest the TOOL: lines from the isolated context for the caller
+            const toolCallsMade = this._context
+                .flatMap(m => (m.content || '').split('\n'))
+                .filter(l => l.trim().startsWith('TOOL:'));
+            return { text: result.text, toolCallsMade };
+        } finally {
+            this._context = savedContext;
+        }
+    }
+
     // ─── Process tool calls embedded in LLM output ────────────────────────
     async _processToolCalls(text) {
         if (!text.includes('TOOL:')) return text;
