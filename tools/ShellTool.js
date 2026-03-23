@@ -149,6 +149,15 @@ export const ShellTool = {
                 command = envMatch[3].trim();
             }
 
+            // Validate cwd — ENOENT on spawn means the cwd doesn't exist, not the command
+            try {
+                const { promises: fsp } = await import('fs');
+                await fsp.access(runCwd);
+            } catch {
+                runCwd = process.cwd();
+                _cwd   = runCwd;  // self-heal persistent state
+            }
+
             printShellHeader(command);
 
             const start     = Date.now();
@@ -297,8 +306,15 @@ export const ShellTool = {
         // ── cd — change persistent working directory ──────────────────────
         async cd({ path: targetPath }) {
             const pathModule = await import('path');
-            _cwd = pathModule.default.resolve(_cwd, targetPath);
-            return { success: true, cwd: _cwd };
+            const { promises: fsp } = await import('fs');
+            const resolved = pathModule.default.resolve(_cwd, targetPath);
+            try {
+                await fsp.access(resolved);
+                _cwd = resolved;
+                return { success: true, cwd: _cwd };
+            } catch {
+                return { success: false, error: `Directory does not exist: ${resolved}`, cwd: _cwd };
+            }
         },
 
         // ── which — check if a program is installed ───────────────────────

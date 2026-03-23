@@ -245,6 +245,102 @@ export const FileTools = {
             return { success: true, pattern, matches: results, total: results.length };
         },
 
+        // ── patch ─────────────────────────────────────────────────────────
+        // Anchor-based surgical editing — designed for LLM use.
+        // Much easier to generate correctly than unified diff.
+        //
+        // Each hunk specifies:
+        //   anchor    — substring to locate the insertion point
+        //   position  — 'after' (default) | 'before' | 'replace' | 'append'
+        //   content   — new code to insert / replacement text
+        //   range     — for 'replace': lines to remove starting at anchor (default 1)
+        //
+        // Example:
+        //   TOOL:file:patch:{"filePath":"extended.js","hunks":[
+        //     {"anchor":"import { DiscoverySwarm }","position":"after",
+        //      "content":"import { ProactiveCouncil } from './ProactiveCouncil.js';"}
+        //   ]}
+        async patch({ filePath, hunks = [], createIfMissing = false }) {
+            if (!Array.isArray(hunks) || hunks.length === 0) {
+                return { success: false, error: 'hunks must be a non-empty array' };
+            }
+
+            let content = await fs.readFile(filePath, 'utf8').catch(async (err) => {
+                if (err.code === 'ENOENT' && createIfMissing) {
+                    await fs.mkdir(path.dirname(filePath), { recursive: true });
+                    return '';
+                }
+                return null;
+            });
+            if (content === null) return { success: false, error: `File not found: ${filePath}` };
+
+            let lines        = content.split('\n');
+            const hunkResults = [];
+
+            for (let h = 0; h < hunks.length; h++) {
+                const { anchor, position = 'after', content: newContent = '', range = 1 } = hunks[h];
+
+                // append — no anchor needed
+                if (position === 'append') {
+                    lines.push(...(newContent === '' ? [''] : newContent.split('\n')));
+                    hunkResults.push({ hunk: h, applied: true, position: 'append' });
+                    continue;
+                }
+
+                if (!anchor) {
+                    hunkResults.push({ hunk: h, applied: false, error: 'anchor required for non-append positions' });
+                    continue;
+                }
+
+                // Find anchor — exact substring first, then trimmed
+                let anchorIdx = lines.findIndex(l => l.includes(anchor));
+                if (anchorIdx === -1) anchorIdx = lines.findIndex(l => l.trim() === anchor.trim());
+
+                if (anchorIdx === -1) {
+                    hunkResults.push({
+                        hunk: h, applied: false,
+                        error: `Anchor not found: "${anchor.slice(0, 80)}". Use file:grep to locate exact content.`,
+                    });
+                    continue;
+                }
+
+                const newLines = newContent === '' ? [] : newContent.split('\n');
+
+                if (position === 'after')        lines.splice(anchorIdx + 1, 0, ...newLines);
+                else if (position === 'before')  lines.splice(anchorIdx, 0, ...newLines);
+                else if (position === 'replace') lines.splice(anchorIdx, Math.max(1, range), ...newLines);
+                else {
+                    hunkResults.push({ hunk: h, applied: false, error: `Unknown position: ${position}` });
+                    continue;
+                }
+
+                hunkResults.push({ hunk: h, applied: true, anchorLine: anchorIdx + 1, position });
+            }
+
+            const applied = hunkResults.filter(r => r.applied).length;
+            const failed  = hunkResults.filter(r => !r.applied).length;
+
+            const updated = lines.join('\n');
+            await fs.writeFile(filePath, updated, 'utf8');
+
+            const syntaxError = verifySyntax(filePath, updated);
+            if (syntaxError) {
+                await fs.writeFile(filePath, content, 'utf8');  // revert
+                return { success: false, path: filePath, error: `Syntax error after patch — reverted: ${syntaxError}`, hunkResults };
+            }
+
+            return {
+                success:      failed === 0,
+                path:         filePath,
+                totalLines:   lines.length,
+                hunksApplied: applied,
+                hunksFailed:  failed,
+                hunksTotal:   hunks.length,
+                hunkResults,
+                warning:      failed > 0 ? `${failed} hunk(s) failed — file written with successful hunks only` : undefined,
+            };
+        },
+
         async delete({ filePath }) {
             await fs.unlink(filePath);
             return { success: true, deleted: filePath };

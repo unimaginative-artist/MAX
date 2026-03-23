@@ -9,7 +9,10 @@
     "chat": "node launcher.mjs --mode chat",
     "swarm": "node launcher.mjs --mode swarm",
     "api": "node launcher.mjs --mode api",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --passWithNoTests"
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "node --experimental-vm-modules node_modules/jest/bin/jest.js test/unit --passWithNoTests",
+    "test:unit:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js test/unit --coverage",
+    "test:integration": "node --experimental-vm-modules node_modules/jest/bin/jest.js test/integration --passWithNoTests"
   },
   "dependencies": {
     "@xenova/transformers": "^2.17.2",
