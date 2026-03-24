@@ -21,6 +21,9 @@ import { LoopSelector }   from './LoopSelector.js';
 import { ExploreLoop }    from './loops/ExploreLoop.js';
 import { BuildLoop }      from './loops/BuildLoop.js';
 import { ReflectLoop }    from './loops/ReflectLoop.js';
+import { SentinelLoop }   from './loops/SentinelLoop.js';
+import { DreamLoop }      from './loops/DreamLoop.js';
+import { VisionLoop }     from './loops/VisionLoop.js';
 
 // Actions that require human approval before running
 const REQUIRES_APPROVAL = ['shell', 'git.commit', 'git.push', 'file.delete', 'file.write'];
@@ -58,9 +61,12 @@ export class AgentLoop extends EventEmitter {
         // ── Loop dispatch infrastructure ──────────────────────────────────
         this._selector = new LoopSelector();
         this._loops    = {
-            explore: new ExploreLoop(),
-            build:   new BuildLoop(),
-            reflect: new ReflectLoop()
+            explore:  new ExploreLoop(),
+            build:    new BuildLoop(),
+            reflect:  new ReflectLoop(),
+            watch:    new SentinelLoop(),
+            dream:    new DreamLoop(),
+            vision:   new VisionLoop(),
         };
 
         this.stats = {
@@ -133,9 +139,24 @@ export class AgentLoop extends EventEmitter {
             console.log(`  [AgentLoop] 🔀 Loop: ${loop} (confidence: ${(confidence * 100).toFixed(0)}% — ${rationale})`);
             const loopHandler = this._loops[loop];
             if (loopHandler) {
+                this.emit('goalStart', { goal });   // fire before any loop runs
                 try {
-                    return await loopHandler.run(goal, this.max);
+                    const result = await loopHandler.run(goal, this.max, this);
+                    // Surface the result as an insight so the launcher can show it
+                    this.emit('insight', {
+                        source: 'agent',
+                        label:  result?.success
+                            ? `✅ Done (${loop}): ${goal.title}`
+                            : `⚠️  Blocked (${loop}): ${goal.title}`,
+                        result: result?.summary || goal.title
+                    });
+                    return result;
                 } catch (err) {
+                    this.emit('insight', {
+                        source: 'agent',
+                        label:  `⚠️  ${loop} loop error: ${goal.title}`,
+                        result: err.message
+                    });
                     console.warn(`  [AgentLoop] ⚠️  ${loop} loop error — falling back to default: ${err.message}`);
                     // fall through to default linear execution
                 }

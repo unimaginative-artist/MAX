@@ -35,6 +35,14 @@ const SIGNALS = {
     watch: [
         'monitor', 'watch', 'alert when', 'check every', 'notify when',
         'keep watching', 'sentinel', 'track changes', 'poll', 'detect when'
+    ],
+    dream: [
+        'dream', 'optimize self', 'background maintenance', 'clean up', 're-index',
+        'maintenance', 'background task', 'housekeeping', 'idle maintenance', 'reindex'
+    ],
+    vision: [
+        'look at', 'see', 'screenshot', 'scan ui', 'visual check', 'ui audit',
+        'visual', 'observe screen', 'visual inspection', 'screen capture'
     ]
 };
 

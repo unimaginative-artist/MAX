@@ -21,8 +21,8 @@ export class ExploreLoop {
 
         // ── 1. Recall relevant memories ──────────────────────────────────
         try {
-            const hits = await max.memory?.search?.(goal.title, 5) || [];
-            const relevant = hits.filter(h => h.score > 0.4).slice(0, 4);
+            const hits = await max.memory?.recall?.(goal.title, { topK: 5 }) || [];
+            const relevant = hits.filter(h => (h.score ?? 1) > 0.4).slice(0, 4);
             if (relevant.length > 0) {
                 context.push(
                     `RECALLED MEMORIES:\n` +
@@ -79,6 +79,11 @@ export class ExploreLoop {
         const meta = { source: 'explore_loop', goal: goal.title };
         max.kb?.remember(summary, meta).catch(() => {});
         max.memory?.remember(summary, meta, { type: 'research', importance: 0.7 }).catch(() => {});
+
+        // Push finding to SOMA's memory for bidirectional knowledge sharing
+        if (max.soma?.available) {
+            max.soma.remember(`MAX explored: "${goal.title}". ${summary.slice(0, 400)}`, meta).catch(() => {});
+        }
 
         console.log(`[ExploreLoop] ✅ Exploration complete — ${summary.length} chars synthesized`);
 

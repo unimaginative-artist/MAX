@@ -204,6 +204,13 @@ export class Heartbeat extends EventEmitter {
             if (this.max?.reflection && Math.random() < 0.05) {
                 this.max.reflection.dream(this.max.kb).catch(() => {});
             }
+
+            // ── SOMA curiosity goal sync (~20% of idle ticks) ─────────────
+            // Pull curiosity goals SOMA generated and inject them as MAX goals.
+            // This is how SOMA steers MAX's exploration during idle time.
+            if (this.max?.soma?.available && this.max?.goals && Math.random() < 0.20) {
+                this.max.soma.syncCuriosityGoals(this.max.goals).catch(() => {});
+            }
         }
     }
 

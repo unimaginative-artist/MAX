@@ -309,6 +309,45 @@ export class SomaBridge {
         return { success: true, message: "Patch staged for SOMA kernel arbitration." };
     }
 
+    // ── SOMA → MAX curiosity goal sync ───────────────────────────────────
+
+    /**
+     * Pull pending curiosity goals from SOMA and inject them into MAX's GoalEngine.
+     * Called periodically so MAX stays aligned with what SOMA is curious about.
+     * Returns number of goals injected.
+     */
+    async syncCuriosityGoals(maxGoals) {
+        if (!this._available || !maxGoals) return 0;
+        try {
+            const { default: fetch } = await import('node-fetch');
+            const r = await Promise.race([
+                fetch(`${this.baseUrl}/api/goals?source=curiosity&limit=5`),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))
+            ]);
+            if (!r.ok) return 0;
+            const data  = await r.json();
+            const goals = Array.isArray(data) ? data : (data.goals || data.items || []);
+            let injected = 0;
+            for (const g of goals.slice(0, 3)) {
+                if (!g?.title) continue;
+                maxGoals.addGoal({
+                    title:       `[SOMA] ${g.title}`.slice(0, 120),
+                    description: (g.description || '').slice(0, 400),
+                    type:        g.type || 'research',
+                    source:      'soma_curiosity',
+                    priority:    Math.min(0.7, g.priority || 0.4)
+                });
+                injected++;
+            }
+            if (injected > 0) {
+                console.log(`[SomaBridge] 🎯 Synced ${injected} curiosity goal(s) from SOMA`);
+            }
+            return injected;
+        } catch {
+            return 0;
+        }
+    }
+
     // ── Status ────────────────────────────────────────────────────────────
 
     getStatus() {

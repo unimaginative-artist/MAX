@@ -141,6 +141,28 @@ function expandInsight(arg) {
     }
 }
 
+// ─── Live print — bypasses the bgQueue for time-sensitive background messages
+// Uses readline clear/redraw so it never tears the user's current input line.
+// Only call this for important notifications (goal start/done, MAX say()).
+// Low-priority chatter should still go through console.log → _bgQueue.
+let _workingGoal = null;   // title of whatever goal MAX is currently executing
+
+function printLive(msg) {
+    if (_rl && !isThinking) {
+        // User is sitting at the YOU: prompt — clear it, print, redraw
+        readline.clearLine(process.stdout, 0);
+        readline.cursorTo(process.stdout, 0);
+        _origLog(msg);
+        // Redraw prompt + whatever the user has typed so far
+        process.stdout.write('YOU: ' + (_rl.line || ''));
+    } else if (!_rl) {
+        _origLog(msg);
+    } else {
+        // MAX is mid-response — safe to queue, will flush after response
+        _bgQueue.push([msg]);
+    }
+}
+
 // ─── Thinking spinner ─────────────────────────────────────────────────────
 const SPINNER = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
 let _spinnerTimer = null;
@@ -217,6 +239,7 @@ const BG_SUPPRESS = [
     /^\[GoalEngine\] ⚠️.*Duplicate goal/,       // duplicate goal warnings
     /^\[CodeIndexer\] 📁 Found \d+ source/,     // "indexing in progress" mid-line
     /^\[Diagnostics\] 🔍 Running system-wide/,  // fires twice on boot
+    /^\[Brain\] ⚡ Fast tier disabled for this session/, // repeated after first warning
 ];
 
 // ─── Chat mode ───────────────────────────────────────────────────────────
@@ -239,6 +262,7 @@ async function chatMode(max, opts) {
         if (_rl) { _bgQueue.push(args); } else { _origLog(...args); }
     };
     console.error = (...args) => { if (_rl) { _bgQueue.push(args); } else { _origError(...args); } };
+    console.warn  = (...args) => { if (_rl) { _bgQueue.push(args); } else { _origLog(...args); } };
 
     function flushBgQueue() {
         if (_bgQueue.length === 0) return;
@@ -285,6 +309,9 @@ async function chatMode(max, opts) {
     const ask = () => {
         if (!isThinking) {
             flushBgQueue();
+            if (_workingGoal) {
+                _origLog(`  ⚙️  [MAX is working on: "${_workingGoal.slice(0, 55)}"]\n`);
+            }
             process.stdout.write('YOU: ');
         }
     };
@@ -864,12 +891,21 @@ async function chatMode(max, opts) {
     });
 
     max.heartbeat.on('insight', printInsight);
-    
-    // ── Proactive direct messages from background systems ──
+
+    // ── Proactive direct messages (max.say()) — print immediately ──────────
     max.heartbeat.on('message', (msg) => {
-        console.log(`\nMAX [background]: ${msg.text}`);
-        if (msg.details) console.log(`[${msg.details}]`);
-        console.log();
+        printLive(`\nMAX: ${msg.text}${msg.details ? ` [${msg.details}]` : ''}\n`);
+    });
+
+    // ── AgentLoop goal lifecycle — wire directly so nothing is missed ───────
+    max.agentLoop?.on('goalStart', ({ goal }) => {
+        _workingGoal = goal.title;
+        printLive(`\n  ⚙️  MAX started: "${goal.title.slice(0, 60)}"\n`);
+    });
+
+    max.agentLoop?.on('insight', (insight) => {
+        _workingGoal = null;
+        printInsight(insight);
     });
     
     console.log('\n' + '─'.repeat(60));

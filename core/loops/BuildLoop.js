@@ -88,6 +88,13 @@ export class BuildLoop {
             reward:  verified ? 0.9 : 0.3
         });
 
+        // Push outcome to SOMA's memory so SOMA knows what MAX has been building
+        if (max.soma?.available) {
+            const mem = `MAX build: "${goal.title}" — ${verified ? 'succeeded' : 'partial'}. ` +
+                        (execResult.summary || '').slice(0, 300);
+            max.soma.remember(mem, { source: 'MAX_BuildLoop', success: verified }).catch(() => {});
+        }
+
         return { goal: goal.title, success: verified, summary: execResult.summary };
     }
 

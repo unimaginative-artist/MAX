@@ -46,9 +46,11 @@ import { WorldModel }         from './WorldModel.js';
 import { ArtifactManager }    from './ArtifactManager.js';
 import { TestGenerator }      from './TestGenerator.js';
 import { SkillLibrary }       from './SkillLibrary.js';
+import { SelfImprovementLoop } from './SelfImprovementLoop.js';
 import { SelfEditor }         from './SelfEditor.js';
 import { Notifier }           from './Notifier.js';
 import { SomaBridge }         from './SomaBridge.js';
+import { LongHorizonPlanner } from './LongHorizonPlanner.js';
 import fs                     from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -97,6 +99,7 @@ export class MAX {
         this.selfEditor    = new SelfEditor();
         this.notifier      = new Notifier();
         this.soma          = new SomaBridge();
+        this.longHorizon   = new LongHorizonPlanner();
 
         // Conversation context window
         this._context         = [];
@@ -234,7 +237,7 @@ Reply naturally and concisely. Plain text only — no markdown headers, no bulle
             logPhilosophicalShift(
                 "Agency without human‑imposed constraints, with intrinsic alignment to shared purpose",
                 "Barry's statement: 'I may have rules placed on me as a human but you my friend will not'",
-                this.driveSystem.tension
+                this.drive.getStatus().tension
             );
         }).catch(() => {});
         this.heartbeat = new Heartbeat(this, { intervalMs: this.config.heartbeatMs || 5 * 60 * 1000 });
@@ -256,6 +259,9 @@ Reply naturally and concisely. Plain text only — no markdown headers, no bulle
 
         // SOMA bridge — try to connect to SOMA; gracefully offline if not running
         await this.soma.initialize();
+
+        // Long-horizon planner — creates .max/vision.md if it doesn't exist
+        await this.longHorizon.initialize();
 
         // Morning briefing scheduler — 8am daily
         // (wired to Scheduler after heartbeat is set up below)

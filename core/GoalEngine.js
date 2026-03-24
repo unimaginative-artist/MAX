@@ -282,29 +282,45 @@ Return ONLY the JSON array.`;
         return true;
     }
 
-    // ─── Mark a goal failed ───────────────────────────────────────────────
+    // ─── Mark a goal failed — retries up to maxRetries before permanent fail ─
     fail(id, reason = '') {
         const goal = this._active.get(id);
         if (!goal) return false;
 
-        goal.status    = 'failed';
-        goal.outcome   = { error: reason };
+        goal.attempts  = (goal.attempts || 0) + 1;
         goal.updatedAt = Date.now();
+
+        const maxRetries = this.config.maxRetries ?? 3;
+
+        // Retry: clear stale steps, give a small urgency bump, re-queue
+        if (goal.attempts < maxRetries) {
+            goal.status   = 'pending';
+            goal.steps    = [];   // force re-decompose with fresh context next cycle
+            goal.outcome  = { lastError: reason.slice(0, 200), attempt: goal.attempts };
+            goal.priority = Math.min(1.0, (goal.priority || 0.5) + 0.05);
+            this._save();
+            console.log(`[GoalEngine] 🔄 "${goal.title}" retry ${goal.attempts}/${maxRetries - 1}: ${reason.slice(0, 60)}`);
+            return false;  // not yet permanently failed
+        }
+
+        // Permanently failed — exhausted retries
+        goal.status  = 'failed';
+        goal.outcome = { error: reason, attempts: goal.attempts };
 
         this._active.delete(id);
         this._failed.unshift(goal);
 
         this.stats.failed++;
         this._save();
-        console.log(`[GoalEngine] ❌ "${goal.title}" failed: ${reason}`);
+        console.log(`[GoalEngine] ❌ "${goal.title}" permanently failed after ${goal.attempts} attempt(s): ${reason.slice(0, 80)}`);
 
         this.outcomes?.record({
             agent:   'GoalEngine',
             action:  'fail_goal',
-            context: { goalType: goal.type },
+            context: { goalType: goal.type, attempts: goal.attempts },
             result:  reason,
             success: false,
-            reward: -0.3
+            reward:  -0.3
         });
 
         return true;

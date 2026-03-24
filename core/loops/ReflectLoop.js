@@ -10,6 +10,7 @@
 
 const STALE_AFTER_MS     = 7 * 24 * 60 * 60 * 1000;  // 7 days
 const MAX_STALE_ATTEMPTS = 5;
+const VALID_GOAL_TYPES   = new Set(['task', 'research', 'improvement', 'fix']);
 
 export class ReflectLoop {
     /**
@@ -44,7 +45,15 @@ export class ReflectLoop {
             findings.push(`Pruned ${pruned} stale goal(s)`);
         }
 
-        // ── 4. Build self-model insight ───────────────────────────────────
+        // ── 4. Long-horizon alignment — inject vision-aligned goals ──────
+        if (max.longHorizon) {
+            try {
+                const visionResult = await max.longHorizon.synthesize(max);
+                if (visionResult) findings.push(visionResult);
+            } catch { /* non-fatal */ }
+        }
+
+        // ── 5. Build self-model insight ───────────────────────────────────
         const insight = await this._buildInsight(max);
         if (insight) {
             findings.push(`Self-model updated: ${insight}`);
@@ -97,17 +106,34 @@ export class ReflectLoop {
             const match = analysis.text.match(/\[[\s\S]*\]/);
             if (!match) return 0;
             const goals = JSON.parse(match[0]);
+            if (!Array.isArray(goals)) return 0;
             let added = 0;
             for (const g of goals.slice(0, 3)) {
-                if (g.title) {
-                    max.goals?.addGoal({ ...g, source: 'reflection', priority: 0.35 });
-                    added++;
+                if (!this._validateGoalShape(g)) {
+                    console.warn(`[ReflectLoop] ⚠️ Skipped invalid goal shape: ${JSON.stringify(g).slice(0, 80)}`);
+                    continue;
                 }
+                max.goals?.addGoal({
+                    title:       g.title.trim().slice(0, 120),
+                    description: (g.description || '').slice(0, 500),
+                    type:        VALID_GOAL_TYPES.has(g.type) ? g.type : 'improvement',
+                    source:      'reflection',
+                    priority:    0.35
+                });
+                added++;
             }
             return added;
         } catch {
             return 0;
         }
+    }
+
+    // ── Schema validator for brain-generated goals ────────────────────────
+    _validateGoalShape(g) {
+        if (!g || typeof g !== 'object' || Array.isArray(g)) return false;
+        if (typeof g.title !== 'string') return false;
+        if (g.title.trim().length < 4 || g.title.length > 200) return false;
+        return true;
     }
 
     // ── Remove goals that have failed too many times or gone stale ────────
