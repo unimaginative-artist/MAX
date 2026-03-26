@@ -31,8 +31,10 @@ import { ApiTool }            from '../tools/ApiTool.js';
 import { CodeRunnerTool }     from '../tools/CodeRunnerTool.js';
 import { createVisionTool }   from '../tools/VisionTool.js';
 import { createSelfEvolutionTool } from '../tools/SelfEvolutionTool.js';
+import { createSystemTool }    from '../tools/SystemTool.js';
 import { DiscordTool, autoConnectDiscord } from '../tools/DiscordTool.js';
 import { EmailTool,   autoConnectEmail   } from '../tools/EmailTool.js';
+import { KnowledgeTool }      from '../tools/KnowledgeTool.js';
 import { SwarmCoordinator }   from '../swarm/SwarmCoordinator.js';
 import { DebateEngine }       from '../debate/DebateEngine.js';
 import { MaxMemory }          from '../memory/MaxMemory.js';
@@ -51,6 +53,10 @@ import { SelfEditor }         from './SelfEditor.js';
 import { Notifier }           from './Notifier.js';
 import { SomaBridge }         from './SomaBridge.js';
 import { LongHorizonPlanner } from './LongHorizonPlanner.js';
+import { EdgeWorkerOrchestrator } from './EdgeWorkerOrchestrator.js';
+import { EconomicsEngine }    from './EconomicsEngine.js';
+import { AgentManager }       from './AgentManager.js';
+import { SwarmSync }          from './SwarmSync.js';
 import fs                     from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -62,7 +68,7 @@ export class MAX {
         this._ready = false;
 
         // Core systems
-        this.brain     = new Brain(config);
+        this.brain     = new Brain(this, config);
         this.drive     = new DriveSystem(config.drive);
         this.curiosity = new CuriosityEngine(config.curiosity);
         this.persona   = new PersonaEngine();
@@ -99,7 +105,13 @@ export class MAX {
         this.selfEditor    = new SelfEditor();
         this.notifier      = new Notifier();
         this.soma          = new SomaBridge();
+        this.edge          = new EdgeWorkerOrchestrator(this);
         this.longHorizon   = new LongHorizonPlanner();
+        this.economics     = new EconomicsEngine(config.economics);
+        this.agentManager  = new AgentManager(this);
+
+        // State flags
+        this.isThinking       = false;
 
         // Conversation context window
         this._context         = [];
@@ -157,6 +169,85 @@ export class MAX {
         this.tools.register(createVisionTool(this));
         this.tools.register(createSelfEvolutionTool(this));
         this.tools.register(this.lab.asTool());
+
+        // ── Management tool — control child agents via AgentManager ──────
+        this.tools.register({
+            name: 'management',
+            description: `Control and monitor child agents (like Choko).
+Actions:
+  boot        → start a child agent: TOOL:management:boot:{"name":"Choko"}
+  list        → see online agents: TOOL:management:list:{}
+  shutdown    → stop an agent: TOOL:management:shutdown:{"name":"Choko"}
+  status      → overall swarm status: TOOL:management:status:{}
+  inject_goal → assign a task to an agent: TOOL:management:inject_goal:{"name":"Choko", "goal":{"title":"Fix bug","description":"..."}}
+  sync_personas → copy expert protocols to SOMA: TOOL:management:sync_personas:{}
+  audit_choko   → check Choko's wishlist and evolve him: TOOL:management:audit_choko:{}`,
+            actions: {
+                boot:     async ({ name, config = {} }) => {
+                    const agent = await this.agentManager.boot(name, config);
+                    return { success: true, message: `Agent ${name} is online.` };
+                },
+                list:     async () => ({ success: true, agents: this.agentManager.list() }),
+                shutdown: async ({ name }) => ({ success: await this.agentManager.shutdown(name) }),
+                status:   async () => ({ success: true, ...this.agentManager.getStatus() }),
+                inject_goal: async ({ name, goal }) => {
+                    const id = await this.agentManager.injectGoal(name, goal);
+                    return { success: true, id, message: `Goal injected into ${name}.` };
+                },
+                audit_choko: async () => {
+                    console.log('[Management] 🧐 Auditing Choko\'s evolution wishlist...');
+                    const wishlistPath = path.join(__dirname, '..', 'Choko', '.max', 'evolution_wishlist.md');
+                    if (!fs.existsSync(wishlistPath)) return { success: false, error: 'Wishlist not found' };
+
+                    const content = fs.readFileSync(wishlistPath, 'utf8');
+                    const wishes = content.match(/- \[ \] \*\*(.+)\*\*: (.+)/g) || [];
+                    
+                    if (wishes.length === 0) return { success: true, message: 'Choko is happy! No new wishes found.' };
+
+                    console.log(`[Management] 🎀 Found ${wishes.length} wishes. Queuing evolution goals...`);
+                    for (const wish of wishes) {
+                        const [, title, desc] = wish.match(/- \[ \] \*\*(.+)\*\*: (.+)/);
+                        this.goals.addGoal({
+                            title: `Evolve Choko: ${title}`,
+                            description: `Choko requested an upgrade: ${desc}. Use self_evolution to implement this.`,
+                            type: 'improvement',
+                            priority: 0.75,
+                            source: 'choko_wishlist'
+                        });
+                    }
+
+                    return { success: true, message: `Queued ${wishes.length} evolution goal(s) for Choko.` };
+                },
+                sync_personas: async () => {
+                    console.log('[Management] 🔄 Synchronizing expert personas with SOMA...');
+                    const srcDir = path.join(__dirname, '..', 'personas', 'experts');
+                    const dstDir = path.join('C:\\Users\\barry\\Desktop\\SOMA', 'agents_repo', 'plugins');
+                    
+                    if (!fs.existsSync(srcDir)) return { success: false, error: 'Source personas not found' };
+                    if (!fs.existsSync(dstDir)) return { success: false, error: 'SOMA plugins directory not found' };
+
+                    const files = fs.readdirSync(srcDir).filter(f => f.endsWith('.md'));
+                    let synced = 0;
+
+                    for (const file of files) {
+                        const content = fs.readFileSync(path.join(srcDir, file), 'utf8');
+                        const dstPath = path.join(dstDir, `expert_${file}`);
+                        
+                        // Add frontmatter if missing (SOMA loader requirement)
+                        let finalContent = content;
+                        if (!content.startsWith('---')) {
+                            const name = file.replace('.md', '');
+                            finalContent = `---\nname: ${name}\ndomain: SYSTEM\n---\n${content}`;
+                        }
+
+                        fs.writeFileSync(dstPath, finalContent);
+                        synced++;
+                    }
+
+                    return { success: true, message: `Synced ${synced} expert(s) to SOMA.` };
+                }
+            }
+        });
 
         // ── SOMA tool proxy — GUI, screen, vision, audio via SOMA's arbiters ──
         // These proxy directly to SOMA's registered ToolRegistry over HTTP.
@@ -260,6 +351,9 @@ Reply naturally and concisely. Plain text only — no markdown headers, no bulle
         // SOMA bridge — try to connect to SOMA; gracefully offline if not running
         await this.soma.initialize();
 
+        // EdgeWorkerOrchestrator — peripheral perception
+        await this.edge.initialize();
+
         // Long-horizon planner — creates .max/vision.md if it doesn't exist
         await this.longHorizon.initialize();
 
@@ -331,7 +425,9 @@ Reply naturally and concisely. Plain text only — no markdown headers, no bulle
             }).catch(() => {});
         });
 
-        this.goals     = new GoalEngine(this.brain, this.outcomes, this.memory);
+        this.goals     = new GoalEngine(this.brain, this.outcomes, this.memory, {
+            storageDir: path.join(__dirname, '..', '.max')
+        });
         this.goals.initialize();
 
         this.roadmap   = new RoadmapEngine(this);
@@ -1428,7 +1524,10 @@ ${recent}`,
             roadmap:       this.roadmap?.getStatus(),
             skills:        this.skills?.getStatus(),
             soma:          this.soma?.getStatus(),
-            notifier:      this.notifier?.getStatus()
+            edge:          this.edge?.getStatus(),
+            notifier:      this.notifier?.getStatus(),
+            economics:     this.economics?.getStatus(),
+            agents:        this.agentManager?.getStatus()
         };
     }
 }

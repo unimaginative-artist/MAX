@@ -9,10 +9,12 @@ import { EventEmitter } from 'events';
 export class Heartbeat extends EventEmitter {
     constructor(max, config = {}) {
         super();
-        this.max = max;   // reference to MAX instance
+        this.max = max;
 
         this.config = {
-            intervalMs:            2 * 60 * 1000,  // 2 min default
+            minIntervalMs:         5 * 1000,       // 5s (Max tension)
+            maxIntervalMs:         60 * 1000,      // 60s (Idle)
+            momentumWindowMs:      2 * 60 * 1000,  // 2m window to stay fast
             maxConsecutiveFailures: 5,
             enabled:               false,
             ...config
@@ -22,6 +24,7 @@ export class Heartbeat extends EventEmitter {
         this._running  = false;
         this._busy     = false;
         this._failures = 0;
+        this._lastSuccessAt = 0;
 
         this.stats = {
             cycles:        0,
@@ -36,31 +39,32 @@ export class Heartbeat extends EventEmitter {
         if (this._running) return;
         this._running = true;
         this.config.enabled = true;
+        this._lastSuccessAt = 0;
         this._schedule();
-        console.log(`[Heartbeat] 💓 Started — interval ${this.config.intervalMs / 1000}s`);
+        console.log(`[Heartbeat] 💓 Started (Tension-Scaling: ${this.config.minIntervalMs/1000}s–${this.config.maxIntervalMs/1000}s)`);
         this.emit('started');
-    }
-
-    stop() {
-        if (this._timer) clearTimeout(this._timer);
-        this._running = false;
-        this.config.enabled = false;
-        console.log('[Heartbeat] 💔 Stopped');
-        this.emit('stopped');
     }
 
     _schedule() {
         if (!this._running) return;
 
-        // Dynamic interval based on drive tension
-        // 100% tension = 30s pulse
-        // 0% tension = 5m pulse
         const drive = this.max?.drive?.getStatus?.();
         const tension = drive?.tension || 0;
 
-        const minInterval = 30 * 1000;
-        const maxInterval = 5 * 60 * 1000;
-        const interval = maxInterval - (tension * (maxInterval - minInterval));
+        // Base tension scaling
+        let interval = this.config.maxIntervalMs - (tension * (this.config.maxIntervalMs - this.config.minIntervalMs));
+
+        // Momentum factor: stay fast after success
+        const timeSinceSuccess = Date.now() - this._lastSuccessAt;
+        if (timeSinceSuccess < this.config.momentumWindowMs) {
+            interval = Math.min(interval, 10 * 1000);
+        }
+
+        // Work-pending factor: speed up if goals are waiting
+        const hasPendingGoals = this.max?.goals?.getNext(this.max?.drive) != null;
+        if (hasPendingGoals) {
+            interval = Math.min(interval, 15 * 1000);
+        }
 
         this._timer = setTimeout(() => this._tick().catch(err => console.error('[Heartbeat] tick error:', err.message)), interval);
     }
@@ -72,15 +76,17 @@ export class Heartbeat extends EventEmitter {
         this.stats.lastRun = new Date().toISOString();
 
         try {
-            await this._runCycle();
-            this._failures = 0;
+            const executed = await this._runCycle();
+            if (executed) {
+                this._lastSuccessAt = Date.now();
+                this._failures = 0;
+            }
         } catch (err) {
             this._failures++;
             this.stats.failures++;
             console.error(`[Heartbeat] ❌ Cycle error (${this._failures}/${this.config.maxConsecutiveFailures}):`, err.message);
 
             if (this._failures >= this.config.maxConsecutiveFailures) {
-                console.error('[Heartbeat] Too many failures — stopping');
                 this.stop();
                 return;
             }
@@ -91,19 +97,14 @@ export class Heartbeat extends EventEmitter {
     }
 
     async _runCycle() {
-        // ── Don't compete with active chat for the brain ──────────────────
-        // If the user is mid-conversation, skip this background cycle entirely.
-        // Prevents AgentLoop brain calls from timing out and interrupting input.
         if (this.max?._chatBusy) {
-            console.log(`[Heartbeat] 💬 Chat active — skipping background cycle`);
-            return;
+            return false;
         }
 
         const drive = this.max?.drive;
         const driveStatus = drive?.getStatus?.();
 
         // ── AgentLoop: run when tension is high OR goals are waiting ─────
-        // Tension > 40% = urgency signal. Pending goals = always worth running.
         const tensionHigh     = driveStatus && driveStatus.tension > 0.4;
         const hasPendingGoals = this.max?.goals?.getNext(this.max?.drive) != null;
 
@@ -114,11 +115,11 @@ export class Heartbeat extends EventEmitter {
                 if (result) {
                     this.stats.tasksExecuted++;
                     this.stats.lastTask = `goal:${result.goal}`;
+                    return true;
                 }
             } catch (err) {
                 console.error('[Heartbeat] AgentLoop error:', err.message);
             }
-            return; // AgentLoop ran — skip curiosity this tick
         }
 
         // ── Otherwise run a curiosity task ────────────────────────────────
@@ -129,10 +130,9 @@ export class Heartbeat extends EventEmitter {
             this.stats.lastTask = curiosityTask.label;
             this.stats.tasksExecuted++;
 
-            // NOTE: intentionally NOT calling drive.onTaskExecuted() here.
-            // Curiosity is background enrichment, not real work. If we reset
-            // tension on every curiosity tick it never reaches 40% and AgentLoop
-            // never fires. Tension should only drop when AgentLoop does real work.
+            // NOTE: Intentionally NOT calling drive.onTaskExecuted() for curiosity.
+            // Curiosity is background enrichment, not primary goal work. 
+            // We want tension to build until a real Goal is executed.
             this.emit('task', curiosityTask);
 
             if (this.max?.brain?._ready && curiosityTask.prompt) {
@@ -154,19 +154,15 @@ export class Heartbeat extends EventEmitter {
                         result: typeof result === 'string' ? result : JSON.stringify(result)
                     });
 
-                    // ── Curiosity → Goal pipeline ─────────────────────────
-                    // If the insight surfaces something actionable, convert it
-                    // to a GoalEngine goal so MAX actively investigates it.
+                    // Curiosity → Goal pipeline
                     if (this.max?.goals && this.max.curiosity?.signalsGoal?.(result)) {
                         const goalTitle = `Investigate: ${curiosityTask.label}`;
                         const alreadyQueued = this.max.goals.listActive()
-                            .some(g => g.title.toLowerCase().includes(
-                                curiosityTask.label.toLowerCase().slice(0, 25)
-                            ));
+                            .some(g => g.title.toLowerCase().includes(curiosityTask.label.toLowerCase().slice(0, 25)));
                         if (!alreadyQueued) {
                             this.max.goals.addGoal({
                                 title:       goalTitle,
-                                description: `Curiosity surfaced this: ${result.slice(0, 200)}`,
+                                description: `Curiosity surfaced: ${result.slice(0, 200)}`,
                                 type:        'research',
                                 priority:    0.55,
                                 source:      'curiosity'
@@ -174,7 +170,7 @@ export class Heartbeat extends EventEmitter {
                             console.log(`[Heartbeat] 🎯 Curiosity → goal: "${goalTitle}"`);
                         }
                     }
-
+                    return true;
                 } catch (err) {
                     console.error('[Heartbeat] Brain error during curiosity task:', err.message);
                 }
@@ -183,9 +179,7 @@ export class Heartbeat extends EventEmitter {
             drive?.onIdleTick();
             this.emit('idle');
 
-            // ── Auto-generate goals — always if queue is empty, else 20% chance ──
-            // Old: 10% random chance on idle only = goals almost never generated.
-            // New: guaranteed generation when queue is empty so MAX always has work.
+            // Goal generation & background cycles
             if (this.max?.goals) {
                 const hasGoals = this.max.goals.getNext() != null;
                 if (!hasGoals || Math.random() < 0.20) {
@@ -195,23 +189,19 @@ export class Heartbeat extends EventEmitter {
                 }
             }
 
-            // ── Proactive surfacing (~15% of idle ticks) ──
             if (Math.random() < 0.15) {
                 this._proactiveSurface().catch(() => {});
             }
 
-            // ── Occasional Dreaming (~5% of idle ticks) ──
             if (this.max?.reflection && Math.random() < 0.05) {
                 this.max.reflection.dream(this.max.kb).catch(() => {});
             }
 
-            // ── SOMA curiosity goal sync (~20% of idle ticks) ─────────────
-            // Pull curiosity goals SOMA generated and inject them as MAX goals.
-            // This is how SOMA steers MAX's exploration during idle time.
             if (this.max?.soma?.available && this.max?.goals && Math.random() < 0.20) {
                 this.max.soma.syncCuriosityGoals(this.max.goals).catch(() => {});
             }
         }
+        return false;
     }
 
     // ─── Proactive surfacing — volunteer important signals during idle ─────

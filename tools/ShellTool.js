@@ -14,8 +14,10 @@
 //   which  — check if a program is installed
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { exec, spawn } from 'child_process';
-import { promisify } from 'util';
+import { exec, spawn }  from 'child_process';
+import { promisify }    from 'util';
+import fs               from 'fs/promises';
+import path             from 'path';
 
 const execAsync = promisify(exec);
 
@@ -23,6 +25,27 @@ const execAsync = promisify(exec);
 let _cwd   = process.cwd();          // survives across calls in the same session
 let _procs = new Map();              // name → { pid, proc, command, started, log }
 let _env   = { ...process.env };     // survives across calls
+
+const PID_FILE = path.join(process.env.USERPROFILE || process.env.HOME || '.', '.max', 'pids.json');
+
+async function _savePids() {
+    try {
+        await fs.mkdir(path.dirname(PID_FILE), { recursive: true });
+        const data = {};
+        for (const [name, p] of _procs) data[name] = { pid: p.pid, command: p.command, started: p.started };
+        await fs.writeFile(PID_FILE, JSON.stringify(data, null, 2));
+    } catch {}
+}
+
+async function _killByPid(pid) {
+    if (process.platform === 'win32') {
+        // /T kills the entire process tree (cmd.exe + node child), /F forces it
+        try { await execAsync(`taskkill /F /T /PID ${pid}`); } catch {}
+    } else {
+        try { process.kill(-pid, 'SIGKILL'); } catch {}  // negative PID = process group
+        try { process.kill(pid,  'SIGKILL'); } catch {}
+    }
+}
 
 export function getCwd() { return _cwd; }
 export function getEnv() { return _env; }
@@ -261,13 +284,16 @@ export const ShellTool = {
             proc.on('exit', (code) => {
                 process.stdout.write(`  \x1b[35m[${label}]\x1b[0m process exited (${code})\n`);
                 _procs.delete(label);
+                _savePids();
             });
             proc.on('error', (err) => {
                 process.stdout.write(`  \x1b[31m[${label}]\x1b[0m error: ${err.message}\n`);
                 _procs.delete(label);
+                _savePids();
             });
 
             _procs.set(label, { pid: proc.pid, proc, command, started, cwd: runCwd, log });
+            _savePids();
 
             process.stdout.write(`\n  \x1b[35m▶\x1b[0m  \x1b[1m${label}\x1b[0m started (pid ${proc.pid})\n\n`);
             return { success: true, name: label, pid: proc.pid, command, cwd: runCwd };
@@ -275,18 +301,31 @@ export const ShellTool = {
 
         // ── stop — kill a named background process ────────────────────────
         async stop({ name }) {
-            if (!_procs.has(name)) {
-                const running = [..._procs.keys()];
-                return { success: false, error: `No process named "${name}". Running: ${running.join(', ') || 'none'}` };
+            let pid = null;
+
+            if (_procs.has(name)) {
+                // In-memory: kill live proc reference
+                const entry = _procs.get(name);
+                pid = entry.pid;
+                try { entry.proc.kill('SIGTERM'); } catch {}
+                _procs.delete(name);
+            } else {
+                // Cross-session fallback: read PID from disk
+                try {
+                    const saved = JSON.parse(await fs.readFile(PID_FILE, 'utf8'));
+                    if (saved[name]) pid = saved[name].pid;
+                } catch {}
+                if (!pid) {
+                    const running = [..._procs.keys()];
+                    return { success: false, error: `No process named "${name}". Running: ${running.join(', ') || 'none'}` };
+                }
             }
-            const entry = _procs.get(name);
-            try {
-                entry.proc.kill('SIGTERM');
-                setTimeout(() => { try { entry.proc.kill('SIGKILL'); } catch {} }, 3000);
-            } catch {}
-            _procs.delete(name);
-            process.stdout.write(`  \x1b[35m[${name}]\x1b[0m stopped\n\n`);
-            return { success: true, stopped: name, pid: entry.pid };
+
+            // Use OS-level kill to ensure process tree is fully terminated
+            await _killByPid(pid);
+            _savePids();
+            process.stdout.write(`  \x1b[35m[${name}]\x1b[0m stopped (pid ${pid})\n\n`);
+            return { success: true, stopped: name, pid };
         },
 
         // ── ps — list running background processes ────────────────────────

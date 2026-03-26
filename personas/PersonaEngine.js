@@ -5,6 +5,12 @@
 // He's on your team. He'll tell you when something's wrong, but never cruelly.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 export const PERSONAS = {
 
     // ── Companion — casual chat, check-ins, emotional/conversational ───────
@@ -125,8 +131,40 @@ After you challenge something, offer what a stronger version of the idea would l
 
 export class PersonaEngine {
     constructor() {
-        this.currentPersona = PERSONAS.COMPANION;  // default: friendly, not grumpy
+        this.currentPersona = PERSONAS.COMPANION;
         this.history        = [];
+        this.experts        = new Map();
+        this.loadExpertPersonas();
+    }
+
+    loadExpertPersonas() {
+        const expertsDir = path.join(__dirname, 'experts');
+        if (!fs.existsSync(expertsDir)) return;
+
+        const files = fs.readdirSync(expertsDir).filter(f => f.endsWith('.md'));
+        for (const file of files) {
+            try {
+                const content = fs.readFileSync(path.join(expertsDir, file), 'utf8');
+                const id = file.replace('.md', '').toLowerCase();
+                
+                // Simple parser for MD headers
+                const name  = content.match(/# PERSONA:\s*(.+)/)?.[1] || file;
+                const emoji = content.match(/# EMOJI:\s*(.+)/)?.[1] || '🤖';
+                const role  = content.match(/# ROLE:\s*(.+)/)?.[1] || 'Expert';
+
+                this.experts.set(id, {
+                    id,
+                    name,
+                    emoji,
+                    description: role,
+                    systemPrompt: content,
+                    trigger: [id, name.toLowerCase()]
+                });
+                console.log(`[Persona] 🎓 Loaded expert: ${name}`);
+            } catch (err) {
+                console.warn(`[Persona] ⚠️ Failed to load expert ${file}:`, err.message);
+            }
+        }
     }
 
     // ─── Auto-select persona based on task content + internal state ──────
@@ -179,10 +217,18 @@ export class PersonaEngine {
 
         // ── 3. Regular keyword matching for remaining personas ─────────────
         for (const persona of Object.values(PERSONAS)) {
-            if (persona.id === 'companion') continue; // already checked above
+            if (persona.id === 'companion') continue;
             if (persona.trigger.some(kw => lower.includes(kw))) {
                 this.currentPersona = persona;
                 return persona;
+            }
+        }
+
+        // ── 3.5 Check Expert MDs ──────────────────────────────────────────
+        for (const expert of this.experts.values()) {
+            if (expert.trigger.some(kw => lower.includes(kw))) {
+                this.currentPersona = expert;
+                return expert;
             }
         }
 
@@ -196,8 +242,11 @@ export class PersonaEngine {
 
     // ─── Manually switch persona ──────────────────────────────────────────
     switchTo(personaId) {
-        const p = Object.values(PERSONAS).find(p => p.id === personaId);
-        if (!p) throw new Error(`Unknown persona: ${personaId}. Options: ${Object.values(PERSONAS).map(p => p.id).join(', ')}`);
+        const id = personaId.toLowerCase();
+        let p = Object.values(PERSONAS).find(p => p.id === id) || this.experts.get(id);
+        
+        if (!p) throw new Error(`Unknown persona: ${personaId}. Options: ${[...Object.values(PERSONAS).map(p => p.id), ...this.experts.keys()].join(', ')}`);
+        
         this.history.push(this.currentPersona);
         this.currentPersona = p;
         return p;

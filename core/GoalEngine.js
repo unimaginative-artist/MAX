@@ -8,16 +8,16 @@
 import fs   from 'fs';
 import path from 'path';
 
-const GOALS_FILE = path.join(process.cwd(), '.max', 'goals.json');
-
-// Priority weights (must sum to 1.0)
-const WEIGHTS = { impact: 0.35, urgency: 0.25, feasibility: 0.25, effort: 0.15 };
-
 export class GoalEngine {
     constructor(brain, outcomeTracker, memory = null, config = {}) {
         this.brain    = brain;
         this.outcomes = outcomeTracker;
         this.memory   = memory;   // injected after memory system boots
+        
+        console.log(`[GoalEngine] Constructor config storageDir: ${config.storageDir}`);
+        const storageDir = config.storageDir || path.join(process.cwd(), '.max');
+        this.goalsPath   = path.join(storageDir, 'goals.json');
+
         this.config   = {
             maxActive:        config.maxActive        || 10,
             maxHistory:       config.maxHistory       || 50,
@@ -414,20 +414,28 @@ Return JSON array ONLY:
 
     _save() {
         try {
-            const dir = path.dirname(GOALS_FILE);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(GOALS_FILE, JSON.stringify({
+            console.log(`[GoalEngine] Attempting to save to: ${this.goalsPath}`);
+            const dir = path.dirname(this.goalsPath);
+            if (!fs.existsSync(dir)) {
+                console.log(`[GoalEngine] Creating directory: ${dir}`);
+                fs.mkdirSync(dir, { recursive: true });
+            }
+            const data = JSON.stringify({
                 active:    [...this._active.values()],
                 completed: this._completed.slice(0, 20),
                 stats:     this.stats
-            }, null, 2));
-        } catch { /* non-fatal */ }
+            }, null, 2);
+            fs.writeFileSync(this.goalsPath, data);
+            console.log(`[GoalEngine] ✅ Saved ${this._active.size} goals to ${this.goalsPath}`);
+        } catch (err) { 
+            console.error(`[GoalEngine] ❌ CRITICAL: Failed to save goals to ${this.goalsPath}:`, err.message);
+        }
     }
 
     _load() {
         try {
-            if (!fs.existsSync(GOALS_FILE)) return;
-            const data = JSON.parse(fs.readFileSync(GOALS_FILE, 'utf8'));
+            if (!fs.existsSync(this.goalsPath)) return;
+            const data = JSON.parse(fs.readFileSync(this.goalsPath, 'utf8'));
             for (const g of (data.active || [])) this._active.set(g.id, g);
             this._completed = data.completed || [];
             if (data.stats) this.stats = data.stats;

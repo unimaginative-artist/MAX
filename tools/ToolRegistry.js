@@ -1,14 +1,14 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// ToolRegistry.js — MAX's tool management
+﻿// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ToolRegistry.js â€” MAX's tool management
 // Tools are what MAX uses to actually DO things, not just think about them.
-// ═══════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-// ─── Tolerant JSON parser ─────────────────────────────────────────────────
+// â”€â”€â”€ Tolerant JSON parser â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // LLMs (especially smaller ones) often emit malformed JSON in tool calls:
-//   • Unquoted keys:   {path: "./foo"}   → {"path": "./foo"}
-//   • Single quotes:   {'key': 'val'}    → {"key": "val"}
-//   • Trailing commas: {"a":1,}          → {"a":1}
-//   • Literal newlines inside strings    → escaped \n
+//   â€¢ Unquoted keys:   {path: "./foo"}   â†’ {"path": "./foo"}
+//   â€¢ Single quotes:   {'key': 'val'}    â†’ {"key": "val"}
+//   â€¢ Trailing commas: {"a":1,}          â†’ {"a":1}
+//   â€¢ Literal newlines inside strings    â†’ escaped \n
 // Try strict parse first; if it fails apply fixes and retry.
 
 // Escape literal newlines/tabs inside JSON string values.
@@ -44,9 +44,9 @@ function parseLooseJson(str) {
     // Fix literal newlines/tabs inside string values (most common failure for file:write)
     try { return JSON.parse(fixMultilineStrings(s)); } catch {}
 
-    // Single quotes → double quotes (simple values only, no nested single quotes)
+    // Single quotes â†’ double quotes (simple values only, no nested single quotes)
     s = s.replace(/'([^'\\]*(\\.[^'\\]*)*)'/g, '"$1"');
-    // Quote unquoted object keys: { key: → { "key":
+    // Quote unquoted object keys: { key: â†’ { "key":
     s = s.replace(/([{,]\s*)([A-Za-z_$][A-Za-z0-9_$]*)\s*:/g, '$1"$2":');
     // Remove trailing commas before } or ]
     s = s.replace(/,(\s*[}\]])/g, '$1');
@@ -78,9 +78,24 @@ export class ToolRegistry {
         }));
     }
 
-    async execute(toolName, action, params = {}) {
+        async execute(toolName, action, params = {}) {
         const tool = this._tools.get(toolName);
-        if (!tool) throw new Error(`Unknown tool: ${toolName}. Available: ${[...this._tools.keys()].join(', ')}`);
+        if (!tool) throw new Error(`Unknown tool: ${toolName}`);
+
+        try {
+            // Handle Object-based tools (actions map)
+            if (tool.actions && typeof tool.actions[action] === 'function') {
+                return await tool.actions[action](params);
+            }
+            // Handle Class-based tools (run method)
+            if (typeof tool.run === 'function') {
+                return await tool.run({ action, ...params });
+            }
+            throw new Error(`Action ${action} not supported by tool ${toolName}`);
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    }. Available: ${[...this._tools.keys()].join(', ')}`);
         if (!tool.actions?.[action]) throw new Error(`Tool ${toolName} has no action: ${action}`);
 
         try {
@@ -90,7 +105,7 @@ export class ToolRegistry {
         }
     }
 
-    // ─── Parse and execute a tool call from LLM output ───────────────────
+    // â”€â”€â”€ Parse and execute a tool call from LLM output â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // LLM can output: TOOL:file:read:{"path":"./foo.js"}
     // Small models often emit unquoted keys, single quotes, or just raw text.
     async executeLLMToolCall(rawText) {
@@ -102,7 +117,7 @@ export class ToolRegistry {
 
         try {
             // Strip trailing non-JSON text that LLMs sometimes append after the closing brace.
-            // e.g. TOOL:file:list:{} no?  →  trimmedParams="{} no?"  →  cleanedParams="{}"
+            // e.g. TOOL:file:list:{} no?  â†’  trimmedParams="{} no?"  â†’  cleanedParams="{}"
             const lastClose = Math.max(trimmedParams.lastIndexOf('}'), trimmedParams.lastIndexOf(']'));
             const cleanedParams = lastClose >= 0 ? trimmedParams.slice(0, lastClose + 1) : trimmedParams;
 
@@ -124,7 +139,7 @@ export class ToolRegistry {
         }
     }
 
-    // ─── Build a tool manifest for the system prompt ──────────────────────
+    // â”€â”€â”€ Build a tool manifest for the system prompt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     buildManifest() {
         const tools = this.list();
         if (tools.length === 0) return '';
@@ -148,7 +163,7 @@ export class ToolRegistry {
         ];
 
         for (const t of tools) {
-            lines.push(`### ${t.name} — ${t.description}`);
+            lines.push(`### ${t.name} â€” ${t.description}`);
             for (const a of t.actions) {
                 // Heuristic for examples based on action name
                 let example = '{}';

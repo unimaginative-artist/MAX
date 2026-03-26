@@ -275,34 +275,52 @@ export async function createServer(max, port = 3100) {
 <!DOCTYPE html>
 <html>
 <head>
-    <title>MAX | System Dashboard</title>
+    <title>MAX | Level 4 Dashboard</title>
     <style>
         body { background: #0a0a0a; color: #00ff41; font-family: 'Courier New', Courier, monospace; margin: 20px; }
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
-        .card { border: 1px solid #00ff41; padding: 15px; background: #111; }
-        .card h2 { margin-top: 0; border-bottom: 1px solid #00ff41; padding-bottom: 10px; font-size: 1.2em; }
-        .stat { display: flex; justify-content: space-between; margin: 5px 0; }
+        .card { border: 1px solid #00ff41; padding: 15px; background: #111; position: relative; overflow: hidden; }
+        .card.gold { border-color: #ffd700; color: #ffd700; }
+        .card.gold .val { color: #fff; }
+        .card.blue { border-color: #00d2ff; color: #00d2ff; }
+        .card.blue .val { color: #fff; }
+        .card h2 { margin-top: 0; border-bottom: 1px solid currentColor; padding-bottom: 10px; font-size: 1.1em; }
+        .stat { display: flex; justify-content: space-between; margin: 5px 0; font-size: 0.9em; }
         .val { color: #fff; font-weight: bold; }
-        .meter-bg { background: #222; height: 10px; width: 100%; margin-top: 10px; }
-        .meter-fill { background: #00ff41; height: 100%; }
-        .header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 30px; }
-        .pulse { animation: blink 1s infinite; }
-        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
+        .meter-bg { background: #222; height: 8px; width: 100%; margin-top: 10px; }
+        .meter-fill { background: currentColor; height: 100%; transition: width 0.5s; }
+        .header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 30px; border-bottom: 2px solid #00ff41; padding-bottom: 10px; }
+        .pulse { animation: blink 1.5s infinite; color: #ff003c; }
+        .profit { color: #00ff41; }
+        .debt { color: #ff003c; }
+        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.2; } 100% { opacity: 1; } }
+        pre { background: #000; padding: 10px; font-size: 0.8em; color: #00ff41; overflow-x: auto; border: 1px solid #222; }
     </style>
-    <meta http-equiv="refresh" content="5">
+    <meta http-equiv="refresh" content="8">
 </head>
 <body>
     <div class="header">
-        <h1>MAX <span class="pulse">●</span> SYSTEM DASHBOARD</h1>
-        <div>UPTIME: ${process.uptime().toFixed(0)}s</div>
+        <h1>MAX <span class="pulse">●</span> <span style="font-size: 0.6em; vertical-align: middle; border: 1px solid #ff003c; padding: 2px 5px; margin-left: 10px;">LEVEL 4 ALPHA</span></h1>
+        <div style="text-align: right;">
+            <div>UPTIME: ${process.uptime().toFixed(0)}s</div>
+            <div style="font-size: 0.8em; color: #888;">${new Date().toLocaleTimeString()}</div>
+        </div>
     </div>
 
     <div class="grid">
-        <div class="card">
-            <h2>🧠 BRAIN & PERSONA</h2>
-            <div class="stat"><span>PERSONA</span> <span class="val">${stats.persona.name}</span></div>
-            <div class="stat"><span>BACKEND</span> <span class="val">${max.brain.getStatus().backend}</span></div>
-            <div class="stat"><span>MODEL</span> <span class="val">${max.brain.getStatus().smart.model}</span></div>
+        <div class="card gold">
+            <h2>💰 GOAL ECONOMY</h2>
+            <div class="stat"><span>NET PROFIT</span> <span class="val ${stats.economics?.netProfit?.startsWith('$-') ? 'debt' : 'profit'}">${stats.economics?.netProfit || '$0.00'}</span></div>
+            <div class="stat"><span>TOTAL EARNINGS</span> <span class="val">${stats.economics?.earnings || '$0.00'}</span></div>
+            <div class="stat"><span>TOTAL COST</span> <span class="val">${stats.economics?.totalCost || '$0.00'}</span></div>
+            <div class="meter-bg"><div class="meter-fill" style="width: ${Math.min(100, (parseFloat((stats.economics?.earnings || '0').replace('$','')) / 1) * 100)}%"></div></div>
+        </div>
+
+        <div class="card blue">
+            <h2>👁️  EDGE PERCEPTION</h2>
+            <div class="stat"><span>SOMA BRIDGE</span> <span class="val">${stats.soma?.available ? 'CONNECTED' : 'OFFLINE'}</span></div>
+            <div class="stat"><span>PERCEPTION</span> <span class="val">${stats.edge?.active ? 'ACTIVE' : 'SIMULATED'}</span></div>
+            <div class="stat"><span>SWARM JOBS</span> <span class="val">${max.swarm?.getStatus?.().activeJobs || 0}</span></div>
         </div>
 
         <div class="card">
@@ -313,43 +331,38 @@ export async function createServer(max, port = 3100) {
         </div>
 
         <div class="card">
-            <h2>💾 MEMORY TIERS</h2>
-            <div class="stat"><span>TOTAL MEMORIES</span> <span class="val">${stats.memory.totalMemories}</span></div>
-            <div class="stat"><span>VECTOR COUNT</span> <span class="val">${stats.memory.vectorCount}</span></div>
-            <div class="stat"><span>HOT CACHE</span> <span class="val">${stats.memory.hotSize} items</span></div>
+            <h2>🧠 BRAIN & AGENT0</h2>
+            <div class="stat"><span>PERSONA</span> <span class="val">${stats.persona.name}</span></div>
+            <div class="stat"><span>BACKEND</span> <span class="val">${max.brain.getStatus().backend}</span></div>
+            <div class="stat"><span>CHILD AGENTS</span> <span class="val">1 (Agent0)</span></div>
         </div>
 
         <div class="card">
-            <h2>🛡️  SENTINEL & OMNISCIENCE</h2>
-            <div class="stat"><span>INDEXED FILES</span> <span class="val">${stats.kb.sources}</span></div>
-            <div class="stat"><span>SEMANTIC CHUNKS</span> <span class="val">${stats.kb.chunks}</span></div>
-            <div class="stat"><span>WATCHER</span> <span class="val">ACTIVE</span></div>
+            <h2>🛡️  SENTINEL & LAZARUS</h2>
+            <div class="stat"><span>INDEXED</span> <span class="val">${stats.kb.sources} files</span></div>
+            <div class="stat"><span>TOOL HEALING</span> <span class="val">${max.agentLoop?._toolFailures?.size || 0} tracks</span></div>
+            <div class="stat"><span>LAST REPLAN</span> <span class="val">${stats.replans || 0}</span></div>
         </div>
 
         <div class="card">
-            <h2>🚀 PERFORMANCE (APM)</h2>
-            <div class="stat"><span>TOTAL TOKENS</span> <span class="val">${stats.outcomes.totalTokens.toLocaleString()}</span></div>
-            <div class="stat"><span>AVG LATENCY</span> <span class="val">${stats.outcomes.avgLatency.toFixed(0)}ms</span></div>
-            <div class="stat"><span>SUCCESS RATE</span> <span class="val">${(stats.outcomes.success / (stats.outcomes.total || 1) * 100).toFixed(1)}%</span></div>
+            <h2>🚀 PERFORMANCE</h2>
+            <div class="stat"><span>TOKENS</span> <span class="val">${stats.outcomes.totalTokens.toLocaleString()}</span></div>
+            <div class="stat"><span>LATENCY</span> <span class="val">${stats.outcomes.avgLatency.toFixed(0)}ms</span></div>
+            <div class="stat"><span>SUCCESS</span> <span class="val">${(stats.outcomes.success / (stats.outcomes.total || 1) * 100).toFixed(1)}%</span></div>
         </div>
     </div>
 
     <div class="grid" style="margin-top: 20px; grid-template-columns: 1fr;">
         <div class="card">
-            <h2>📦 ARTIFACTS & HIDDEN CODE</h2>
-            <div style="max-height: 400px; overflow-y: auto;">
-                ${max.artifacts.list().map(a => `
-                    <div style="border-bottom: 1px solid #222; padding: 10px 0;">
-                        <div style="display: flex; justify-content: space-between; color: #888; font-size: 0.8em;">
-                            <span>ID: ${a.id} | TYPE: ${a.type} | ${a.lineCount} lines</span>
-                            <span>${new Date(a.timestamp).toLocaleTimeString()}</span>
-                        </div>
-                        <div style="color: #fff; margin: 5px 0;">${a.name}</div>
-                        <pre style="background: #000; padding: 10px; font-size: 0.85em; color: #00ff41; overflow-x: auto;">${
-                            a.content.replace(/</g, '&lt;').replace(/>/g, '&gt;').slice(0, 1000)
-                        }${a.content.length > 1000 ? '\n... (truncated in view)' : ''}</pre>
+            <h2>📝 ACTIVE FRONTIER LOG</h2>
+            <div style="max-height: 300px; overflow-y: auto; font-size: 0.85em;">
+                ${max.artifacts.list().slice(0, 5).map(a => `
+                    <div style="margin-bottom: 15px; border-left: 2px solid #00ff41; padding-left: 10px;">
+                        <div style="color: #888; font-size: 0.8em;">${new Date(a.timestamp).toLocaleTimeString()} | ${a.type.toUpperCase()}</div>
+                        <div style="color: #fff; margin: 2px 0; font-weight: bold;">${a.name}</div>
+                        <div style="color: #00ff41; font-family: monospace;">${a.content.slice(0, 200).replace(/</g, '&lt;')}${a.content.length > 200 ? '...' : ''}</div>
                     </div>
-                `).join('') || '<div style="color: #444; padding: 20px;">No artifacts generated in this session yet.</div>'}
+                `).join('') || '<div style="color: #444;">Monitoring active frontier...</div>'}
             </div>
         </div>
     </div>
@@ -359,7 +372,18 @@ export async function createServer(max, port = 3100) {
         res.send(html);
     });
 
-    // ── Status ────────────────────────────────────────────────────────────
+    app.post('/api/command', async (req, res) => {
+        try {
+            const { tool, action_name, params = {} } = req.body;
+            if (!tool || !action_name) return res.status(400).json({ error: 'tool and action_name required' });
+
+            const result = await max.tools.execute(tool, action_name, params);
+            res.json(result);
+        } catch (error) {
+            res.status(500).json({ error: error.message });
+        }
+    });
+
     app.get('/api/status', (req, res) => {
         res.json(max.getStatus());
     });

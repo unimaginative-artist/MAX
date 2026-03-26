@@ -310,14 +310,11 @@ export class AgentLoop extends EventEmitter {
 
                 if (count >= 3 && tName !== 'unknown') {
                     console.log(`  [AgentLoop] ⚠️ Tool "${tName}" failed ${count} times — triggering Architectural Audit`);
-                    this.max.goals?.addGoal({
-                        title:       `Architectural Audit: Fix logic in tools/${tName}.js`,
-                        description: `The "${tName}" tool has failed ${count} times in this session. Analyze the source code, identify the recurrent failure mode, and implement a robust fix.`,
-                        type:        'fix',
-                        priority:    1.0, // HIGHEST priority
-                        source:      'meta_correction'
-                    });
-                    this._toolFailures.set(tName, 0); // reset after queuing
+                    
+                    // Trigger Level 4 Meta-Correction (Project Lazarus)
+                    await this._metaCorrect(tName, failedStep?.error, failReason);
+                    
+                    this._toolFailures.set(tName, 0); // reset after triggering
                 }
             }
 
@@ -482,6 +479,14 @@ export class AgentLoop extends EventEmitter {
         goalSuccess ? drive?.onGoalComplete(goal.title) : null;
 
         this.stats.goalsCompleted += goalSuccess ? 1 : 0;
+
+        // ── #4: Economics — reward for goal completion ───────────────
+        if (goalSuccess && this.max.economics) {
+            const baseReward = 0.05;
+            const priorityBonus = (goal.priority || 0.5) * 0.10;
+            const totalReward = baseReward + priorityBonus;
+            this.max.economics.recordEarning(totalReward, `goal:${goal.title}`);
+        }
 
         // ── 6. Emit insight to surface result ─────────────────────────────
         const insightResult = goalSuccess
@@ -1045,6 +1050,48 @@ Root cause guide:
                 console.log(`  [AgentLoop] 📦 Committed: "${message}"`);
             }
         } catch { /* non-fatal — git not available or nothing to commit */ }
+    }
+
+    // ─── Level 4 Meta-Correction: Autonomous Tool Healing ─────────────────
+    async _metaCorrect(toolName, error, failReason) {
+        console.log(`  [AgentLoop] 🔧 Project Lazarus: Self-healing triggered for "${toolName}"`);
+
+        // 1. Diagnose the source code
+        const toolDir = path.join(process.cwd(), 'tools');
+        const toolFiles = await fs.readdir(toolDir);
+        const targetFile = toolFiles.find(f => f.toLowerCase().startsWith(toolName.toLowerCase()));
+
+        if (!targetFile) {
+            console.warn(`  [AgentLoop] 🔧 Healing aborted: Could not find source for ${toolName}`);
+            return;
+        }
+
+        const toolId = targetFile.replace(/\.js$/, '');
+        const toolSrc = await fs.readFile(path.join(toolDir, targetFile), 'utf8');
+
+        this.emit('insight', {
+            source: 'agent',
+            label:  `🔧 Self-healing: ${toolName}`,
+            result: `Tool failed 3 times. Error: ${error || failReason}\nAttempting autonomous repair of tools/${targetFile}...`
+        });
+
+        // 2. Add a high-priority repair goal
+        this.max.goals?.addGoal({
+            title:       `Project Lazarus: Repair tools/${targetFile}`,
+            description: `The "${toolName}" tool is failing with: ${error || failReason}.
+1. Read the source: tools/${targetFile}
+2. Identify the bug (likely a reference error, type mismatch, or unhandled edge case).
+3. Use the self_evolution tool to propose, verify, and commit a fix.
+4. Verify the tool works by running a small test script.`,
+            type:        'fix',
+            priority:    1.0, // Top priority
+            source:      'lazarus'
+        });
+
+        // 3. Economics: reward for triggering a self-healing audit
+        if (this.max.economics) {
+            this.max.economics.recordEarning(0.10, `meta_correction:${toolName}`);
+        }
     }
 
     // ─── Categorize error for smart pivot strategy ────────────────────────

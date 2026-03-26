@@ -7,6 +7,7 @@
 
 import { EventEmitter } from 'events';
 import { commandPolicy } from '../core/CommandPolicyEngine.js';
+import { SwarmArbiter }    from './SwarmArbiter.js';
 
 export class SwarmCoordinator extends EventEmitter {
     constructor(brain, toolRegistry, config = {}) {
@@ -96,8 +97,15 @@ export class SwarmCoordinator extends EventEmitter {
         subtask.status = 'running';
         subtask.startedAt = Date.now();
 
-        console.log(`  [Swarm] ▶ ${subtask.id}: ${subtask.prompt?.slice(0, 60)}...`);
-        this.emit('subtask:start', { jobId: job.id, subtaskId: subtask.id });
+        // Assign persona if not present
+        if (!subtask.persona) {
+            const personaKeys = Object.keys(SwarmArbiter.getPersona(''));
+            subtask.persona = SwarmArbiter.getPersona(subtask.id);
+        }
+        const persona = subtask.persona;
+
+        console.log(`  [Swarm] ▶ ${subtask.id} (${persona.role}): ${subtask.prompt?.slice(0, 60)}...`);
+        this.emit('subtask:start', { jobId: job.id, subtaskId: subtask.id, persona: persona.role });
 
         try {
             // Execute any tool calls first
@@ -136,10 +144,12 @@ export class SwarmCoordinator extends EventEmitter {
             const resultObj = await this.brain.think(
                 subtask.prompt + context,
                 {
-                    systemPrompt: `You are a specialized worker in MAX's engineering swarm.
+                    systemPrompt: `You are the ${persona.role} in MAX's engineering swarm.
 Job: "${job.name}"
 Your subtask: ${subtask.id}
-Focus ONLY on your assigned subtask. 
+Focus: ${persona.focus}
+Instruction: ${persona.instruction}
+
 If you find something critical other workers should know, include a JSON block: DISCOVERY: {"key": "value"}`,
                     temperature: 0.5,
                     maxTokens: 1024

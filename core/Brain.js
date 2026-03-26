@@ -21,11 +21,12 @@ import fetch from 'node-fetch';
 import { EconomicsEngine } from './EconomicsEngine.js';
 
 export class Brain {
-    constructor(config = {}) {
+    constructor(max, config = {}) {
+        this.max          = max;
+        this.config       = config;
         this.ollamaUrl    = config.ollamaUrl || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-        this.timeout      = config.timeout     || 240_000;  // smart/code tier — 4 mins
-        this.fastTimeout  = config.fastTimeout || 30_000;   // fast tier — 30s max (heartbeats/acks)
-        this.economics    = new EconomicsEngine();
+        this.timeout      = config.timeout     || 240_000;
+        this.fastTimeout  = config.fastTimeout || 30_000;
 
         // ── Fast tier config ─────────────────────────────────────────────
         // Local Ollama ONLY — heartbeats, yes/no checks, quick acks, verification
@@ -56,6 +57,10 @@ export class Brain {
 
         // Convenience: _ready is true if at least one tier works
         this._ready = false;
+    }
+
+    get economics() {
+        return this.max?.economics;
     }
 
     // ─── Initialize — probe all backends ─────────────────────────────────
@@ -117,7 +122,7 @@ export class Brain {
         }
 
         // Pragmatic model selection if urgency/complexity is provided
-        if (tier === 'pragmatic') {
+        if (tier === 'pragmatic' && this.economics) {
             const recommended = this.economics.recommendModel('task', { urgency: 0.5, complexity: 0.5 });
             if (recommended === 'ollama') tier = 'fast';
             else if (recommended === 'deepseek-reasoner') tier = 'code';
@@ -241,14 +246,20 @@ export class Brain {
                     backend: 'deepseek'
                 }
             };
-            this.economics.recordUsage(model, prompt.length / 4, totalTokens);
+            const econ = this.max?.economics;
+            if (econ && typeof econ.recordUsage === 'function') {
+                econ.recordUsage(model, prompt.length / 4, totalTokens);
+            }
             return result;
         }
 
-        // Non-streaming path (unchanged)
+        // Non-streaming path
         const data = await res.json();
         const usage = data.usage || { prompt_tokens: prompt.length / 4, completion_tokens: 0 };
-        this.economics.recordUsage(model, usage.prompt_tokens, usage.completion_tokens);
+        const econ = this.max?.economics;
+        if (econ && typeof econ.recordUsage === 'function') {
+            econ.recordUsage(model, usage.prompt_tokens, usage.completion_tokens);
+        }
         return {
             text: data.choices?.[0]?.message?.content?.trim() || '',
             metadata: {
@@ -296,7 +307,10 @@ export class Brain {
         if (!res.ok) throw new Error(`Ollama ${res.status}`);
         const data = await res.json();
 
-        this.economics.recordUsage('ollama', data.prompt_eval_count || 0, data.eval_count || 0);
+        const econ = this.max?.economics;
+        if (econ && typeof econ.recordUsage === 'function') {
+            econ.recordUsage('ollama', data.prompt_eval_count || 0, data.eval_count || 0);
+        }
 
         return {
             text: data.message?.content?.trim() || '',

@@ -26,8 +26,9 @@ export class DiagnosticsSystem {
         const os = await import('os');
         const free = os.freemem() / 1024 / 1024;
         if (free < 500) {
+            const freeStr = typeof free === 'number' ? free.toFixed(0) : 'unknown';
             this.max.goals.addGoal({
-                title: `Memory Pressure: Only ${free.toFixed(0)}MB free. Check for leaks.`,
+                title: `Memory Pressure: Only ${freeStr}MB free. Check for leaks.`,
                 priority: 0.8,
                 source: 'memory_scanner',
                 type: 'optimization'
@@ -57,8 +58,9 @@ export class DiagnosticsSystem {
         if (!outcomes || outcomes.total < 5) return;
 
         if (outcomes.avgLatency > 15000) {
+            const latStr = typeof outcomes.avgLatency === 'number' ? outcomes.avgLatency.toFixed(0) : 'unknown';
             this.max.goals.addGoal({
-                title: `Optimize reasoning latency (Current avg: ${outcomes.avgLatency.toFixed(0)}ms)`,
+                title: `Optimize reasoning latency (Current avg: ${latStr}ms)`,
                 priority: 0.75,
                 source: 'performance_scanner',
                 type: 'optimization'

@@ -196,7 +196,12 @@ export class BuildLoop {
             `APPROVED PLAN:\n${plan}\n\n` +
             (codeContext ? `CURRENT CODE:\n${codeContext}\n\n` : '') +
             somaNote + '\n\n' +
-            `STRATEGY: grep to find exact text → read specific lines → patch to change.\n` +
+            `FILE EDITING RULES (follow exactly):\n` +
+            `• Modifying an EXISTING file → ALWAYS use file:patch (anchor-based, auto-reverts on syntax error)\n` +
+            `• Creating a NEW file → use file:write\n` +
+            `• NEVER use file:write on an existing file — it overwrites everything, destroying code\n` +
+            `• NEVER skip wiring: if you create a new file, you must also patch it into its loader/importer\n` +
+            `WORKFLOW: file:grep to find exact anchor text → file:patch to insert/replace → file:grep to verify.\n` +
             `When finished, output: "DONE: [one paragraph describing exactly what was changed and where]"`;
 
         console.log(`  [BuildLoop] 🤖 Executing via taskThink (agentic tool loop)...`);

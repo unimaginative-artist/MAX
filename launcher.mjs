@@ -147,8 +147,8 @@ function expandInsight(arg) {
 // Low-priority chatter should still go through console.log → _bgQueue.
 let _workingGoal = null;   // title of whatever goal MAX is currently executing
 
-function printLive(msg) {
-    if (_rl && !isThinking) {
+function printLive(max, msg) {
+    if (_rl && !max.isThinking) {
         // User is sitting at the YOU: prompt — clear it, print, redraw
         readline.clearLine(process.stdout, 0);
         readline.cursorTo(process.stdout, 0);
@@ -159,7 +159,9 @@ function printLive(msg) {
         _origLog(msg);
     } else {
         // MAX is mid-response — safe to queue, will flush after response
-        _bgQueue.push([msg]);
+        // _bgQueue is local to chatMode, so we handle this via heartbeat event logic
+        // This is a simplified fallback for the global printLive call.
+        console.log(msg);
     }
 }
 
@@ -243,7 +245,37 @@ const BG_SUPPRESS = [
 ];
 
 // ─── Chat mode ───────────────────────────────────────────────────────────
-async function chatMode(max, opts) {
+// ─── Colors ───────────────────────────────────────────────────────────────
+const C_MAX   = '\x1b[36m'; // Cyan
+const C_CHOKO = '\x1b[35m'; // Magenta (Kawaii!)
+const C_SOMA  = '\x1b[33m'; // Yellow/Gold
+const C_BOLD  = '\x1b[1m';
+const C_RESET = '\x1b[0m';
+const C_DIM   = '\x1b[90m';
+
+let quietMode = true; // Set to true to suppress [GoalEngine] background noise
+
+function logFiltered(msg) {
+    if (quietMode) {
+        if (msg.includes('[GoalEngine]') || msg.includes('[Brain]') || msg.includes('[Memory]') || 
+            msg.includes('[KnowledgeBase]') || msg.includes('[Sentinel]') || msg.includes('[CodeIndexer]') ||
+            msg.includes('[ReflectionEngine]') || msg.includes('[SelfEditor]') || msg.includes('[Diagnostics]')) {
+            return;
+        }
+    }
+    _origLog(msg);
+}
+
+function printMAX(text) {
+    console.log(`\n${C_BOLD}${C_MAX}MAX:${C_RESET} ${C_MAX}${text}${C_RESET}`);
+}
+
+function printChoko(text) {
+    console.log(`\n${C_BOLD}${C_CHOKO}Choko:${C_RESET} ${C_CHOKO}${text}${C_RESET}`);
+}
+
+async function chatMode(max, opts = {}) {
+
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
     _rl = rl;
 
@@ -300,14 +332,13 @@ async function chatMode(max, opts) {
 
     let inputBuffer   = '';
     let bufferTimer   = null;
-    let isThinking    = false;
     let pendingInput  = null;   // message typed while thinking — processed after response
     let swarmNext     = false;
     let debateNext    = false;
     let activePersona = opts.persona || null;
 
     const ask = () => {
-        if (!isThinking) {
+        if (!max.isThinking) {
             flushBgQueue();
             if (_workingGoal) {
                 _origLog(`  ⚙️  [MAX is working on: "${_workingGoal.slice(0, 55)}"]\n`);
@@ -321,16 +352,14 @@ async function chatMode(max, opts) {
         if (!line) { ask(); return; }
 
         // If already thinking, queue the message and acknowledge it immediately
-        if (isThinking) {
+        if (max.isThinking) {
             const isFirstQueue = !pendingInput;
             pendingInput = pendingInput ? pendingInput + '\n' + line : line;
 
             readline.clearLine(process.stdout, 0);
             readline.cursorTo(process.stdout, 0);
-            console.log(`  [queued] "${line.slice(0, 60)}${line.length > 60 ? '...' : ''}"`);
+            _origLog(`${C_DIM}  [queued] "${line.slice(0, 60)}${line.length > 60 ? '...' : ''}"${C_RESET}`);
 
-            // First queued message: fire a fast acknowledgment — non-blocking
-            // MAX reads the message and prints a short "I see it" before finishing
             if (isFirstQueue && max.brain?._ready) {
                 acknowledgeQueued(max, line).catch(() => {});
             }
@@ -339,7 +368,7 @@ async function chatMode(max, opts) {
             return;
         }
 
-        isThinking = true;
+        max.isThinking = true;
 
         if (line === '/quit' || line === '/exit') {
             // Save session state so MAX can brief himself next boot
@@ -548,6 +577,38 @@ async function chatMode(max, opts) {
                 else { goals.markComplete(goal.id); console.log(`[MAX] Marked complete: "${goal.title}"\n`); }
             } else {
                 console.log('[MAX] Usage: /goals [list|add "title"|done <id>|clear]\n');
+            }
+            isThinking = false; ask(); return;
+        }
+
+        // ── /soma goals — list SOMA's active goal queue ───────────────────
+        if (line === '/soma goals') {
+            if (!max.soma?.available) {
+                console.log('[MAX] SOMA offline — set SOMA_URL in config/api-keys.env to connect.\n');
+            } else {
+                try {
+                    const stop = startSpinner('fetching');
+                    const data = await max.soma.getSomaGoals();
+                    stop();
+                    if (!data?.goals) {
+                        console.log('[MAX] No goals data from SOMA.\n');
+                    } else {
+                        const list = data.goals;
+                        if (list.length === 0) {
+                            console.log('[MAX] SOMA has no active goals.\n');
+                        } else {
+                            console.log(`\n[MAX] SOMA — ${data.count || list.length} active goal(s):\n`);
+                            for (const g of list.slice(0, 25)) {
+                                const p = g.metrics?.progress ?? 0;
+                                const filled = Math.round(p / 10);
+                                const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
+                                console.log(`  [${g.id.slice(0, 8)}] p${String(g.priority).padStart(3)}  [${(g.status || '').padEnd(8)}]  ${bar} ${String(p).padStart(3)}%  ${g.title}`);
+                            }
+                            if (list.length > 25) console.log(`  ... and ${list.length - 25} more`);
+                            console.log();
+                        }
+                    }
+                } catch (err) { console.log(`[MAX] Error: ${err.message}\n`); }
             }
             isThinking = false; ask(); return;
         }
@@ -846,12 +907,12 @@ async function chatMode(max, opts) {
                 process.stdout.write('\n');
                 if (!res.wasStreamed) {
                     const reply = cleanReply(res.response || '');
-                    console.log('\nMAX: ' + reply);
+                    printMAX(reply);
                 }
             } else {
                 stop();
                 const reply = cleanReply(res.response || '');
-                console.log('\nMAX: ' + reply);
+                printMAX(reply);
             }
 
             console.log(`\n[${res.persona} | tension ${(res.drive.tension * 100).toFixed(0)}%]\n`);
@@ -910,7 +971,7 @@ async function chatMode(max, opts) {
     
     console.log('\n' + '─'.repeat(60));
     console.log('  MAX is live. Dashboard: http://localhost:3100/dashboard');
-    console.log('  Commands: /status, /persona <p>, /reason <q>, /run <cmd>, /ps, /kill <n>, /goals [list|add|clear], /reflect, /swarm, /debate, /expand, /artifacts, /pause, /resume, /quit');
+    console.log('  Commands: /status, /persona <p>, /reason <q>, /run <cmd>, /ps, /kill <n>, /goals [list|add|clear], /soma goals, /reflect, /swarm, /debate, /expand, /artifacts, /pause, /resume, /quit');
     console.log('  Research: /research (run cycle now), /frontier (capability map), /sysreport (latest report)');
     console.log('  Self-edit: /self edit <path> <instruction>  →  /self test  →  /self commit | /self rollback');
     console.log('─'.repeat(60) + '\n');

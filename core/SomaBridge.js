@@ -207,6 +207,22 @@ export class SomaBridge {
         }
     }
 
+    /** Fetch SOMA's active goals list. Returns { goals, count } or null if offline. */
+    async getSomaGoals() {
+        if (!this._available) return null;
+        try {
+            const { default: fetch } = await import('node-fetch');
+            const r = await Promise.race([
+                fetch(`${this.baseUrl}/api/goals/active`),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))
+            ]);
+            if (!r.ok) return null;
+            return await r.json();
+        } catch {
+            return null;
+        }
+    }
+
     // ── Tool Proxy ───────────────────────────────────────────────────────
 
     /**
