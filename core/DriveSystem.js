@@ -1,8 +1,8 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// DriveSystem.js — MAX's motivational engine
-// Tension builds when idle → forces action. Satisfaction rewards completion.
+﻿// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// DriveSystem.js â€” MAX's motivational engine
+// Tension builds when idle â†’ forces action. Satisfaction rewards completion.
 // Ported from SOMA DriveSystem (pure class, zero dependencies).
-// ═══════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 export class DriveSystem {
     constructor(config = {}) {
@@ -41,7 +41,7 @@ export class DriveSystem {
         this.satisfaction = Math.min(1.0, this.satisfaction + 0.6);
         this.lastActionAt = Date.now();
         this.goalsCompleted++;
-        console.log(`[Drive] 🏆 "${label}" done — tension ${(this.tension*100).toFixed(0)}% | satisfaction ${(this.satisfaction*100).toFixed(0)}%`);
+        console.log(`[Drive] ðŸ† "${label}" done â€” tension ${(this.tension*100).toFixed(0)}% | satisfaction ${(this.satisfaction*100).toFixed(0)}%`);
     }
 
     getUrgencyBoost(goal) {
@@ -75,3 +75,4 @@ export class DriveSystem {
         };
     }
 }
+

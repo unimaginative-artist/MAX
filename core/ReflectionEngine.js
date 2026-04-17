@@ -304,15 +304,47 @@ Return null for improvementGoal if no clear goal is identified.`;
         };
     }
 
-    getStatus() {
-        return {
-            turnCount:       this._turnCount,
-            lastDeepReflect: this._selfModel.lastDeepReflect,
-            totalReflections: this._selfModel.totalReflections,
-            strengthsCount:  this._selfModel.strengths.length,
-            weaknessesCount: this._selfModel.weaknesses.length,
-            patchesCount:    this._selfModel.promptPatches.length
-        };
+    /**
+     * ─── Phase 1: Trajectory Compressor ───
+     * Distills a complex multi-step execution into a single, high-fidelity entry.
+     */
+    async compressTrajectory(goal, stepResults, success) {
+        if (!this.brain?._ready) return null;
+
+        console.log(`[ReflectionEngine] 📉 Compressing trajectory for: "${goal.title}"`);
+
+        const summary = stepResults
+            .map(r => `Step ${r.step}: ${r.success ? '✓' : '✗'} - ${r.tool} - ${(r.summary || r.error || '').slice(0, 150)}`)
+            .join('\n');
+
+        const prompt = `You are MAX's memory compressor. Distill this engineering trajectory into a "Lesson Learned".
+Focus on: The exact sequence that worked (or failed), the specific file paths touched, and any critical "Gotchas" discovered.
+
+GOAL: ${goal.title}
+OUTCOME: ${success ? 'SUCCESS' : 'FAILURE'}
+RAW STEPS:
+${summary}
+
+Write a 2-3 sentence "Wisdom Block" for future reference. Be technical and precise.`;
+
+        try {
+            const result = await this.brain.think(prompt, { temperature: 0.1, maxTokens: 300, tier: 'fast' });
+            const lesson = result.text.trim();
+
+            if (this.kb?._ready && lesson) {
+                await this.kb.remember(lesson, { 
+                    source: 'trajectory_compression', 
+                    goal: goal.title,
+                    success: success ? 'TRUE' : 'FALSE'
+                });
+                console.log(`[ReflectionEngine] 💎 Wisdom stored in Knowledge Base.`);
+            }
+
+            return lesson;
+        } catch (err) {
+            console.warn('[ReflectionEngine] Trajectory compression failed:', err.message);
+            return null;
+        }
     }
 
     // ─── Reflect on task execution patterns (not just chat quality) ───────

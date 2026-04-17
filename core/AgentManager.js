@@ -32,6 +32,7 @@ export class AgentManager {
         if (name === 'Choko') {
             agent = new Choko({
                 ...config,
+                userName: this.max.profile?.getName() || 'User',
                 economics: this.max.economics
             });
         } else {

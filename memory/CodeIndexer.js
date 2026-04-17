@@ -52,6 +52,9 @@ export class CodeIndexer {
         let results = [];
         const list = await fs.readdir(dir, { withFileTypes: true });
 
+        // Non-blocking yield to keep the terminal responsive during deep crawls
+        await new Promise(resolve => setImmediate(resolve));
+
         for (const entry of list) {
             const fullPath = path.join(dir, entry.name);
             if (entry.isDirectory()) {
@@ -83,28 +86,44 @@ export class CodeIndexer {
 
             // ─── Phase 1: RepoGraph Extraction ───
             if (this.max.graph) {
-                this.max.graph.addNode(relPath, { type: 'file', name: path.basename(relPath) });
+                this.max.graph.addNode(relPath, { 
+                    type: 'file', 
+                    name: path.basename(relPath),
+                    lineCount: content.split('\n').length 
+                });
                 
-                // Simple regex for ESM imports
-                const importMatches = content.matchAll(/from\s+['"](.+?)['"]/g);
-                for (const match of importMatches) {
-                    let target = match[1];
-                    if (target.startsWith('.')) {
-                        // Normalize the path
-                        let targetPath = path.join(path.dirname(relPath), target);
-                        if (!targetPath.endsWith('.js')) targetPath += '.js';
-                        this.max.graph.addEdge(relPath, targetPath, 'imports');
+                // Real-shit extraction: Match ESM imports, CommonJS requires, and dynamic imports
+                const patterns = [
+                    /from\s+['"](.+?)['"]/g,             // import { x } from './y'
+                    /import\s+['"](.+?)['"]/g,           // import './y'
+                    /require\s*\(\s*['"](.+?)['"]\s*\)/g, // const x = require('./y')
+                    /import\s*\(\s*['"](.+?)['"]\s*\)/g   // await import('./y')
+                ];
+
+                for (const pattern of patterns) {
+                    const matches = content.matchAll(pattern);
+                    for (const match of matches) {
+                        let target = match[1];
+                        if (target.startsWith('.')) {
+                            // Normalize the path (resolve relative to current file)
+                            let targetPath = path.posix.join(path.dirname(relPath), target);
+                            
+                            // Heuristic for missing extensions
+                            if (!path.extname(targetPath)) {
+                                if (await this._exists(path.join(process.cwd(), targetPath + '.js'))) targetPath += '.js';
+                                else if (await this._exists(path.join(process.cwd(), targetPath + '.mjs'))) targetPath += '.mjs';
+                                else if (await this._exists(path.join(process.cwd(), targetPath + '/index.js'))) targetPath += '/index.js';
+                            }
+
+                            this.max.graph.addEdge(relPath, targetPath, 'imports');
+                        }
                     }
                 }
             }
 
             // ─── Phase 2: Semantic Code Chunking ───
-            // Instead of random slices, we split by high-level semantic markers
-            // (classes, functions, large export blocks)
             const chunks = this._semanticSplit(content);
 
-            // Directly ingest into KB with specialized metadata
-            // We bypass the generic KB.ingest to use our better chunks
             await this.kb._ingestText(content, relPath, 'code', filePath, {
                 isCode: true,
                 language: path.extname(filePath).slice(1),
@@ -112,6 +131,10 @@ export class CodeIndexer {
             });
 
         } catch (err) { /* skip individual file errors */ }
+    }
+
+    async _exists(p) {
+        try { await fs.access(p); return true; } catch { return false; }
     }
 
     /**

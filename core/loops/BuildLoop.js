@@ -6,7 +6,7 @@
 //   2. Draft     — brain generates a concrete implementation plan
 //   3. Debate    — DebateEngine adversarially challenges the plan
 //   4. Refine    — if MODIFY, apply verdict conditions to the plan
-//   5. Execute   — max.taskThink() → LLM calls file.patch/write/replace for real
+//   5. Execute   — max.executeAgenticThink() → LLM calls file.patch/write/replace for real
 //   6. Verify    — git diff evidence + optional verifyCommand
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -204,8 +204,8 @@ export class BuildLoop {
             `WORKFLOW: file:grep to find exact anchor text → file:patch to insert/replace → file:grep to verify.\n` +
             `When finished, output: "DONE: [one paragraph describing exactly what was changed and where]"`;
 
-        console.log(`  [BuildLoop] 🤖 Executing via taskThink (agentic tool loop)...`);
-        const result = await max.taskThink(prompt, { temperature: 0.15, maxTokens: 8192, tier: 'code' });
+        console.log(`  [BuildLoop] 🤖 Executing via agentic think loop...`);
+        const result = await max.executeAgenticThink(prompt, { temperature: 0.15, maxTokens: 8192, tier: 'code' });
 
         // Extract which files were modified from tool calls
         const modifiedFiles = [...new Set(

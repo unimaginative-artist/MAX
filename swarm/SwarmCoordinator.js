@@ -262,11 +262,42 @@ Return ONLY the JSON array. No explanation.`;
         }
     }
 
-    getStatus() {
+    /**
+     * ─── ADVERSARIAL PROTOCOL ───
+     * Pits two agents against each other: a Builder and a Breaker.
+     * The Builder implements, the Breaker attacks, then the Builder refines.
+     */
+    async adversarialRun(task) {
+        console.log(`\n  [Swarm] ⚔️  Adversarial Protocol Initiated: "${task.title}"`);
+        
+        const builder = SwarmArbiter.getPersona('Architect');
+        const breaker = SwarmArbiter.getPersona('Security');
+
+        // Step 1: Builder proposes implementation
+        console.log(`  [Swarm] 👷 Builder (Architect) is drafting implementation...`);
+        const buildRes = await this.brain.think(
+            `Task: ${task.title}\nDescription: ${task.description}\n\nDraft a complete, production-grade implementation.`,
+            { systemPrompt: builder.instruction, tier: 'smart' }
+        );
+
+        // Step 2: Breaker attacks implementation
+        console.log(`  [Swarm] 🕵️‍♂️ Breaker (Security) is red-teaming the proposal...`);
+        const attackRes = await this.brain.think(
+            `Review this implementation for security holes, edge cases, and logic bugs.\n\nPROPOSAL:\n${buildRes.text}`,
+            { systemPrompt: breaker.instruction, tier: 'smart' }
+        );
+
+        // Step 3: Builder refines based on attack
+        console.log(`  [Swarm] 🛠️  Builder is hardening code based on Breaker's findings...`);
+        const finalRes = await this.brain.think(
+            `Hardened implementation based on security review.\n\nORIGINAL:\n${buildRes.text}\n\nSECURITY REVIEW:\n${attackRes.text}\n\nApply all necessary fixes and return the definitive, secure version.`,
+            { systemPrompt: builder.instruction, tier: 'smart' }
+        );
+
+        console.log(`  [Swarm] ✅ Adversarial Protocol Complete. Code is hardened.`);
         return {
-            activeJobs:   this.activeJobs.size,
-            completedJobs: this.jobHistory.length,
-            config:        this.config
+            synthesis: finalRes.text,
+            auditTrail: attackRes.text
         };
     }
 }

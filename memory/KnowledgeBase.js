@@ -1,15 +1,15 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// KnowledgeBase.js — MAX's RAG layer
+﻿// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// KnowledgeBase.js â€” MAX's RAG layer
 //
 // Episodic memory (MaxMemory) stores conversations and discoveries.
-// KnowledgeBase stores *documents* — files, URLs, codebases, notes —
+// KnowledgeBase stores *documents* â€” files, URLs, codebases, notes â€”
 // chunked, embedded, and retrievable by semantic + BM25 search.
 //
 // Pipeline:
-//   Ingest → chunk → embed → store
-//   Query  → expand → hybrid search → rerank → return with attribution
+//   Ingest â†’ chunk â†’ embed â†’ store
+//   Query  â†’ expand â†’ hybrid search â†’ rerank â†’ return with attribution
 //
-// ═══════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 import Database from 'better-sqlite3';
 import fs       from 'fs';
@@ -34,7 +34,7 @@ export class KnowledgeBase {
     constructor(config = {}) {
         this.dbPath    = config.dbPath || path.join(process.cwd(), '.max', 'knowledge.db');
         this.embedder  = new Embedder();
-        this._vectors  = new Map();   // chunkId → float[]
+        this._vectors  = new Map();   // chunkId â†’ float[]
         this._db       = null;
         this._ready    = false;
     }
@@ -49,12 +49,13 @@ export class KnowledgeBase {
         this._createSchema();
 
         await this.embedder.initialize().catch(() => {});
-        this._loadVectors();
+        await this._loadVectors();
 
         const { sources, chunks } = this._counts();
         console.log(`[KnowledgeBase] ✅ ${sources} sources | ${chunks} chunks | embedder: ${this.embedder._ready ? 'ready' : 'keyword-only'}`);
         this._ready = true;
     }
+
 
     _createSchema() {
         this._db.exec(`
@@ -86,9 +87,9 @@ export class KnowledgeBase {
         `);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     // INGESTION
-    // ═══════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     // Lightweight shortcut for storing a plain-text insight (used by ReflectionEngine, AgentLoop)
     async remember(text, metadata = {}) {
@@ -97,7 +98,7 @@ export class KnowledgeBase {
         return this.ingest(text, { name, metadata });
     }
 
-    // ingest() is the main entry point — handles file, directory, URL, or raw text
+    // ingest() is the main entry point â€” handles file, directory, URL, or raw text
     async ingest(source, { name = null, metadata = {} } = {}) {
         if (!this._ready) throw new Error('KnowledgeBase not initialized');
 
@@ -143,7 +144,7 @@ export class KnowledgeBase {
         };
         walk(dirPath);
 
-        console.log(`[KnowledgeBase] 📂 Ingesting ${results.length} files from ${dirPath}`);
+        console.log(`[KnowledgeBase] ðŸ“‚ Ingesting ${results.length} files from ${dirPath}`);
         let ingested = 0, skipped = 0;
         for (const file of results) {
             try {
@@ -160,6 +161,11 @@ export class KnowledgeBase {
     }
 
     async _ingestText(text, name, type, sourcePath, metadata) {
+        // 🔱 POSEIDON SAFETY: Content Hash Deduplication
+        const hash = crypto.createHash('md5').update(text).digest('hex');
+        const duplicate = this._db.prepare('SELECT id FROM kb_sources WHERE metadata LIKE ?').get('%' + hash + '%');
+        if (duplicate) return { success: true, message: 'Content already indexed', sourceId: duplicate.id };
+        metadata.content_hash = hash;
         // Remove existing source by same path to avoid duplicates
         const existing = this._db.prepare('SELECT id FROM kb_sources WHERE source_path = ?').get(sourcePath);
         if (existing) await this.remove(existing.id);
@@ -197,11 +203,11 @@ export class KnowledgeBase {
         // Embed all chunks (async, non-blocking for large ingestions)
         this._embedChunks(chunkRows).catch(() => {});
 
-        console.log(`[KnowledgeBase] ✅ Ingested "${name}" → ${chunks.length} chunks`);
+        console.log(`[KnowledgeBase] âœ… Ingested "${name}" â†’ ${chunks.length} chunks`);
         return { success: true, sourceId, name, type, chunks: chunks.length };
     }
 
-    // ─── Smart chunking ───────────────────────────────────────────────────
+    // â”€â”€â”€ Smart chunking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Respects paragraph and code block boundaries before falling back to
     // character-level splitting. Adds overlap between consecutive chunks.
     _chunk(text) {
@@ -217,7 +223,7 @@ export class KnowledgeBase {
             } else {
                 if (buffer) chunks.push(buffer);
 
-                // Para itself is too large — split on sentence boundaries
+                // Para itself is too large â€” split on sentence boundaries
                 if (para.length > CHUNK_SIZE) {
                     const sentences = para.match(/[^.!?]+[.!?\n]+/g) || [para];
                     let sub = '';
@@ -254,16 +260,16 @@ export class KnowledgeBase {
         this._saveVectors();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     // RETRIEVAL
-    // ═══════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     // query() is the RAG retrieval step
     // queryExpansion: if brain is provided, generate 2 query variants for better recall
     async query(question, { topK = 6, brain = null } = {}) {
         if (!this._ready || !question?.trim()) return [];
 
-        // Query expansion — generate alternative phrasings with fast LLM
+        // Query expansion â€” generate alternative phrasings with fast LLM
         const queries = [question];
         if (brain?._ready) {
             try {
@@ -276,11 +282,11 @@ export class KnowledgeBase {
                     const variants = JSON.parse(match[0]);
                     queries.push(...variants.slice(0, 2).filter(q => typeof q === 'string'));
                 }
-            } catch { /* expansion failed — use original only */ }
+            } catch { /* expansion failed â€” use original only */ }
         }
 
         // Run all queries, union results by chunk ID
-        const scoreMap = new Map();  // chunkId → best combined score
+        const scoreMap = new Map();  // chunkId â†’ best combined score
 
         for (const q of queries) {
             const [bm25, vecScores] = await Promise.all([
@@ -350,9 +356,19 @@ export class KnowledgeBase {
         try {
             const qVec = await this.embedder.embed(query);
             if (!qVec) return scores;
+
+            let count = 0;
+            const BATCH_SIZE = 500;
+
             for (const [id, vec] of this._vectors) {
                 const s = Embedder.cosine(qVec, vec);
                 if (s > 0.25) scores.set(id, s);
+
+                count++;
+                if (count % BATCH_SIZE === 0) {
+                    // Non-blocking yield: let the event loop process other events
+                    await new Promise(resolve => setImmediate(resolve));
+                }
             }
         } catch { /* non-fatal */ }
         return scores;
@@ -370,13 +386,13 @@ export class KnowledgeBase {
         `).all(...ids);
     }
 
-    // ─── Build context block for system prompt injection ──────────────────
-    // Called by MAX.think() — returns formatted retrieved chunks
+    // â”€â”€â”€ Build context block for system prompt injection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Called by MAX.think() â€” returns formatted retrieved chunks
     formatForPrompt(chunks, maxChars = 3000) {
         if (!chunks.length) return '';
 
         let used = 0;
-        const parts = ['\n\n## Knowledge Base — retrieved context'];
+        const parts = ['\n\n## Knowledge Base â€” retrieved context'];
 
         for (const chunk of chunks) {
             const source  = chunk.source_name || 'unknown';
@@ -390,9 +406,9 @@ export class KnowledgeBase {
         return parts.join('');
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     // MANAGEMENT
-    // ═══════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     async remove(sourceId) {
         // Get chunk IDs first so we can clean vectors
@@ -415,7 +431,7 @@ export class KnowledgeBase {
         }));
     }
 
-    // ─── Helpers ──────────────────────────────────────────────────────────
+    // â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _readFile(filePath) {
         const ext = path.extname(filePath).toLowerCase();
         if (!TEXT_EXTS.has(ext)) return null;
@@ -449,12 +465,21 @@ export class KnowledgeBase {
         } catch { /* non-fatal */ }
     }
 
-    _loadVectors() {
+    async _loadVectors() {
         try {
             const vecPath = this.dbPath.replace('.db', '_vectors.json');
             if (!fs.existsSync(vecPath)) return;
-            const raw = JSON.parse(fs.readFileSync(vecPath, 'utf8'));
-            for (const [id, vec] of Object.entries(raw)) this._vectors.set(id, vec);
+            const raw = await fs.promises.readFile(vecPath, 'utf8');
+            const data = JSON.parse(raw);
+
+            let count = 0;
+            for (const [id, vec] of Object.entries(data)) {
+                this._vectors.set(id, vec);
+                count++;
+                if (count % 1000 === 0) {
+                    await new Promise(resolve => setImmediate(resolve));
+                }
+            }
             console.log(`[KnowledgeBase] Loaded ${this._vectors.size} chunk vectors`);
         } catch { /* start fresh */ }
     }
@@ -471,3 +496,4 @@ export class KnowledgeBase {
         return { ready: this._ready, sources, chunks, vectors: this._vectors.size };
     }
 }
+

@@ -13,6 +13,7 @@ export class GoalEngine {
         this.brain    = brain;
         this.outcomes = outcomeTracker;
         this.memory   = memory;   // injected after memory system boots
+        this.vector   = config.vector; // VECTOR Systems Architect daemon
         
         console.log(`[GoalEngine] Constructor config storageDir: ${config.storageDir}`);
         const storageDir = config.storageDir || path.join(process.cwd(), '.max');
@@ -111,7 +112,26 @@ export class GoalEngine {
     // ─── Decompose a goal into concrete steps via brain ───────────────────
     // context.availableTools — string[] of registered tool names (from AgentLoop)
     async decompose(goal, context = {}) {
-        if (!this.brain._ready) return [goal.description || goal.title];
+        if (!this.brain._ready) return [{ step: 1, action: goal.description || goal.title, tool: 'brain', success: 'completed' }];
+
+        // 📐 Phase 0: Systems Architecture (VECTOR)
+        let architecture = null;
+        if (this.vector) {
+            const vectorResult = await this.vector.process({
+                goal:           goal.title,
+                description:    goal.description,
+                type:           goal.type,
+                successMetrics: goal.successMetrics || ["Completion", "Stability"]
+            }, { 
+                force: goal.type === 'fix' || goal.priority > 0.8,
+                stagnation: goal.attempts > 1
+            });
+
+            if (vectorResult && !vectorResult.bypass) {
+                architecture = vectorResult.architecture;
+                console.log(`[GoalEngine] 📐 Structured architecture synthesized for "${goal.title}"`);
+            }
+        }
 
         // Pull relevant memories and past outcomes to inform the plan
         let memoryContext = '';
@@ -128,13 +148,24 @@ export class GoalEngine {
         let outcomeContext = '';
         if (this.outcomes) {
             try {
-                const keyword = goal.title.toLowerCase().split(' ')[0];
-                const past = this.outcomes.query({ limit: 10 }).filter(o =>
-                    (o.context?.title || o.action || '').toLowerCase().includes(keyword)
-                ).slice(0, 4);
+                // Match on full goal title words, not just the first word
+                const keywords = goal.title.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+                const past = this.outcomes.query({ limit: 20 }).filter(o => {
+                    const haystack = (o.context?.goalTitle || o.action || '').toLowerCase();
+                    return keywords.some(kw => haystack.includes(kw));
+                }).slice(0, 4);
+
                 if (past.length > 0) {
                     outcomeContext = '\n\nPAST SIMILAR ATTEMPTS:\n'
-                        + past.map(o => `- ${o.success ? '✓' : '✗'} ${o.context?.title || o.action}: ${(o.result || '').slice(0, 100)}`).join('\n');
+                        + past.map(o => `- ${o.success ? '✓' : '✗'} ${o.context?.goalTitle || o.action}: ${(o.result || '').slice(0, 100)}`).join('\n');
+                }
+
+                // If this goal type is struggling, warn the planner to use simpler steps
+                const week = 7 * 24 * 3600_000;
+                const typeRate = this.outcomes.getSuccessRate('AgentLoop', goal.type, week);
+                if (typeRate !== null && typeRate < 0.4) {
+                    outcomeContext += `\n\nWARNING: "${goal.type}" goals have only ${(typeRate * 100).toFixed(0)}% success rate recently.`
+                        + ` Prefer fewer steps, simpler verification, and avoid shell commands that tend to fail.`;
                 }
             } catch { /* non-fatal */ }
         }
@@ -151,11 +182,15 @@ export class GoalEngine {
                 + context.skill.steps.map(s => `  ${s.step}. [${s.tool}] ${s.action}`).join('\n')
             : '';
 
+        const archBlock = architecture 
+            ? `\n\nSYSTEM ARCHITECTURE (follow this design):\n${JSON.stringify(architecture, null, 2)}`
+            : '';
+
         const prompt = `Break this goal into 3-6 concrete, executable steps.
 
 GOAL: ${goal.title}
 TYPE: ${goal.type}
-${goal.description ? `DETAILS: ${goal.description}\n` : ''}${toolLine}${skillBlock}${memoryContext}${outcomeContext}
+${goal.description ? `DETAILS: ${goal.description}\n` : ''}${toolLine}${archBlock}${skillBlock}${memoryContext}${outcomeContext}
 
 MANDATORY Verification (Phase 3 Evolution):
 - If type is 'fix' or 'task', the LAST STEP MUST be a verification.
@@ -269,14 +304,17 @@ Return ONLY the JSON array.`;
         this._save();
         console.log(`[GoalEngine] ✅ "${goal.title}" completed`);
 
-        // Track outcome
+        // Reward scales down with replans: 0 replans = 0.9, 1 = 0.75, 2 = 0.6, 3+ = 0.45
+        const replans = outcome.replans ?? 0;
+        const reward = Math.max(0.45, 0.9 - replans * 0.15);
+
         this.outcomes?.record({
-            agent:   'GoalEngine',
-            action:  'complete_goal',
-            context: { goalType: goal.type, source: goal.source },
+            agent:   'AgentLoop',
+            action:  goal.type,
+            context: { goalTitle: goal.title, goalType: goal.type, source: goal.source, replans },
             result:  outcome.summary,
             success: true,
-            reward:  0.8
+            reward
         });
 
         return true;
@@ -315,9 +353,9 @@ Return ONLY the JSON array.`;
         console.log(`[GoalEngine] ❌ "${goal.title}" permanently failed after ${goal.attempts} attempt(s): ${reason.slice(0, 80)}`);
 
         this.outcomes?.record({
-            agent:   'GoalEngine',
-            action:  'fail_goal',
-            context: { goalType: goal.type, attempts: goal.attempts },
+            agent:   'AgentLoop',
+            action:  goal.type,
+            context: { goalTitle: goal.title, goalType: goal.type, attempts: goal.attempts, source: goal.source },
             result:  reason,
             success: false,
             reward:  -0.3
@@ -336,13 +374,32 @@ Return ONLY the JSON array.`;
             ? this.outcomes.query({ limit: 5 }).map(o => `${o.action}: ${o.success ? 'success' : 'fail'}`).join(', ')
             : '';
 
+        // Extract recently-failed goal titles so we don't regenerate them
+        const recentFailed = this.outcomes
+            ? this.outcomes.query({ success: false, limit: 10, since: Date.now() - 7 * 24 * 3600_000 })
+                .map(o => o.context?.goalTitle).filter(Boolean).slice(0, 5)
+            : [];
+        const avoidBlock = recentFailed.length > 0
+            ? `\n\nRECENTLY FAILED (do NOT regenerate these or closely similar goals):\n${recentFailed.map(t => `- ${t}`).join('\n')}`
+            : '';
+
+        // Find which goal type is struggling so we can deprioritize it
+        const week = 7 * 24 * 3600_000;
+        const typeRates = ['task', 'fix', 'research', 'improvement'].map(t => {
+            const r = this.outcomes?.getSuccessRate('AgentLoop', t, week);
+            return r !== null && r < 0.35 ? t : null;
+        }).filter(Boolean);
+        const weakTypes = typeRates.length > 0
+            ? `\n\nSTRUGGLING GOAL TYPES (avoid generating these right now): ${typeRates.join(', ')}`
+            : '';
+
         const prompt = `You are MAX, an autonomous engineering AI agent working for Barry.
 Barry's current challenge: "${userContext || 'building a fully agentic AI system (SOMA)'}"
 
 Current active goals:
 ${activeList}
 
-Recent outcomes: ${recentOutcomes || 'none'}
+Recent outcomes: ${recentOutcomes || 'none'}${avoidBlock}${weakTypes}
 
 Generate 3 NEW, CONCRETE goals MAX can execute RIGHT NOW using his tools (file, shell, web, git, api, brain).
 Goals must be:
@@ -390,13 +447,23 @@ Return JSON array ONLY:
 
     // ─── Score goal priority ──────────────────────────────────────────────
     _scorePriority(goal) {
-        // Simple heuristic scoring — can be made smarter over time
         let p = 0.5;
         if (goal.type === 'fix')         p += 0.2;
         if (goal.type === 'improvement') p += 0.1;
         if (goal.source === 'user')      p += 0.2;
         if (goal.priority)               p  = goal.priority;
-        return Math.min(1.0, p);
+
+        // Outcome-aware adjustment: boost proven types, penalize struggling ones
+        if (this.outcomes) {
+            const week = 7 * 24 * 3600_000;
+            const rate = this.outcomes.getSuccessRate('AgentLoop', goal.type, week);
+            if (rate !== null) {
+                if (rate > 0.7)      p += 0.1;   // this type succeeds reliably
+                else if (rate < 0.3) p -= 0.15;  // this type keeps failing
+            }
+        }
+
+        return Math.min(1.0, Math.max(0.05, p));
     }
 
     _dropLowestPriority() {
@@ -413,23 +480,15 @@ Return JSON array ONLY:
     }
 
     _save() {
-        try {
-            console.log(`[GoalEngine] Attempting to save to: ${this.goalsPath}`);
-            const dir = path.dirname(this.goalsPath);
-            if (!fs.existsSync(dir)) {
-                console.log(`[GoalEngine] Creating directory: ${dir}`);
-                fs.mkdirSync(dir, { recursive: true });
-            }
-            const data = JSON.stringify({
-                active:    [...this._active.values()],
-                completed: this._completed.slice(0, 20),
-                stats:     this.stats
-            }, null, 2);
-            fs.writeFileSync(this.goalsPath, data);
-            console.log(`[GoalEngine] ✅ Saved ${this._active.size} goals to ${this.goalsPath}`);
-        } catch (err) { 
-            console.error(`[GoalEngine] ❌ CRITICAL: Failed to save goals to ${this.goalsPath}:`, err.message);
-        }
+        const data = JSON.stringify({
+            active:    [...this._active.values()],
+            completed: this._completed.slice(0, 20),
+            stats:     this.stats
+        }, null, 2);
+        
+        fs.promises.writeFile(this.goalsPath, data).catch(err => {
+            console.error(`[GoalEngine] ❌ Failed to save goals:`, err.message);
+        });
     }
 
     _load() {

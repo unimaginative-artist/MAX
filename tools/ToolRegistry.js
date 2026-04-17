@@ -1,67 +1,17 @@
-﻿// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// ToolRegistry.js â€” MAX's tool management
-// Tools are what MAX uses to actually DO things, not just think about them.
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-// â”€â”€â”€ Tolerant JSON parser â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// LLMs (especially smaller ones) often emit malformed JSON in tool calls:
-//   â€¢ Unquoted keys:   {path: "./foo"}   â†’ {"path": "./foo"}
-//   â€¢ Single quotes:   {'key': 'val'}    â†’ {"key": "val"}
-//   â€¢ Trailing commas: {"a":1,}          â†’ {"a":1}
-//   â€¢ Literal newlines inside strings    â†’ escaped \n
-// Try strict parse first; if it fails apply fixes and retry.
-
-// Escape literal newlines/tabs inside JSON string values.
-// Walks char-by-char tracking string context so only in-string control chars are fixed.
-function fixMultilineStrings(s) {
-    let result = '';
-    let inString = false;
-    let escaped  = false;
-    for (let i = 0; i < s.length; i++) {
-        const ch = s[i];
-        if (escaped)          { result += ch; escaped = false; continue; }
-        if (ch === '\\')      { result += ch; escaped = true;  continue; }
-        if (ch === '"')       { inString = !inString; result += ch; continue; }
-        if (inString) {
-            if      (ch === '\n') { result += '\\n';  continue; }
-            else if (ch === '\r') { result += '\\r';  continue; }
-            else if (ch === '\t') { result += '\\t';  continue; }
-        }
-        result += ch;
-    }
-    return result;
-}
-
-function parseLooseJson(str) {
-    try { return JSON.parse(str); } catch {}
-
-    let s = str.trim();
-
-    // If it doesn't look like JSON at all (no curly braces), it's a hallucinated CLI string.
-    // Return null so executeLLMToolCall can try wrapping it.
-    if (!s.startsWith('{') && !s.startsWith('[')) return null;
-
-    // Fix literal newlines/tabs inside string values (most common failure for file:write)
-    try { return JSON.parse(fixMultilineStrings(s)); } catch {}
-
-    // Single quotes â†’ double quotes (simple values only, no nested single quotes)
-    s = s.replace(/'([^'\\]*(\\.[^'\\]*)*)'/g, '"$1"');
-    // Quote unquoted object keys: { key: â†’ { "key":
-    s = s.replace(/([{,]\s*)([A-Za-z_$][A-Za-z0-9_$]*)\s*:/g, '$1"$2":');
-    // Remove trailing commas before } or ]
-    s = s.replace(/,(\s*[}\]])/g, '$1');
-
-    // Apply multiline fix after other transformations too
-    try { return JSON.parse(fixMultilineStrings(s)); } catch {}
-
-    return JSON.parse(s);
-}
-
+/**
+ * ToolRegistry — The central repository for all MAX tools.
+ * Handles registration, discovery, and execution of both internal and SOMA tools.
+ */
 export class ToolRegistry {
     constructor() {
         this._tools = new Map();
     }
 
+    /**
+     * Register a new tool or toolset.
+     * @param {Object} tool - { name, description, actions: { actionName: fn } }
+     */
     register(tool) {
         if (!tool.name) throw new Error('Tool must have a name');
         this._tools.set(tool.name, tool);
@@ -70,6 +20,9 @@ export class ToolRegistry {
     get(name)  { return this._tools.get(name); }
     has(name)  { return this._tools.has(name); }
 
+    /**
+     * List all registered tools and their actions.
+     */
     list() {
         return [...this._tools.values()].map(t => ({
             name:        t.name,
@@ -78,9 +31,14 @@ export class ToolRegistry {
         }));
     }
 
-        async execute(toolName, action, params = {}) {
+    /**
+     * Execute a specific tool action.
+     */
+    async execute(toolName, action, params = {}) {
         const tool = this._tools.get(toolName);
-        if (!tool) throw new Error(`Unknown tool: ${toolName}`);
+        if (!tool) {
+            throw new Error(`Unknown tool: ${toolName}. Available: ${[...this._tools.keys()].join(', ')}`);
+        }
 
         try {
             // Handle Object-based tools (actions map)
@@ -95,95 +53,55 @@ export class ToolRegistry {
         } catch (err) {
             return { success: false, error: err.message };
         }
-    }. Available: ${[...this._tools.keys()].join(', ')}`);
-        if (!tool.actions?.[action]) throw new Error(`Tool ${toolName} has no action: ${action}`);
-
-        try {
-            return await tool.actions[action](params);
-        } catch (err) {
-            return { success: false, error: err.message };
-        }
     }
 
-    // â”€â”€â”€ Parse and execute a tool call from LLM output â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // LLM can output: TOOL:file:read:{"path":"./foo.js"}
-    // Small models often emit unquoted keys, single quotes, or just raw text.
-    async executeLLMToolCall(rawText) {
-        const match = rawText.match(/TOOL:([^:]+):([^:]+):(.+)/s);
-        if (!match) return null;
+    /**
+     * Parse and execute a tool call from raw LLM output.
+     * Expected format: TOOL:toolName:actionName:{"param":"value"}
+     */
+    async executeLLMToolCall(rawCall) {
+        const trimmed = rawCall.trim();
+        if (!trimmed.startsWith('TOOL:')) return null;
 
-        const [, toolName, action, paramsRaw] = match;
-        const trimmedParams = paramsRaw.trim();
+        const parts = trimmed.split(':');
+        if (parts.length < 3) return { success: false, error: 'Malformed tool call. Use TOOL:tool:action:params' };
 
-        try {
-            // Strip trailing non-JSON text that LLMs sometimes append after the closing brace.
-            // e.g. TOOL:file:list:{} no?  â†’  trimmedParams="{} no?"  â†’  cleanedParams="{}"
-            const lastClose = Math.max(trimmedParams.lastIndexOf('}'), trimmedParams.lastIndexOf(']'));
-            const cleanedParams = lastClose >= 0 ? trimmedParams.slice(0, lastClose + 1) : trimmedParams;
+        const toolName = parts[1];
+        const action   = parts[2];
+        let params     = {};
 
-            let params = parseLooseJson(cleanedParams);
-
-            // Fallback: If it wasn't JSON, wrap it in a default parameter name.
-            // This fixes hallucinations where the LLM just writes TOOL:shell:run:ls -la
-            if (params === null) {
-                if (toolName === 'shell') params = { command: trimmedParams };
-                else if (toolName === 'file' && action === 'read') params = { filePath: trimmedParams };
-                else if (toolName === 'web')   params = { query: trimmedParams };
-                else if (toolName === 'api')   params = { url: trimmedParams };
-                else throw new Error(`Invalid JSON params: ${trimmedParams}`);
+        // Extract JSON params if present
+        const jsonStart = trimmed.indexOf('{');
+        if (jsonStart !== -1) {
+            try {
+                // Heuristic: everything from the first '{' to the last '}'
+                const jsonStr = trimmed.slice(jsonStart, trimmed.lastIndexOf('}') + 1);
+                params = JSON.parse(jsonStr);
+            } catch (err) {
+                // Fallback for messy LLM output: try to find unquoted keys/values
+                // (Very basic — if this fails, the tool will report the error)
             }
-
-            return await this.execute(toolName, action, params);
-        } catch (err) {
-            return { success: false, error: `Tool call parse error: ${err.message}` };
+        } else if (parts[3]) {
+            // Fallback for simple single-string param: TOOL:tool:action:value
+            params = { value: parts.slice(3).join(':') };
         }
+
+        return await this.execute(toolName, action, params);
     }
 
-    // â”€â”€â”€ Build a tool manifest for the system prompt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    /**
+     * Build a string manifest of all tools for the system prompt.
+     */
     buildManifest() {
-        const tools = this.list();
-        if (tools.length === 0) return '';
-
-        const lines = [
-            '',
-            '## Available Tools',
-            'CRITICAL: Call a tool ONLY with this exact format: TOOL:<name>:<action>:<json_params>',
-            'The parameters MUST be a valid JSON object. Do not use CLI-style arguments.',
-            '',
-            '### Example (CORRECT):',
-            'TOOL:file:read:{"filePath": "core/MAX.js"}',
-            'TOOL:shell:run:{"command": "npm test"}',
-            'TOOL:shell:start:{"command": "npm run dev", "name": "dev-server"}',
-            'TOOL:shell:stop:{"name": "dev-server"}',
-            '',
-            '### Example (WRONG - DO NOT DO THIS):',
-            'TOOL:file:read core/MAX.js',
-            'TOOL:shell:run ls -la',
-            ''
-        ];
-
-        for (const t of tools) {
-            lines.push(`### ${t.name} â€” ${t.description}`);
-            for (const a of t.actions) {
-                // Heuristic for examples based on action name
-                let example = '{}';
-                if (t.name === 'file' && a === 'read')   example = '{"filePath": "...", "startLine": 10, "endLine": 50}';
-                if (t.name === 'file' && a === 'write')  example = '{"filePath": "...", "content": "..."}';
-                if (t.name === 'file' && a === 'replace') example = '{"filePath": "...", "oldText": "...", "newText": "..."}';
-                if (t.name === 'file' && a === 'grep')   example = '{"dir": ".", "pattern": "async function", "filePattern": ".js"}';
-                if (t.name === 'file' && a === 'patch')  example = '{"filePath": "...", "hunks": [{"anchor": "exact line to find", "position": "after", "content": "new line to insert"}]}';
-                if (t.name === 'shell' && a === 'run')   example = '{"command": "npm test", "timeoutMs": 120000}';
-                if (t.name === 'shell' && a === 'start') example = '{"command": "npm run dev", "name": "dev-server"}';
-                if (t.name === 'shell' && a === 'stop')  example = '{"name": "dev-server"}';
-                if (t.name === 'shell' && a === 'ps')    example = '{}';
-                if (t.name === 'shell' && a === 'cd')    example = '{"path": "../other-project"}';
-                if (t.name === 'web' && a === 'search') example = '{"query": "..."}';
-                if (t.name === 'api' && a === 'request') example = '{"url": "...", "method": "GET"}';
-                if (t.name === 'discord' && a === 'send') example = '{"channelId": "...", "message": "..."}';
-
-                lines.push(`  TOOL:${t.name}:${a}:${example}`);
+        let manifest = '\n\n## Available Tools\n';
+        for (const tool of this._tools.values()) {
+            manifest += `- **${tool.name}**: ${tool.description}\n`;
+            if (tool.actions) {
+                for (const act of Object.keys(tool.actions)) {
+                    manifest += `  - ${act}\n`;
+                }
             }
         }
-        return lines.join('\n');
+        return manifest;
     }
 }

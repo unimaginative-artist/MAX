@@ -19,26 +19,65 @@ export class RepoGraph {
     async rebuild() {
         this.nodes.clear();
         this.edges = [];
-        console.log('[RepoGraph] 🗺️  Building project cognition graph...');
-        // Logic will be populated by the Indexer
+        // The Indexer now calls addNode/addEdge during its crawl
     }
 
     addNode(id, data) {
-        this.nodes.set(id, { id, ...data });
+        // Standardize on forward slashes for cross-platform consistency
+        const normalizedId = id.replace(/\\/g, '/');
+        this.nodes.set(normalizedId, { id: normalizedId, ...data });
     }
 
     addEdge(from, to, type) {
-        this.edges.push({ from, to, type });
+        const normalizedFrom = from.replace(/\\/g, '/');
+        const normalizedTo   = to.replace(/\\/g, '/');
+        
+        // Prevent duplicate edges
+        const exists = this.edges.some(e => e.from === normalizedFrom && e.to === normalizedTo && e.type === type);
+        if (!exists) {
+            this.edges.push({ from: normalizedFrom, to: normalizedTo, type });
+        }
     }
 
     /**
-     * Find everything that depends on a specific file.
-     * Crucial for "Impact Analysis" before self-evolution.
+     * Find everything that depends on a specific file (recursive).
+     * This is the "Blast Radius" of a change.
      */
-    getDependents(filePath) {
-        return this.edges
-            .filter(e => e.to === filePath && e.type === 'imports')
+    getImpact(filePath, visited = new Set()) {
+        const normalizedPath = filePath.replace(/\\/g, '/');
+        if (visited.has(normalizedPath)) return [];
+        visited.add(normalizedPath);
+
+        const directDependents = this.edges
+            .filter(e => e.to === normalizedPath)
             .map(e => e.from);
+
+        let recursiveImpact = [...directDependents];
+        for (const dep of directDependents) {
+            recursiveImpact = recursiveImpact.concat(this.getImpact(dep, visited));
+        }
+
+        return [...new Set(recursiveImpact)];
+    }
+
+    /**
+     * Trace the dependency chain for a file (what it needs to run).
+     */
+    getDependencies(filePath, visited = new Set()) {
+        const normalizedPath = filePath.replace(/\\/g, '/');
+        if (visited.has(normalizedPath)) return [];
+        visited.add(normalizedPath);
+
+        const directDeps = this.edges
+            .filter(e => e.from === normalizedPath)
+            .map(e => e.to);
+
+        let recursiveDeps = [...directDeps];
+        for (const dep of directDeps) {
+            recursiveDeps = recursiveDeps.concat(this.getDependencies(dep, visited));
+        }
+
+        return [...new Set(recursiveDeps)];
     }
 
     /**

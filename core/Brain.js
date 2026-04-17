@@ -11,21 +11,41 @@
 //   code  → DeepSeek (deepseek-reasoner) — ONLY, no fallback
 //
 // Config (config/api-keys.env):
-//   OLLAMA_MODEL_FAST=qwen3:1.5b       # fast tier — heartbeats, web search, background
+//   OLLAMA_MODEL_FAST=gemma3:4b         # fast tier — heartbeats, web search, background
 //   DEEPSEEK_API_KEY=...               # smart + code tier
 //   DEEPSEEK_MODEL=deepseek-chat       # smart tier model (default)
 //   DEEPSEEK_CODE_MODEL=deepseek-reasoner  # code tier model (default)
 // ═══════════════════════════════════════════════════════════════════════════
 
 import fetch from 'node-fetch';
+import { readFileSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { EconomicsEngine } from './EconomicsEngine.js';
+
+// Load config/api-keys.env directly so Brain works regardless of how MAX is launched
+const _brainDir = dirname(fileURLToPath(import.meta.url));
+const _envPath  = join(_brainDir, '..', 'config', 'api-keys.env');
+if (existsSync(_envPath)) {
+    for (const line of readFileSync(_envPath, 'utf8').replace(/\r/g, '').split('\n')) {
+        const t = line.trim();
+        if (t && !t.startsWith('#')) {
+            const eq = t.indexOf('=');
+            if (eq > 0) {
+                const k = t.slice(0, eq).trim();
+                const v = t.slice(eq + 1).trim();
+                if (k && v && !process.env[k]) process.env[k] = v;
+            }
+        }
+    }
+}
 
 export class Brain {
     constructor(max, config = {}) {
         this.max          = max;
         this.config       = config;
         this.ollamaUrl    = config.ollamaUrl || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-        this.timeout      = config.timeout     || 240_000;
+        this.timeout      = config.timeout     || 900_000; // 15 minutes for massive codebase generation
         this.fastTimeout  = config.fastTimeout || 30_000;
 
         // ── Fast tier config ─────────────────────────────────────────────
@@ -35,10 +55,11 @@ export class Brain {
                 || process.env.OLLAMA_MODEL_FAST
                 || config.ollamaModel
                 || process.env.OLLAMA_MODEL
-                || 'qwen3:1.5b',
+                || 'gemma3:4b',
             ready:   false,
             backend: null   // 'ollama' | null
         };
+
 
         // ── Smart tier config ────────────────────────────────────────────
         // DeepSeek only — no OpenAI, no Ollama.
@@ -131,7 +152,7 @@ export class Brain {
 
         let result;
         if (tier === 'fast') {
-            result = await this._runFast(prompt, systemPrompt, temperature, maxTokens);
+            result = await this._runFast(prompt, systemPrompt, temperature, maxTokens, onToken);
         } else if (tier === 'code') {
             result = await this._runCode(prompt, systemPrompt, temperature, maxTokens, onToken);
         } else {
@@ -143,10 +164,10 @@ export class Brain {
     }
 
     // ─── Fast tier execution — Ollama only, falls back to DeepSeek ───────
-    async _runFast(prompt, systemPrompt, temperature, maxTokens) {
+    async _runFast(prompt, systemPrompt, temperature, maxTokens, onToken = null) {
         if (this._fast.ready && this._fast.backend === 'ollama' && !this._fastDisabled) {
             try {
-                return await this._ollama(this._fast.ollamaModel, prompt, systemPrompt, temperature, maxTokens, this.fastTimeout);
+                return await this._ollama(this._fast.ollamaModel, prompt, systemPrompt, temperature, maxTokens, this.fastTimeout, onToken);
             } catch (err) {
                 this._fastFailures++;
                 if (this._fastFailures >= 2) {
@@ -157,8 +178,8 @@ export class Brain {
                 }
             }
         }
-        // Ollama down/disabled — use DeepSeek with capped tokens
-        return this._runSmart(prompt, systemPrompt, temperature, Math.min(maxTokens, 512));
+        // Ollama down/disabled — use DeepSeek with capped tokens, preserve onToken
+        return this._runSmart(prompt, systemPrompt, temperature, Math.min(maxTokens, 512), onToken);
     }
 
     // ─── Code tier — deepseek-reasoner (deep thinking for code) ──────────
@@ -215,26 +236,31 @@ export class Brain {
             const decoder = new TextDecoder();
             let partial = '';  // carry-over for chunks split across SSE boundaries
 
-            for await (const chunk of res.body) {
-                partial += decoder.decode(chunk, { stream: true });
-                const lines = partial.split('\n');
-                // Keep the last (potentially incomplete) line as carry-over
-                partial = lines.pop();
+            try {
+                for await (const chunk of res.body) {
+                    partial += decoder.decode(chunk, { stream: true });
+                    const lines = partial.split('\n');
+                    // Keep the last (potentially incomplete) line as carry-over
+                    partial = lines.pop();
 
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
-                    const raw = line.slice(6).trim();
-                    if (raw === '[DONE]') continue;
-                    try {
-                        const parsed = JSON.parse(raw);
-                        const token = parsed.choices?.[0]?.delta?.content;
-                        if (token) {
-                            fullText += token;
-                            onToken(token);
-                        }
-                        if (parsed.usage) totalTokens = parsed.usage.total_tokens || 0;
-                    } catch { /* partial JSON chunk — skip */ }
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ')) continue;
+                        const raw = line.slice(6).trim();
+                        if (raw === '[DONE]') continue;
+                        try {
+                            const parsed = JSON.parse(raw);
+                            const token = parsed.choices?.[0]?.delta?.content;
+                            if (token) {
+                                fullText += token;
+                                onToken(token);
+                            }
+                            if (parsed.usage) totalTokens = parsed.usage.total_tokens || 0;
+                        } catch { /* partial JSON chunk — skip */ }
+                    }
                 }
+            } catch (err) {
+                if (err.name === 'AbortError') throw err; // rethrow timeout
+                console.warn(`[Brain] ⚠️ Stream interrupted: ${err.message}. Returning partial response.`);
             }
 
             const result = {
@@ -271,33 +297,27 @@ export class Brain {
         };
     }
 
-    async _ollama(model, prompt, systemPrompt, temperature, maxTokens, timeoutMs = null) {
+    async _ollama(model, prompt, systemPrompt, temperature, maxTokens, timeoutMs = null, onToken = null) {
         const start = Date.now();
 
-        // Use /api/chat with proper message structure so the model tracks conversation
-        // context correctly. /api/generate flattens everything into one blob and small
-        // models lose track of conversation state, producing repeated responses.
         const messages = [];
         if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
 
-        // Parse flat "USER: .../MAX: ..." history back into structured message objects
         const turns = prompt.split(/\n\n(?=USER:|MAX:)/);
         for (const turn of turns) {
-            if (turn.startsWith('USER:')) {
-                messages.push({ role: 'user', content: turn.slice(5).trim() });
-            } else if (turn.startsWith('MAX:')) {
-                messages.push({ role: 'assistant', content: turn.slice(4).trim() });
-            } else if (turn.trim()) {
-                messages.push({ role: 'user', content: turn.trim() });
-            }
+            if (turn.startsWith('USER:')) messages.push({ role: 'user', content: turn.slice(5).trim() });
+            else if (turn.startsWith('MAX:')) messages.push({ role: 'assistant', content: turn.slice(4).trim() });
+            else if (turn.trim()) messages.push({ role: 'user', content: turn.trim() });
         }
 
+        const useStream = !!onToken;
         const body = {
             model,
             messages,
-            stream:  false,
+            stream:  useStream,
             options: { temperature, num_predict: maxTokens }
         };
+
         const res = await fetch(`${this.ollamaUrl}/api/chat`, {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -305,21 +325,45 @@ export class Brain {
             signal:  AbortSignal.timeout(timeoutMs || this.timeout)
         });
         if (!res.ok) throw new Error(`Ollama ${res.status}`);
-        const data = await res.json();
+
+        let fullText = '';
+        let promptTokens = 0, evalTokens = 0;
+
+        if (useStream) {
+            const decoder = new TextDecoder();
+            let partial = '';
+            for await (const chunk of res.body) {
+                partial += decoder.decode(chunk, { stream: true });
+                const lines = partial.split('\n');
+                partial = lines.pop();
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                        const json = JSON.parse(line);
+                        const token = json.message?.content || '';
+                        if (token) { fullText += token; onToken(token); }
+                        if (json.done) {
+                            promptTokens = json.prompt_eval_count || 0;
+                            evalTokens   = json.eval_count || 0;
+                        }
+                    } catch { /* partial JSON — skip */ }
+                }
+            }
+        } else {
+            const data = await res.json();
+            fullText     = data.message?.content?.trim() || '';
+            promptTokens = data.prompt_eval_count || 0;
+            evalTokens   = data.eval_count || 0;
+        }
 
         const econ = this.max?.economics;
         if (econ && typeof econ.recordUsage === 'function') {
-            econ.recordUsage('ollama', data.prompt_eval_count || 0, data.eval_count || 0);
+            econ.recordUsage('ollama', promptTokens, evalTokens);
         }
 
         return {
-            text: data.message?.content?.trim() || '',
-            metadata: {
-                model,
-                tokens:  data.eval_count || 0,
-                latency: Date.now() - start,
-                backend: 'ollama'
-            }
+            text: fullText.trim(),
+            metadata: { model, tokens: evalTokens, latency: Date.now() - start, backend: 'ollama' }
         };
     }
 

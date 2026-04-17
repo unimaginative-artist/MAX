@@ -19,6 +19,10 @@ import { OutcomeTracker } from '../core/OutcomeTracker.js';
 import { UserProfile } from '../onboarding/UserProfile.js';
 import { SkillLibrary } from '../core/SkillLibrary.js';
 import { KnowledgeBase } from '../memory/KnowledgeBase.js';
+import { WebTool }       from '../tools/WebTool.js';
+import { GitTool }       from '../tools/GitTool.js';
+import { KnowledgeTool } from '../tools/KnowledgeTool.js';
+import { BrowserTool }   from '../tools/BrowserTool.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,6 +30,7 @@ export class Choko {
     constructor(config = {}) {
         this.config = config;
         this.name = config.name || 'Choko';
+        this.userName = config.userName || 'User';
         this._ready = false;
 
         // Shared or dedicated economics
@@ -82,7 +87,9 @@ export class Choko {
             const files = fs.readdirSync(hatsDir).filter(f => f.endsWith('.md'));
             for (const file of files) {
                 const name = file.replace('.md', '');
-                const content = fs.readFileSync(path.join(hatsDir, file), 'utf8');
+                let content = fs.readFileSync(path.join(hatsDir, file), 'utf8');
+                // Dynamic identity
+                content = content.replace(/{{USER_NAME}}/g, this.userName);
                 this.hats.set(name, content);
             }
             console.log(`[${this.name}] 👒 Loaded ${this.hats.size} Scout Hats.`);
@@ -91,7 +98,7 @@ export class Choko {
         // Set base persona
         const basePersonaPath = path.join(__dirname, 'persona.md');
         if (fs.existsSync(basePersonaPath)) {
-            this.persona = fs.readFileSync(basePersonaPath, 'utf8');
+            this.persona = fs.readFileSync(basePersonaPath, 'utf8').replace(/{{USER_NAME}}/g, this.userName);
         }
 
         // Memory tiers
@@ -114,6 +121,10 @@ export class Choko {
         // Register core tools
         this.tools.register(FileTools);
         this.tools.register(ShellTool);
+        this.tools.register(WebTool);
+        this.tools.register(GitTool);
+        this.tools.register(KnowledgeTool);
+        this.tools.register(BrowserTool);
 
         // Register agent-specific tools from ./tools directory
         await this._loadLocalTools();
@@ -159,6 +170,8 @@ ${this.profile.buildContextBlock()}`;
 
         const result = await this.brain.think(userMessage, {
             systemPrompt,
+            tier: options.tier || 'smart',
+            onToken: options.onToken || null,
             ...options
         });
 

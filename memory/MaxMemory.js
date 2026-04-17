@@ -79,7 +79,8 @@ export class MaxMemory {
                 created_at   INTEGER NOT NULL,
                 accessed_at  INTEGER NOT NULL,
                 access_count INTEGER DEFAULT 0,
-                importance   REAL    DEFAULT 0.5
+                importance   REAL    DEFAULT 0.5,
+                provenance   TEXT    DEFAULT 'HYPOTHESIZED' -- VERIFIED | HYPOTHESIZED | STATED
             );
             CREATE INDEX IF NOT EXISTS idx_type       ON memories(type);
             CREATE INDEX IF NOT EXISTS idx_importance ON memories(importance DESC);
@@ -120,7 +121,7 @@ export class MaxMemory {
     // STORE
     // ═══════════════════════════════════════════════════════════════════════
 
-    async remember(content, metadata = {}, { importance = 0.5, type = 'general' } = {}) {
+    async remember(content, metadata = {}, { importance = 0.5, type = 'general', provenance = 'HYPOTHESIZED' } = {}) {
         if (!content?.trim()) return null;
 
         const id  = crypto.randomUUID();
@@ -128,13 +129,13 @@ export class MaxMemory {
         const meta = typeof metadata === 'string' ? { note: metadata } : metadata;
 
         // Hot tier
-        this._hot.set(id, { id, content, metadata: meta, type, importance, ts: now });
+        this._hot.set(id, { id, content, metadata: meta, type, importance, ts: now, provenance });
 
         // Cold tier (always)
         this._db.prepare(`
-            INSERT OR REPLACE INTO memories (id, type, content, metadata, created_at, accessed_at, importance)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(id, type, content, JSON.stringify(meta), now, now, importance);
+            INSERT OR REPLACE INTO memories (id, type, content, metadata, created_at, accessed_at, importance, provenance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(id, type, content, JSON.stringify(meta), now, now, importance, provenance);
 
         // FTS5 index (delete old entry first to handle OR REPLACE)
         this._db.prepare('DELETE FROM memories_fts WHERE id = ?').run(id);
@@ -172,7 +173,7 @@ export class MaxMemory {
 
         if (bm25Results.length === 0 && vectorScores.size === 0) return [];
 
-        // Collect all candidate IDs
+        // collects all candidate IDs
         const candidateIds = new Set([
             ...bm25Results.map(r => r.id),
             ...[...vectorScores.keys()].slice(0, topK * 2)
@@ -190,19 +191,46 @@ export class MaxMemory {
             for (const r of rows) hydrated.set(r.id, { ...r, metadata: this._parseMeta(r.metadata), bm25: 0 });
         }
 
-        // Normalize BM25 scores 0→1 (bm25Results already has .bm25 in range 0-1)
-        // Fuse: 55% vector + 45% BM25 (vector wins when embedder is ready)
-        const embeddingWeight = this.embedder._ready ? 0.55 : 0.0;
+        // ─── Phase 3: Temporal Looming & Context Pruning ───
+        const ws = this.getWorkspaceContext();
+        const now = Date.now();
+        const embeddingWeight = this.embedder._ready ? 0.60 : 0.0;
         const bm25Weight      = 1 - embeddingWeight;
 
         const fused = [];
         for (const [id, row] of hydrated) {
             const vecScore  = vectorScores.get(id) || 0;
             const bm25Score = row.bm25 || 0;
-            const combined  = embeddingWeight * vecScore + bm25Weight * bm25Score;
-            // Boost by importance slightly
-            const final = combined * (0.85 + 0.15 * (row.importance || 0.5));
-            fused.push({ ...row, score: final, vecScore, bm25Score });
+            let baseScore = (embeddingWeight * vecScore) + (bm25Weight * bm25Score);
+
+            // 1. Temporal Decay (Recency Boost)
+            // Memories within last hour get 20% boost, decay to 0 over 30 days
+            const ageMs = now - row.accessed_at;
+            const dayMs = 24 * 60 * 60 * 1000;
+            const recencyBoost = Math.max(0, 1 - (ageMs / (30 * dayMs))) * 0.2;
+
+            // 2. Context Lock (Workspace relevance)
+            let contextBoost = 0;
+            const contentLower = row.content.toLowerCase();
+            
+            // Files check
+            if (ws.recent_files) {
+                for (const f of ws.recent_files) {
+                    if (contentLower.includes(f.toLowerCase())) contextBoost += 0.15;
+                }
+            }
+            // Tech check
+            if (ws.technologies) {
+                for (const t of ws.technologies) {
+                    if (contentLower.includes(t.toLowerCase())) contextBoost += 0.1;
+                }
+            }
+
+            // 3. Importance Factor
+            const importanceBoost = (row.importance || 0.5) * 0.1;
+
+            const finalScore = baseScore + recencyBoost + contextBoost + importanceBoost;
+            fused.push({ ...row, score: finalScore, vecScore, bm25Score, boosts: { recencyBoost, contextBoost } });
         }
 
         fused.sort((a, b) => b.score - a.score);
@@ -309,7 +337,7 @@ export class MaxMemory {
     // CONVERSATIONS
     // ═══════════════════════════════════════════════════════════════════════
 
-    addConversation(role, content, persona = 'grinder') {
+    addConversation(role, content, persona = 'grinder', { provenance = 'HYPOTHESIZED' } = {}) {
         this._db.prepare(
             'INSERT INTO conversations (role, content, persona, created_at) VALUES (?, ?, ?, ?)'
         ).run(role, content, persona, Date.now());
@@ -318,7 +346,7 @@ export class MaxMemory {
         this.remember(
             `${role.toUpperCase()}: ${content}`,
             { role, persona, source: 'conversation' },
-            { type: 'conversation', importance: role === 'user' ? 0.6 : 0.4 }
+            { type: 'conversation', importance: role === 'user' ? 0.6 : 0.4, provenance }
         );
 
         // Extract workspace signals from user messages

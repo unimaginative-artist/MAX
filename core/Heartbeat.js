@@ -1,8 +1,8 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// Heartbeat.js — MAX's autonomous pulse
+﻿// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Heartbeat.js â€” MAX's autonomous pulse
 // Runs background cycles: curiosity tasks, self-monitoring, goal execution
-// Simplified from SOMA AutonomousHeartbeat — no SOMA framework deps
-// ═══════════════════════════════════════════════════════════════════════════
+// Simplified from SOMA AutonomousHeartbeat â€” no SOMA framework deps
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 import { EventEmitter } from 'events';
 
@@ -41,7 +41,7 @@ export class Heartbeat extends EventEmitter {
         this.config.enabled = true;
         this._lastSuccessAt = 0;
         this._schedule();
-        console.log(`[Heartbeat] 💓 Started (Tension-Scaling: ${this.config.minIntervalMs/1000}s–${this.config.maxIntervalMs/1000}s)`);
+        console.log(`[Heartbeat] ðŸ’“ Started (Tension-Scaling: ${this.config.minIntervalMs/1000}sâ€“${this.config.maxIntervalMs/1000}s)`);
         this.emit('started');
     }
 
@@ -84,7 +84,7 @@ export class Heartbeat extends EventEmitter {
         } catch (err) {
             this._failures++;
             this.stats.failures++;
-            console.error(`[Heartbeat] ❌ Cycle error (${this._failures}/${this.config.maxConsecutiveFailures}):`, err.message);
+            console.error(`[Heartbeat] âŒ Cycle error (${this._failures}/${this.config.maxConsecutiveFailures}):`, err.message);
 
             if (this._failures >= this.config.maxConsecutiveFailures) {
                 this.stop();
@@ -102,14 +102,15 @@ export class Heartbeat extends EventEmitter {
         }
 
         const drive = this.max?.drive;
+        drive?.onIdleTick();
         const driveStatus = drive?.getStatus?.();
 
-        // ── AgentLoop: run when tension is high OR goals are waiting ─────
+        // â”€â”€ AgentLoop: run when tension is high OR goals are waiting â”€â”€â”€â”€â”€
         const tensionHigh     = driveStatus && driveStatus.tension > 0.4;
         const hasPendingGoals = this.max?.goals?.getNext(this.max?.drive) != null;
 
         if ((tensionHigh || hasPendingGoals) && this.max?.agentLoop) {
-            console.log(`[Heartbeat] ⚡ ${hasPendingGoals ? 'Goals pending' : `Tension ${(driveStatus.tension * 100).toFixed(0)}%`} — running AgentLoop`);
+            console.log(`[Heartbeat] âš¡ ${hasPendingGoals ? 'Goals pending' : `Tension ${(driveStatus.tension * 100).toFixed(0)}%`} â€” running AgentLoop`);
             try {
                 const result = await this.max.agentLoop.runCycle();
                 if (result) {
@@ -122,11 +123,11 @@ export class Heartbeat extends EventEmitter {
             }
         }
 
-        // ── Otherwise run a curiosity task ────────────────────────────────
+        // â”€â”€ Otherwise run a curiosity task â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         const curiosityTask = this.max?.curiosity?.getNextTask?.();
 
         if (curiosityTask) {
-            console.log(`[Heartbeat] 🔍 Curiosity task: ${curiosityTask.label}`);
+            console.log(`[Heartbeat] ðŸ” Curiosity task: ${curiosityTask.label}`);
             this.stats.lastTask = curiosityTask.label;
             this.stats.tasksExecuted++;
 
@@ -150,11 +151,11 @@ export class Heartbeat extends EventEmitter {
                     );
                     this.emit('insight', {
                         source: 'curiosity',
-                        label:  `🔍 Explored: ${curiosityTask.label}`,
+                        label:  `ðŸ” Explored: ${curiosityTask.label}`,
                         result: typeof result === 'string' ? result : JSON.stringify(result)
                     });
 
-                    // Curiosity → Goal pipeline
+                    // Curiosity â†’ Goal pipeline
                     if (this.max?.goals && this.max.curiosity?.signalsGoal?.(result)) {
                         const goalTitle = `Investigate: ${curiosityTask.label}`;
                         const alreadyQueued = this.max.goals.listActive()
@@ -167,7 +168,7 @@ export class Heartbeat extends EventEmitter {
                                 priority:    0.55,
                                 source:      'curiosity'
                             });
-                            console.log(`[Heartbeat] 🎯 Curiosity → goal: "${goalTitle}"`);
+                            console.log(`[Heartbeat] ðŸŽ¯ Curiosity â†’ goal: "${goalTitle}"`);
                         }
                     }
                     return true;
@@ -176,7 +177,6 @@ export class Heartbeat extends EventEmitter {
                 }
             }
         } else {
-            drive?.onIdleTick();
             this.emit('idle');
 
             // Goal generation & background cycles
@@ -204,11 +204,11 @@ export class Heartbeat extends EventEmitter {
         return false;
     }
 
-    // ─── Proactive surfacing — volunteer important signals during idle ─────
+    // â”€â”€â”€ Proactive surfacing â€” volunteer important signals during idle â”€â”€â”€â”€â”€
     async _proactiveSurface() {
         const insights = [];
 
-        // 1. Stale goals — goals that haven't been touched in 7+ days
+        // 1. Stale goals â€” goals that haven't been touched in 7+ days
         const goals  = this.max.goals?.listActive() || [];
         const staleMs = 7 * 24 * 60 * 60 * 1000;
         const stale  = goals.filter(g => Date.now() - (g.updatedAt || g.createdAt) > staleMs);
@@ -230,22 +230,22 @@ export class Heartbeat extends EventEmitter {
         if (stats && stats.total >= 10) {
             const rate = stats.success / stats.total;
             if (rate < 0.4) {
-                insights.push(`Low action success rate: ${(rate * 100).toFixed(0)}% across ${stats.total} tracked actions — consider /reflect`);
+                insights.push(`Low action success rate: ${(rate * 100).toFixed(0)}% across ${stats.total} tracked actions â€” consider /reflect`);
             }
         }
 
         // 4. Memory size growing large
         const memStats = this.max.memory?.getStats?.();
         if (memStats && memStats.totalMemories > 500) {
-            insights.push(`Memory at ${memStats.totalMemories} entries — run /reflect to consolidate`);
+            insights.push(`Memory at ${memStats.totalMemories} entries â€” run /reflect to consolidate`);
         }
 
         if (insights.length === 0) return;
 
         this.emit('insight', {
             source: 'proactive',
-            label:  '📊 Things worth your attention',
-            result: '• ' + insights.join('\n• ')
+            label:  'ðŸ“Š Things worth your attention',
+            result: 'â€¢ ' + insights.join('\nâ€¢ ')
         });
     }
 
@@ -258,3 +258,4 @@ export class Heartbeat extends EventEmitter {
         };
     }
 }
+
