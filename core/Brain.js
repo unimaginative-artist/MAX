@@ -120,6 +120,11 @@ export class Brain {
         if (!this._ready) {
             console.error('[Brain] ❌ No LLM backend found. Start Ollama or set an API key in config/api-keys.env');
         }
+
+        // Warm up Ollama in the background — loads the model into VRAM before first real call
+        if (this._fast.ready && this._fast.backend === 'ollama') {
+            this._ollama(this._fast.ollamaModel, 'hi', '', 0, 1, 60_000).catch(() => {});
+        }
     }
 
     // ─── Core inference ───────────────────────────────────────────────────
@@ -185,7 +190,7 @@ export class Brain {
                 this._fastFailures++;
                 // Aggressive circuit breaker: 1 failure and we stop hitting local Ollama for the session.
                 // This prevents "PC heat" issues from constant connection retries/timeouts.
-                if (this._fastFailures >= 1) {
+                if (this._fastFailures >= 3) {
                     this._fastDisabled = true;
                     console.warn(`[Brain] ⚡ Fast tier disabled for this session — Ollama unresponsive (using DeepSeek for fast calls)`);
                 } else {

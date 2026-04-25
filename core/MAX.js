@@ -600,15 +600,15 @@ Actions:
         });
 
         // ── Boot status table ─────────────────────────────────────────────
-        const brainBackend = this.brain.currentBackend || 'unknown';
-        const agentBackend = this.agentBrain.currentBackend || 'unknown';
+        const bs           = this.brain.getStatus();
+        const brainDetail  = [bs.fast.ready ? `fast:${bs.fast.backend}` : null, bs.smart.ready ? `smart:${bs.smart.backend}` : null].filter(Boolean).join(' | ') || 'none';
         const economicsOk  = !this.economics?.isOverBudget();
         const budgetPct    = this.economics?.getBudgetStatus()?.pct ?? 0;
 
         // [label, ok, detail]  — SOMA is always informational, never a hard failure
         const checks = [
-            ['Brain (chat)',     brainBackend !== 'unknown', brainBackend],
-            ['Brain (agent)',    agentBackend !== 'unknown', agentBackend],
+            ['Brain (chat)',     bs.fast.ready || bs.smart.ready, brainDetail],
+            ['Brain (agent)',    bs.fast.ready || bs.smart.ready, brainDetail],
             ['SOMA',            null,  this.soma?.available ? 'online — QuadBrain active' : 'offline — using local brain'],
             ['Security Council', null, this.security?.enabled ? 'enabled' : 'disabled'],
             ['Daily budget',    economicsOk,  economicsOk ? `${budgetPct}% used` : 'OVER CAP — raise MAX_DAILY_BUDGET'],
