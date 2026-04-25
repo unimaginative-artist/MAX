@@ -2,16 +2,16 @@
 
 ## 🛠️ ACTIVE GOALS
 - [ ] AUTONOMOUS: Orchestration Kernel
-- [ ] [Hephaestus] Optimize `/src/network/peer_discovery.g...
+- [ ] Fix CI: Test suite failure
+- [ ] [Hephaestus] Optimize src/engine/rendering/vulkan/vk...
 - [ ] [Hephaestus] Optimize src/network/peer_manager.rs  
 ...
-- [ ] Fix JSON parsing error in tool call parameter generation
-- [ ] Fix broken TUI hello command due to undefined 'execute' method and correct tool usage from 'shell.execute' to 'shell.run'
-- [ ] Fix file reading logic to handle undefined or missing file paths correctly
-- [ ] Add a subtract function to forge_test_math.js
-- [ ] Fix file read failures by identifying correct file paths and adjusting implementation
-- [ ] Resolve missing file errors and establish correct project structure for implementation to continue
-- [ ] Add subtract function to forge_test_math.js
+- [ ] Create and integrate OrchestrationKernel.js to implement a persistent executive loop, wiring GoalEngine, CuriosityEngine, Diagnostics, AgentManager, and HydraController into an active, self-sustaining agent.
+- [ ] [Hephaestus] Optimize src/network/peer_discovery/leg...
+- [ ] [Hephaestus] Optimize src/network/neuron_connection_...
+- [ ] [Hephaestus] Optimize `/src/network/soma_connection_...
+- [ ] [Hephaestus] Optimize `/src/network/peer_discovery.g...
+- [ ] Ensure File Paths are Correctly Specified for File Reads
 
 ## ✅ COMPLETED
 

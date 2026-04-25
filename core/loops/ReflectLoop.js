@@ -99,7 +99,7 @@ export class ReflectLoop {
             `Return ONLY a JSON array:\n` +
             `[{"title": "...", "description": "why + what to change", "type": "improvement"}]\n` +
             `If no clear improvements are needed, return [].`,
-            { temperature: 0.3, maxTokens: 500, tier: 'smart' }
+            { temperature: 0.3, maxTokens: 500, tier: 'fast' }
         );
 
         try {

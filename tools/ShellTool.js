@@ -106,9 +106,19 @@ function printShellFooter(code, ms) {
 
 export function getRunningProcesses() {
     return [..._procs.entries()].map(([name, p]) => ({
-        name, pid: p.pid, command: p.command, started: p.started
+        name, pid: p.pid, command: p.command, started: p.started, cwd: p.cwd,
+        recentLog: p.log.slice(-20)
     }));
 }
+
+export function getProcessLog(name) {
+    return _procs.get(name)?.log || [];
+}
+
+// External broadcast hook — called when a background process emits a line
+// Set by server.js so SSE clients see live process output
+let _logBroadcast = null;
+export function setProcessLogBroadcast(fn) { _logBroadcast = fn; }
 
 export const ShellTool = {
     name: 'shell',
@@ -169,16 +179,23 @@ export const ShellTool = {
                 const lines = d.toString().split(/\r?\n/).filter(Boolean);
                 log.push(...lines);
                 if (log.length > 200) log.splice(0, log.length - 200);
-                for (const l of lines) process.stdout.write(`  \x1b[35m[${label}]\x1b[0m ${l}\n`);
+                for (const l of lines) {
+                    process.stdout.write(`  \x1b[35m[${label}]\x1b[0m ${l}\n`);
+                    _logBroadcast?.({ process: label, line: l, stream: 'stdout', ts: Date.now() });
+                }
             });
             proc.stderr.on('data', (d) => {
                 const lines = d.toString().split(/\r?\n/).filter(Boolean);
                 log.push(...lines);
                 if (log.length > 200) log.splice(0, log.length - 200);
-                for (const l of lines) process.stdout.write(`  \x1b[31m[${label}]\x1b[0m ${l}\n`);
+                for (const l of lines) {
+                    process.stdout.write(`  \x1b[31m[${label}]\x1b[0m ${l}\n`);
+                    _logBroadcast?.({ process: label, line: l, stream: 'stderr', ts: Date.now() });
+                }
             });
             proc.on('exit', (code) => {
                 process.stdout.write(`  \x1b[35m[${label}]\x1b[0m process exited (${code})\n`);
+                _logBroadcast?.({ process: label, line: `process exited (${code})`, stream: 'system', exitCode: code, ts: Date.now() });
                 _procs.delete(label);
                 _savePids();
             });

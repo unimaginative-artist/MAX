@@ -20,11 +20,12 @@ const REFLECT_EVERY_N  = 10;   // deep reflection every N conversation turns
 const MAX_RECENT_TURNS = 20;   // rolling window for pattern analysis
 
 export class ReflectionEngine {
-    constructor(brain, goalEngine, outcomeTracker, kb = null) {
+    constructor(brain, goalEngine, outcomeTracker, kb = null, max = null) {
         this.brain    = brain;
         this.goals    = goalEngine;
         this.outcomes = outcomeTracker;
         this.kb       = kb;
+        this.max      = max;  // for self-improvement proposals
 
         this._turnCount   = 0;
         this._recentTurns = [];  // rolling window
@@ -177,6 +178,15 @@ Return null for improvementGoal if no clear goal is identified.`;
                     source: 'reflection'
                 });
                 console.log(`[ReflectionEngine] ➕ Goal: "${reflection.improvementGoal.title}"`);
+            }
+
+            // Trigger self-improvement proposals for recurring high-frequency weaknesses
+            if (this.max?.selfImprovement) {
+                for (const weakness of (reflection.weaknesses || [])) {
+                    const pattern = this._selfModel.patterns.find(p => p.description.includes(weakness?.slice(0, 30)));
+                    const count = pattern?.count || 1;
+                    this.max.selfImprovement.onWeaknessIdentified(weakness, count).catch(() => {});
+                }
             }
 
             this._selfModel.lastDeepReflect  = new Date().toISOString();

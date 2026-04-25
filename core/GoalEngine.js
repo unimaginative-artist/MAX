@@ -15,7 +15,6 @@ export class GoalEngine {
         this.memory   = memory;   // injected after memory system boots
         this.vector   = config.vector; // VECTOR Systems Architect daemon
         
-        console.log(`[GoalEngine] Constructor config storageDir: ${config.storageDir}`);
         const storageDir = config.storageDir || path.join(process.cwd(), '.max');
         this.goalsPath   = path.join(storageDir, 'goals.json');
 

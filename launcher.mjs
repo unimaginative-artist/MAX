@@ -5,6 +5,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { readFileSync, existsSync, writeFileSync } from 'fs';
+import { execSync, spawn } from 'child_process';
 import { fileURLToPath }            from 'url';
 import { dirname, join }            from 'path';
 import { MAX }                      from './core/MAX.js';
@@ -13,6 +14,51 @@ import { TUI, COLORS }              from './core/ui/TUI.mjs';
 import { InputBridge }              from './core/ui/InputBridge.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ─── Ollama Auto-Pilot ──────────────────────────────────────────────────
+async function ensureOllama() {
+    console.log('[Launcher] 🛰️  Checking Ollama status...');
+    try {
+        // Simple probe to see if Ollama server is already running
+        const res = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(2000) });
+        if (res.ok) {
+            console.log('[Launcher] ✅ Ollama is already active.');
+            return true;
+        }
+    } catch (err) {
+        console.log('[Launcher] ⚠️  Ollama server not detected. Attempting to start...');
+        try {
+            // Check if 'ollama' command even exists
+            execSync('ollama --version', { stdio: 'ignore' });
+            
+            // Spawn Ollama server in background (fire and forget)
+            const ollama = spawn('ollama', ['serve'], {
+                detached: true,
+                stdio: 'ignore'
+            });
+            ollama.unref(); // Let it live independently of MAX
+
+            // Wait a few seconds for it to boot
+            for (let i = 0; i < 10; i++) {
+                process.stdout.write('.');
+                await new Promise(r => setTimeout(r, 1000));
+                try {
+                    const res = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(1000) });
+                    if (res.ok) {
+                        console.log('\n[Launcher] 🚀 Ollama started successfully.');
+                        return true;
+                    }
+                } catch {}
+            }
+            console.log('\n[Launcher] ⏳ Ollama is taking a while to start. Continuing anyway...');
+        } catch (execErr) {
+            console.warn('[Launcher] ❌ Ollama command not found. Please install it from https://ollama.com');
+            return false;
+        }
+    }
+    return false;
+}
+
 const tui = new TUI();
 let   _origLog = console.log.bind(console);
 
@@ -146,18 +192,48 @@ async function chatMode(max, opts = {}) {
                     console.log(`[MAX] Pinned Files: ${[...max.pinnedFiles].join(', ') || 'none'}`);
                     console.log(`[MAX] RepoGraph: ${max.graph.nodes.size} nodes | Impact logic active\n`);
                     break;
-                case 'approve':
-                    if (max.agentLoop?._pendingApproval) {
+                case 'approve': {
+                    const approveId = argStr?.trim();
+                    // Self-improvement proposal takes priority if ID provided
+                    if (approveId && max.selfImprovement?._proposals.has(approveId)) {
+                        const r = await max.selfImprovement.approve(approveId);
+                        console.log(r.success ? `[MAX] ✅ Self-improvement applied: ${r.file}` : `[MAX] ❌ Apply failed: ${r.error}`);
+                    } else if (max.agentLoop?._pendingApproval) {
                         max.agentLoop.approve();
                         console.log('[MAX] ✅ Change approved.');
-                    } else console.log('[MAX] No pending approval.');
+                    } else {
+                        console.log('[MAX] No pending approval. Use /proposals to see self-improvement proposals.');
+                    }
                     break;
-                case 'deny':
-                    if (max.agentLoop?._pendingApproval) {
+                }
+                case 'deny': {
+                    const denyId = argStr?.trim();
+                    if (denyId && max.selfImprovement?._proposals.has(denyId)) {
+                        await max.selfImprovement.deny(denyId);
+                        console.log('[MAX] ❌ Proposal denied and discarded.');
+                    } else if (max.agentLoop?._pendingApproval) {
                         max.agentLoop.deny();
                         console.log('[MAX] ❌ Change denied.');
-                    } else console.log('[MAX] No pending approval.');
+                    } else {
+                        console.log('[MAX] No pending denial target.');
+                    }
                     break;
+                }
+                case 'proposals': {
+                    const pending = max.selfImprovement?.list() || [];
+                    if (pending.length === 0) {
+                        console.log('[MAX] No self-improvement proposals pending.');
+                    } else {
+                        console.log(`\n[MAX] ${pending.length} pending self-improvement proposal(s):\n`);
+                        for (const p of pending) {
+                            console.log(`  [${p.id}] ${p.file}`);
+                            console.log(`         ${p.instruction}`);
+                            console.log(`         ${p.changes} change(s) | source: ${p.source}`);
+                            console.log(`         → /approve ${p.id}   or   /deny ${p.id}\n`);
+                        }
+                    }
+                    break;
+                }
                 case 'reason':
                     const rStop = tui.startSpinner('reasoning');
                     const res = await max.reason(argStr);
@@ -193,13 +269,13 @@ async function chatMode(max, opts = {}) {
                     if (!streamStarted) { 
                         stop(); 
                         streamStarted = true; 
-                        process.stdout.write(`\n${COLORS.BOLD}${COLORS.MINT}MAX:${COLORS.RESET} ${COLORS.BLUE}`); 
+                        process.stdout.write(`\n${COLORS.BOLD}${COLORS.PINK}MAX:${COLORS.RESET} `); 
                     }
                     process.stdout.write(token);
                 }
             });
 
-            if (streamStarted) process.stdout.write(`${COLORS.RESET}\n`);
+            if (streamStarted) process.stdout.write(`\n`);
             else { stop(); tui.printMAX(tui.cleanReply(res.response)); }
 
             console.log(`\n[${res.persona} | tension ${(res.drive.tension * 100).toFixed(0)}%]\n`);
@@ -223,7 +299,7 @@ async function chatMode(max, opts = {}) {
         printInsight(insight);
     });
 
-    max.heartbeat.on('message', (msg) => tui.printLive(`\n${COLORS.BOLD}${COLORS.MINT}MAX:${COLORS.RESET} ${msg.text}`, max.isThinking));
+    max.heartbeat.on('message', (msg) => tui.printLive(`\n${COLORS.BOLD}${COLORS.PINK}MAX:${COLORS.RESET} ${msg.text}`, max.isThinking));
     
     max.agentLoop?.on('goalStart', ({ goal }) => {
         tui.setActiveTask(goal.title);
@@ -232,8 +308,24 @@ async function chatMode(max, opts = {}) {
     });
 
     max.agentLoop?.on('toolStart', ({ tool, action, params }) => {
-        const details = params.query || params.command || params.filePath || '';
-        tui.printLive(`  ${COLORS.DIM}[${tool.toUpperCase()}: "${details.slice(0, 40)}..."]${COLORS.RESET}`, max.isThinking);
+        let details = params.filePath || params.path || params.command || params.query || '';
+        
+        // Clean up the display for common tools
+        let icon = '⚙️';
+        let label = tool.charAt(0).toUpperCase() + tool.slice(1);
+        
+        if (tool === 'file') {
+            icon = '📄';
+            label = action === 'read' ? 'ReadFile' : action === 'write' ? 'WriteFile' : action.charAt(0).toUpperCase() + action.slice(1);
+        } else if (tool === 'shell') {
+            icon = '🐚';
+            label = 'Shell';
+        } else if (tool === 'git') {
+            icon = '🔱';
+            label = 'Git';
+        }
+
+        tui.printLive(`  ${COLORS.MINT}✓${COLORS.RESET}  ${COLORS.BOLD}${label}${COLORS.RESET}  ${details.slice(0, 60)}${details.length > 60 ? '...' : ''}`, max.isThinking);
     });
 
     max.agentLoop?.on('approvalNeeded', ({ tool, action, params, goal }) => {
@@ -288,6 +380,9 @@ async function main() {
     loadEnv();
     const opts = parseArgs();
     console.log('[Launcher] 🚀 Booting MAX OMEGA...');
+
+    // Auto-start local engine
+    await ensureOllama();
 
     const max = new MAX({
         geminiKey:  process.env.GEMINI_API_KEY,

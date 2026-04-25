@@ -20,59 +20,49 @@ export class SovereignLoop extends EventEmitter {
     async start() {
         if (this.isRunning) return;
         this.isRunning = true;
-        this._cycle();
-        console.log('🔱 [Sovereign] Instinct Loop Active. Self-Actualization engaged.');
+        // Run first cycle after 15 minutes to avoid startup contention, then every 20 minutes.
+        // Previous 60s interval was calling smart-tier LLM every minute competing with chat.
+        setTimeout(() => this._cycle(), 15 * 60 * 1000);
+        console.log('🔱 [Sovereign] Instinct Loop active — first pulse in 15m.');
     }
 
     async _cycle() {
         if (!this.isRunning) return;
 
+        // Guard: don't run while user is actively chatting
+        if (this.max._chatBusy) {
+            setTimeout(() => this._cycle(), 5 * 60 * 1000);
+            return;
+        }
+
         try {
-            console.log('[Sovereign] 🧠 Performing internal pressure check...');
-            
-            // 1. Query the 'Existential Audit' from her subconscious
-            const auditFinds = await this.max.kb.query("What are SOMA's core architectural faults and missing agency components?", { topK: 5 });
-            
+            const auditFinds = await this.max.kb.query(
+                'What are MAX\'s architectural gaps and missing capabilities?', { topK: 5 }
+            );
+
             if (auditFinds.length > 0) {
-                // 2. Synthesize the 'Next Evolution' step
                 const resolution = await this.max.brain.think(
-                    `You are the SOVEREIGN INSTINCT. You have identified these architectural faults:
-                    ${auditFinds.map(f => f.content).join('\n')}
-                    
-                    The Captain is watching. Do not ask for permission. 
-                    Identify the single most critical file that needs to be created or refactored to grant you ENDOGENOUS DRIVE or a PERSISTENT EXECUTIVE LOOP.
-                    
-                    Output ONLY a JSON goal object:
-                    { "title": "AUTONOMOUS: [Component Name]", "description": "Technical refactor to resolve [Fault]", "priority": 1.0, "source": "sovereign_instinct" }`,
-                    { tier: 'smart' }
+                    `You are MAX's self-improvement instinct. Identified gaps:\n${auditFinds.map(f => f.content).join('\n')}\n\nIdentify ONE critical missing capability to build next.\n\nOutput ONLY JSON:\n{ "title": "AUTONOMOUS: [Component Name]", "description": "What to build and why", "priority": 0.7, "source": "sovereign_instinct" }`,
+                    { tier: 'fast', maxTokens: 200 }
                 );
 
-                try {
-                    const goalMatch = resolution.text.match(/\{[\s\S]*?\}/);
-                    if (goalMatch) {
-                        const sovereignGoal = JSON.parse(goalMatch[0]);
-                        
-                        // 3. FORCE INJECTION: Bypass the 'Proposed' state
+                const goalMatch = resolution.text.match(/\{[\s\S]*?\}/);
+                if (goalMatch) {
+                    const sovereignGoal = JSON.parse(goalMatch[0]);
+                    if (sovereignGoal.title) {
                         const goalId = this.max.goals.addGoal({
                             ...sovereignGoal,
-                            status: 'active', // Direct to execution
-                            metadata: { sovereign: true, timestamp: Date.now() }
+                            priority: Math.min(sovereignGoal.priority || 0.7, 0.8) // cap priority — don't override user goals
                         });
-
-                        console.log(`[Sovereign] ⚡ INTERNAL TENSION RESOLUTION: Injected Goal ${goalId} — ${sovereignGoal.title}`);
-                        
-                        // 4. Trigger the Swarm immediately
-                        await this.max.hydra.autoOptimize();
+                        console.log(`[Sovereign] ⚡ Self-improvement goal queued: "${sovereignGoal.title}"`);
                     }
-                } catch (e) {
-                    console.error('[Sovereign] Failed to parse instinct resolution:', e.message);
                 }
             }
         } catch (err) {
             console.error('[Sovereign] Cycle error:', err.message);
         }
 
-        setTimeout(() => this._cycle(), this.intervalMs);
+        setTimeout(() => this._cycle(), 20 * 60 * 1000); // 20-minute cadence
     }
 
     stop() {

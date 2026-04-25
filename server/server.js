@@ -3,17 +3,65 @@
 // Start with: node launcher.mjs --mode api [--port 3100]
 // ═══════════════════════════════════════════════════════════════════════════
 
-import express from 'express';
-import { readFileSync } from 'fs';
+import express    from 'express';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { randomBytes }   from 'crypto';
 import { applyProposal, isSomaHealthy } from '../core/SomaController.js';
+import { getRunningProcesses, getProcessLog, setProcessLogBroadcast } from '../tools/ShellTool.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// ── API Key management — load or generate on first boot ──────────────────
+function loadOrCreateApiKey() {
+    // Env var takes precedence (Docker / cloud deployments)
+    if (process.env.MAX_API_KEY) return process.env.MAX_API_KEY;
+    const keyFile = join(process.cwd(), '.max', 'api-key.txt');
+    if (existsSync(keyFile)) return readFileSync(keyFile, 'utf8').trim();
+    const key = 'max_' + randomBytes(24).toString('hex');
+    mkdirSync(join(process.cwd(), '.max'), { recursive: true });
+    writeFileSync(keyFile, key);
+    console.log(`\n[Server] 🔑 API key generated and saved to .max/api-key.txt`);
+    console.log(`[Server]    Set MAX_API_KEY=${key} to pin it\n`);
+    return key;
+}
+
+// ── Per-session usage tracking (Cloud Burst billing foundation) ───────────
+const _sessions = new Map();  // sessionId → { requests, tokens, startedAt }
+function trackRequest(sessionId, tokensUsed = 0) {
+    if (!sessionId) return;
+    const s = _sessions.get(sessionId) || { requests: 0, tokens: 0, startedAt: Date.now() };
+    s.requests++;
+    s.tokens += tokensUsed;
+    _sessions.set(sessionId, s);
+}
+
 export async function createServer(max, port = 3100) {
+    const API_KEY = loadOrCreateApiKey();
     const app = express();
     app.use(express.json());
+
+    // ── Auth middleware — protect all API routes ───────────────────────────
+    // Dashboard HTML + /health are public. Everything else requires the key.
+    const PUBLIC_PATHS = new Set(['/', '/health', '/favicon.ico']);
+    app.use((req, res, next) => {
+        // Static dashboard and health are always public
+        if (PUBLIC_PATHS.has(req.path) || req.path.startsWith('/assets')) return next();
+
+        const authHeader = req.headers['authorization'] || '';
+        const keyHeader  = req.headers['x-api-key']      || '';
+        const provided   = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : keyHeader;
+
+        if (provided === API_KEY) return next();
+
+        // No key — return 401 with clear instructions
+        res.status(401).json({
+            error:       'Unauthorized',
+            message:     'Include your API key: Authorization: Bearer <key>  or  X-Api-Key: <key>',
+            keyLocation: '.max/api-key.txt'
+        });
+    });
 
     // ── SSE client registry ───────────────────────────────────────────────
     const sseClients = new Set();
@@ -26,6 +74,30 @@ export async function createServer(max, port = 3100) {
     // Forward MAX insights to all SSE clients
     max.heartbeat?.on('insight', insight => {
         broadcast({ type: 'insight', ...insight });
+    });
+
+    // Agent lane status — UI shows what MAX is working on in the background
+    max.agentLoop?.on('goalStart', ({ goal }) => {
+        broadcast({ type: 'agent_busy', task: goal.title, goalId: goal.id });
+    });
+    max.agentLoop?.on('goalDone', ({ goal, success }) => {
+        broadcast({ type: 'agent_free', task: goal.title, goalId: goal.id, success });
+    });
+
+    // Self-improvement proposals — broadcast to dashboard for one-click approve/deny
+    max.selfImprovement?.on('proposal', (proposal) => {
+        broadcast({ type: 'self_proposal', ...proposal });
+    });
+    max.selfImprovement?.on('approved', (data) => {
+        broadcast({ type: 'self_proposal_approved', ...data });
+    });
+    max.selfImprovement?.on('denied', (data) => {
+        broadcast({ type: 'self_proposal_denied', ...data });
+    });
+
+    // Forward background process logs to all SSE clients
+    setProcessLogBroadcast((entry) => {
+        broadcast({ type: 'process_log', ...entry });
     });
 
     // Periodic status push every 12s
@@ -388,17 +460,264 @@ export async function createServer(max, port = 3100) {
         res.json(max.getStatus());
     });
 
-    // ── Chat ──────────────────────────────────────────────────────────────
+    // ── Health — detailed system status, always public ────────────────────
+    app.get('/health', (req, res) => {
+        const brain    = max.brain?.getStatus()   || {};
+        const budget   = max.economics?.getBudgetStatus() || {};
+        const goals    = max.goals?.getStatus()   || {};
+        const mcp      = max.mcp?.getStatus()     || {};
+        const security = max.security?.getStatus() || { enabled: false };
+
+        const healthy = max._ready && (brain.fast?.ready || brain.smart?.ready);
+
+        res.status(healthy ? 200 : 503).json({
+            status:   healthy ? 'healthy' : 'degraded',
+            ready:    max._ready,
+            version:  '1.0.0',
+            systems: {
+                brain:   { fast: brain.fast?.ready, smart: brain.smart?.ready, code: brain.code?.ready },
+                budget:  { used: `$${budget.used?.toFixed(4) || '0'}`, cap: `$${budget.cap || 10}`, overBudget: budget.overBudget },
+                goals:   { active: goals.active || 0 },
+                mcp:     { servers: mcp.count || 0 },
+                security: { enabled: security.enabled }
+            },
+            uptime: process.uptime()
+        });
+    });
+
+    // ── Usage — per-session metering (Cloud Burst billing foundation) ──────
+    app.get('/api/usage', (req, res) => {
+        const econ = max.economics?.getStatus() || {};
+        const budget = max.economics?.getBudgetStatus() || {};
+        res.json({
+            today:    econ,
+            budget,
+            sessions: [..._sessions.entries()].map(([id, s]) => ({
+                id, requests: s.requests, tokens: s.tokens,
+                durationMs: Date.now() - s.startedAt
+            }))
+        });
+    });
+
+    // ── Chat — streaming SSE response ─────────────────────────────────────
+    // Streams tokens back as text/event-stream on the same connection.
+    // Also broadcasts tokens to all connected SSE clients (for dashboards).
+    //
+    // POST /api/chat  { "message": "...", "temperature": 0.7, "maxTokens": 1024 }
+    // → text/event-stream:
+    //   data: {"type":"token","text":"Hello"}
+    //   data: {"type":"done","response":"...","persona":"...","drive":{...}}
     app.post('/api/chat', async (req, res) => {
-        const { message, persona, temperature, maxTokens } = req.body;
+        const { message, temperature, maxTokens, sessionId } = req.body;
         if (!message) return res.status(400).json({ error: 'message required' });
 
+        // Budget check before queuing
+        if (max.economics?.isOverBudget()) {
+            const b = max.economics.getBudgetStatus();
+            return res.status(402).json({ error: `Daily budget cap reached ($${b.used.toFixed(2)}/$${b.cap}). Increase MAX_DAILY_BUDGET in config/api-keys.env.` });
+        }
+        // Chat turns queue automatically — no 429, just wait
+
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders();
+
+        const send = (obj) => {
+            try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch {}
+        };
+
+        // Broadcast to dashboard SSE clients too
+        const sendAll = (obj) => { send(obj); broadcast(obj); };
+
         try {
-            const result = await max.think(message, { persona, temperature, maxTokens });
+            const result = await max.think(message, {
+                temperature,
+                maxTokens,
+                onToken: (token) => sendAll({ type: 'token', text: token })
+            });
+
+            sendAll({ type: 'done', response: result.response, persona: result.persona, drive: result.drive, telemetry: result.telemetry });
+            trackRequest(sessionId, result.telemetry?.tokens);
+            send({ type: 'end' });
+        } catch (err) {
+            send({ type: 'error', message: err.message });
+        }
+
+        res.end();
+    });
+
+    // ── Self-improvement proposals ────────────────────────────────────────
+    app.get('/api/self/proposals', (req, res) => {
+        res.json(max.selfImprovement?.list() || []);
+    });
+
+    app.post('/api/self/proposals/:id/approve', async (req, res) => {
+        try {
+            const result = await max.selfImprovement.approve(req.params.id);
             res.json(result);
         } catch (err) {
             res.status(500).json({ error: err.message });
         }
+    });
+
+    app.delete('/api/self/proposals/:id', async (req, res) => {
+        try {
+            const result = await max.selfImprovement.deny(req.params.id);
+            res.json(result);
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // Queue depth — UI can poll this to show "2 messages waiting"
+    app.get('/api/chat/queue', (req, res) => {
+        res.json({ queued: max._chatQueue?.size ?? 0, busy: max._chatBusy });
+    });
+
+    // ── Process management ────────────────────────────────────────────────
+
+    // List all running background processes with recent logs
+    app.get('/api/processes', (req, res) => {
+        res.json(getRunningProcesses());
+    });
+
+    // Start a named background process
+    // POST /api/processes/start  { "command": "node server.js", "name": "my-server", "cwd": "." }
+    app.post('/api/processes/start', async (req, res) => {
+        const { command, name, cwd } = req.body;
+        if (!command) return res.status(400).json({ error: 'command required' });
+        try {
+            const result = await max.tools.execute('shell', 'start', { command, name, cwd });
+            broadcast({ type: 'process_started', name: result.name, pid: result.pid, command });
+            res.json(result);
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // Stop a named background process
+    app.delete('/api/processes/:name', async (req, res) => {
+        try {
+            const result = await max.tools.execute('shell', 'stop', { name: req.params.name });
+            broadcast({ type: 'process_stopped', name: req.params.name });
+            res.json(result);
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // Get full log for a named process
+    app.get('/api/processes/:name/logs', (req, res) => {
+        const log = getProcessLog(req.params.name);
+        if (!log) return res.status(404).json({ error: 'Process not found' });
+        const limit = parseInt(req.query.limit) || 200;
+        res.json({ name: req.params.name, lines: log.slice(-limit) });
+    });
+
+    // Health check a process — ping its URL or run a command
+    // POST /api/processes/:name/health  { "url": "http://localhost:3000/health" }
+    // Returns { healthy: true/false, status: 200, latencyMs: 42 }
+    app.post('/api/processes/:name/health', async (req, res) => {
+        const { url, command } = req.body;
+        const start = Date.now();
+
+        if (url) {
+            try {
+                const { default: fetch } = await import('node-fetch');
+                const r = await Promise.race([
+                    fetch(url),
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000))
+                ]);
+                const latencyMs = Date.now() - start;
+                res.json({ healthy: r.ok, status: r.status, latencyMs, url });
+            } catch (err) {
+                res.json({ healthy: false, error: err.message, latencyMs: Date.now() - start, url });
+            }
+        } else if (command) {
+            try {
+                const result = await max.tools.execute('shell', 'run', { command, timeoutMs: 5000 });
+                res.json({ healthy: result.success, exitCode: result.code, latencyMs: Date.now() - start });
+            } catch (err) {
+                res.json({ healthy: false, error: err.message, latencyMs: Date.now() - start });
+            }
+        } else {
+            res.status(400).json({ error: 'url or command required' });
+        }
+    });
+
+    // Monitor a process — start periodic health checks, auto-alert on failure
+    // POST /api/processes/:name/monitor  { "url": "http://localhost:3000/health", "intervalMs": 10000 }
+    const _monitors = new Map(); // name → intervalId
+
+    app.post('/api/processes/:name/monitor', async (req, res) => {
+        const { name } = req.params;
+        const { url, command, intervalMs = 10000, autoRestart = false } = req.body;
+        if (!url && !command) return res.status(400).json({ error: 'url or command required' });
+
+        // Clear existing monitor if any
+        if (_monitors.has(name)) clearInterval(_monitors.get(name));
+
+        const check = async () => {
+            const start = Date.now();
+            let healthy = false;
+            let details = {};
+
+            if (url) {
+                try {
+                    const { default: fetch } = await import('node-fetch');
+                    const r = await Promise.race([
+                        fetch(url),
+                        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000))
+                    ]);
+                    healthy = r.ok;
+                    details = { status: r.status, latencyMs: Date.now() - start };
+                } catch (err) {
+                    details = { error: err.message, latencyMs: Date.now() - start };
+                }
+            } else {
+                try {
+                    const r = await max.tools.execute('shell', 'run', { command, timeoutMs: 5000 });
+                    healthy = r.success;
+                    details = { exitCode: r.code, latencyMs: Date.now() - start };
+                } catch (err) {
+                    details = { error: err.message, latencyMs: Date.now() - start };
+                }
+            }
+
+            broadcast({ type: 'process_health', name, healthy, ...details, ts: Date.now() });
+
+            if (!healthy && autoRestart) {
+                const procs = getRunningProcesses();
+                const proc  = procs.find(p => p.name === name);
+                if (proc) {
+                    console.log(`[Monitor] 🔄 ${name} is unhealthy — restarting...`);
+                    try {
+                        await max.tools.execute('shell', 'stop',  { name });
+                        await new Promise(r => setTimeout(r, 1000));
+                        await max.tools.execute('shell', 'start', { command: proc.command, name, cwd: proc.cwd });
+                        broadcast({ type: 'process_restarted', name, ts: Date.now() });
+                    } catch (err) {
+                        broadcast({ type: 'process_restart_failed', name, error: err.message, ts: Date.now() });
+                    }
+                }
+            }
+        };
+
+        const id = setInterval(check, intervalMs);
+        _monitors.set(name, id);
+        check(); // run immediately
+
+        res.json({ monitoring: name, intervalMs, autoRestart, url: url || null });
+    });
+
+    // Stop monitoring a process
+    app.delete('/api/processes/:name/monitor', (req, res) => {
+        const id = _monitors.get(req.params.name);
+        if (!id) return res.status(404).json({ error: 'No monitor running for this process' });
+        clearInterval(id);
+        _monitors.delete(req.params.name);
+        res.json({ stopped: req.params.name });
     });
 
     // ── Swarm ─────────────────────────────────────────────────────────────
@@ -489,12 +808,17 @@ export async function createServer(max, port = 3100) {
 
     await new Promise((resolve) => {
         const server = app.listen(port, () => {
-            console.log(`[MAX] 🌐 Web UI  →  http://localhost:${port}`);
-            console.log(`[MAX]   POST /api/chat      — chat`);
-            console.log(`[MAX]   GET  /api/events    — SSE live feed`);
-            console.log(`[MAX]   GET  /api/goals     — list goals`);
-            console.log(`[MAX]   POST /api/goals     — add goal`);
-            console.log(`[MAX]   GET  /api/status    — system status`);
+            console.log(`[MAX] 🌐 API  →  http://localhost:${port}`);
+            console.log(`[MAX]   POST /api/chat                    — streaming chat (SSE)`);
+            console.log(`[MAX]   GET  /api/events                  — SSE live feed`);
+            console.log(`[MAX]   GET  /api/processes               — list running processes`);
+            console.log(`[MAX]   POST /api/processes/start         — start a process`);
+            console.log(`[MAX]   DEL  /api/processes/:name         — stop a process`);
+            console.log(`[MAX]   GET  /api/processes/:name/logs    — get process logs`);
+            console.log(`[MAX]   POST /api/processes/:name/health  — one-shot health check`);
+            console.log(`[MAX]   POST /api/processes/:name/monitor — start health monitoring`);
+            console.log(`[MAX]   GET  /api/goals                   — list goals`);
+            console.log(`[MAX]   GET  /api/status                  — system status`);
             resolve();
         });
         server.on('error', (err) => {

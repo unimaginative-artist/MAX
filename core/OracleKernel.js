@@ -41,25 +41,23 @@ export class OracleKernel extends EventEmitter {
     }
 
     async start() {
+        // Continuous MCTS polling was consuming LLM quota every 15s for every active goal.
+        // Oracle now runs on-demand via simulateGoal() instead of a background loop.
+        console.log('🔮 [Oracle] On-demand mode active.');
+    }
+
+    async simulateGoal(goal) {
         if (this.isSimulating) return;
         this.isSimulating = true;
-        this._runPulse();
-        console.log('🔮 [Oracle] Predestination Loop Active. Horizon: 1,000 steps.');
+        try {
+            await this._simulateDeepHorizon(goal);
+        } finally {
+            this.isSimulating = false;
+        }
     }
 
     async _runPulse() {
-        if (!this.isSimulating) return;
-
-        try {
-            const activeGoals = this.max.goals.listActive();
-            for (const goal of activeGoals) {
-                await this._simulateDeepHorizon(goal);
-            }
-        } catch (err) {
-            console.error('🔮 [Oracle] Simulation Pulse error:', err.message);
-        }
-
-        setTimeout(() => this._runPulse(), 15000); // 15s cadence
+        // No-op — retained for compatibility
     }
 
     async _simulateDeepHorizon(goal) {

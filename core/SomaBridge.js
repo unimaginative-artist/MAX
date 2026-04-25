@@ -6,8 +6,8 @@
 
 export class SomaBridge {
     constructor(config = {}) {
-        // Only activate if SOMA_URL is explicitly set — never auto-connect
-        this.baseUrl     = config.url || process.env.SOMA_URL || '';
+        // Default to localhost:3001 — degrades silently if SOMA isn't running
+        this.baseUrl     = config.url || process.env.SOMA_URL || 'http://localhost:3001';
         this._ready      = false;
         this._available  = false;
         this._lastCheck  = 0;
@@ -25,10 +25,6 @@ export class SomaBridge {
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
     async initialize() {
-        if (!this.baseUrl) {
-            // Silent when SOMA_URL not configured — MAX runs fully standalone
-            return this;
-        }
         await this._probe();
         return this;
     }
@@ -49,13 +45,10 @@ export class SomaBridge {
         this._lastCheck = Date.now();
 
         if (this._available) {
-            // Log every time SOMA comes (back) online
-            console.log('[SomaBridge] ✅ SOMA connected — using QuadBrain');
+            console.log('[SomaBridge] ✅ SOMA online — QuadBrain active');
             this._offlineLogged = false;
-        } else if (!this._offlineLogged) {
-            // Log only once per offline period
-            console.log('[SomaBridge] ⚠️  SOMA offline — using local brain');
-            this._offlineLogged = true;
+        } else {
+            this._offlineLogged = true;  // suppress repeated checks from logging
         }
 
         return this._available;

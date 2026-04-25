@@ -1,26 +1,23 @@
-# 📜 THE GRIMOIRE (v2.1)
-## Current Session State: LEVEL 7.5/11 (SOVEREIGN FORGE)
+# 📜 THE GRIMOIRE (v2.2)
+## Current Session State: LEVEL 8.0/11 (STABILIZED CORE)
 
 ### 🔱 Physical Reality (Port Mappings)
 - **SOMA Backend**: `localhost:3001` (Core Server & Dashboard API).
 - **MAX Bridge**: `localhost:3100` (Agent Mind & Telemetry).
-- **Virtual Shell**: Persistent PTY session (Stateful terminal).
+- **Local Engine**: `localhost:11434` (Ollama Auto-Pilot Managed).
 
-### 💎 Sovereign Architecture
-1. **Architect/Editor Split**: DeepSeek Reasoner plans strategy; DeepSeek Chat executes surgical patches.
-2. **Approval Gate UI**: Physical block before destructive actions with high-fidelity Diff Preview.
-3. **Surgical Patching**: Anchor-based `file.patch` for precise, block-level edits (Aider-style).
-4. **Behavioral Self-Healing**: CI Watcher auto-detects regressions and reverts via npm test.
-5. **Temporal Looming**: Memory weighted by recency (20% boost) and workspace context lock.
-6. **Odyssey Gateway**: Jina Reader + Playwright for deep, non-blocked web research.
-7. **Local Alignment**: Fast Tier (Intuition/Intent) locked to local `gemma3:4b` ($0 token cost).
+### 💎 Sovereign Architecture (Updated)
+1. **Ollama Auto-Pilot**: `launcher.mjs` now spawns `ollama serve` if not detected on boot.
+2. **Circuit Breaker**: `Brain.js` fast-tier disables Ollama after 1 failure to prevent CPU spikes.
+3. **Heartbeat Throttling**: 15s-120s pulse intervals for lower local resource usage.
+4. **Pink-Contrast UI**: MAX labeled in `\x1b[38;5;213m` (Pink) for better visibility.
+5. **Physical Prototypes**: Whale Website deployed to `C:\Users\barry\Desktop\WhaleWebsite`.
 
 ### 🛠️ Active Technical Hurdles
-- [x] **Redundant Notifications**: Consolidated goalStart emissions in AgentLoop.
-- [x] **Tool Hallucination**: Fixed executeAgenticThink to strictly parse tool.action strings.
-- [x] **Ghost of Qwen**: Global removal of qwen3:1.5b references in code.
+- [x] **PC Heat Spikes**: Resolved via heartbeat throttling and Ollama connection circuit breaker.
+- [x] **Terminal UI Crashes**: Fixed `BOLD`/`DIM` undefined properties in `InputBridge.mjs`.
+- [x] **Jest Confict**: Removed duplicate `jest.config.js` for clean test runs.
 
-### 🔱 Operator Directive: SOVEREIGN FORGE
-- **Status**: |= ACTIVE.
-- **Rule**: All code modifications must pass through the Shadow Validation and Human Approval Gate.
-- **Role**: Sovereign Engineering Partner.
+### 🔱 Operator Directive: UI FORGE
+- **Status**: |= STANDBY (User developing Warp-style IDE frontend).
+- **Role**: Sovereign Architect / Backend Support.

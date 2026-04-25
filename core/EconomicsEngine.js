@@ -118,6 +118,19 @@ export class EconomicsEngine {
         return 'deepseek-chat'; // Balanced default
     }
 
+    // Hard budget cap — Brain checks this before any API call
+    isOverBudget() {
+        const cap = parseFloat(process.env.MAX_DAILY_BUDGET || '10.00');
+        return this.dailyUsage.totalCost >= cap;
+    }
+
+    getBudgetStatus() {
+        const cap    = parseFloat(process.env.MAX_DAILY_BUDGET || '10.00');
+        const used   = this.dailyUsage.totalCost || 0;
+        const remain = Math.max(0, cap - used);
+        return { cap, used, remaining: remain, overBudget: used >= cap, pct: Math.round((used / cap) * 100) };
+    }
+
     getStatus() {
         const cost = this.dailyUsage.totalCost || 0;
         const earn = this.dailyUsage.earnings || 0;

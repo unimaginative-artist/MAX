@@ -59,7 +59,7 @@ export class UniversalIngestion {
             
             Is this in the top 1% of agentic research? (/TRUE | \\FALSE)
             If /TRUE, provide a 2-sentence technical summary.`,
-            { tier: 'smart' }
+            { tier: 'fast', maxTokens: 200 }
         );
 
         if (analysis.text.includes('/TRUE')) {

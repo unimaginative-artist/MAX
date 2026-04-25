@@ -133,8 +133,6 @@ export class AgentLoop extends EventEmitter {
             return null;
         }
 
-        this.emit('goalStart', { goal });
-
         // ── 1.5 Route to specialized loop if applicable ───────────────────
         const { loop, confidence, rationale } = this._selector.classify(goal);
 
@@ -506,6 +504,11 @@ export class AgentLoop extends EventEmitter {
 
         goalSuccess ? drive?.onGoalComplete(goal.title) : null;
 
+        // Crystallize successful runs into reusable skills (fire-and-forget)
+        if (goalSuccess && stepResults.length > 0) {
+            this.max.skills?.encodeFromRun(goal, stepResults, this.max.agentBrain).catch(() => {});
+        }
+
         this.stats.goalsCompleted += goalSuccess ? 1 : 0;
 
         // â”€â”€ #4: Economics â€” reward for goal completion â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -541,6 +544,7 @@ export class AgentLoop extends EventEmitter {
             importance: goalSuccess ? 0.8 : 0.5
         });
 
+        this.emit('goalDone', { goal, success: goalSuccess });
         return { goal: goal.title, success: goalSuccess, summary: goalSummary };
     }
 
@@ -580,17 +584,15 @@ export class AgentLoop extends EventEmitter {
             const isCoding  = this._isCodingStep(step, goal);
 
             if (toolName === 'brain') {
-                // Always use smart tier (DeepSeek) for brain steps — fast tier is local
-                // Ollama which is too slow for complex reasoning and causes timeout loops.
                 const depNote = depContext ? `\n\nPRIOR STEP OUTPUTS:\n${depContext}` : '';
                 const resObj = await withTimeout(
-                    this.max.brain.think(
+                    this.max.agentBrain.think(
                         `Complete this step concisely:\n\nGOAL: ${goal.title}\nSTEP: ${action}${depNote}`,
                         {
                             systemPrompt: `You are MAX completing an autonomous task step. Be concrete and brief.`,
                             temperature:  isCoding ? 0.2 : 0.4,
                             maxTokens:    isCoding ? 2048 : 512,
-                            tier:         isCoding ? 'code' : 'smart'
+                            tier:         isCoding ? 'code' : 'fast'   // non-coding steps use local LLM
                         }
                     ),
                     timeoutMs,
@@ -722,7 +724,7 @@ export class AgentLoop extends EventEmitter {
                 } else {
                     // Unknown tool â€” fall back to brain
                     const resObj = await withTimeout(
-                        this.max.brain.think(
+                        this.max.agentBrain.think(
                             `Complete this step: ${action}`,
                             { temperature: 0.4, maxTokens: 512, tier: 'fast' }
                         ),
@@ -747,7 +749,7 @@ export class AgentLoop extends EventEmitter {
                     // Slow path: ask brain only if literal check fails
                     try {
                         const verifyResult = await withTimeout(
-                            this.max.brain.think(
+                            this.max.agentBrain.think(
                                 `Does this output satisfy the success criterion?\n\nCRITERION: ${step.success}\nOUTPUT: ${summary}\n\nReply with only YES or NO.`,
                                 { temperature: 0.0, maxTokens: 10, tier: 'fast' }
                             ),
@@ -778,7 +780,7 @@ export class AgentLoop extends EventEmitter {
             if (searchContext) {
                 try {
                     const retryObj = await withTimeout(
-                        this.max.brain.think(
+                        this.max.agentBrain.think(
                             `Complete this step. A previous attempt failed.\n\nGOAL: ${goal.title}\nSTEP: ${action}\nERROR: ${err.message}\n\nSEARCH RESULTS:\n${searchContext}\n\nUse the search results to find the correct approach.`,
                             { systemPrompt: 'You are MAX completing an autonomous task step. Be concrete and brief.', temperature: 0.3, maxTokens: 512, tier: 'fast' }
                         ),
@@ -857,7 +859,7 @@ export class AgentLoop extends EventEmitter {
 
             // Synthesize with brain
             const synthesis = await withTimeout(
-                this.max.brain.think(
+                this.max.agentBrain.think(
                     `I'm trying to: "${goal.title}"\nI've failed twice. Last error: ${lastError}\n\nSearch results:\n${raw}\n\nSummarize the key findings and the best approach in 3-5 bullet points.`,
                     { temperature: 0.3, maxTokens: 400, tier: 'fast' }
                 ),
@@ -950,6 +952,8 @@ export class AgentLoop extends EventEmitter {
     // If a critical issue is found and a corrected plan returned, swaps it in.
     async _validatePlan(goal, steps, toolNames = []) {
         if (!steps?.length || !this.max.brain?._ready) return steps;
+        // Single-step plans don't need validation — nothing to reorder or check for deps
+        if (steps.length <= 1) return steps;
 
         const planText = steps
             .map(s => `  ${s.step}. [${s.tool}] ${s.action} â†’ success: ${s.success}`)
@@ -961,7 +965,7 @@ export class AgentLoop extends EventEmitter {
 
         try {
             const result = await withTimeout(
-                this.max.brain.think(
+                this.max.agentBrain.think(
                     `Review this execution plan for critical issues before running it.
 
 GOAL: ${goal.title}
@@ -975,7 +979,7 @@ Reply ONLY with JSON: {"ok": true} if the plan is fine, or:
 {"ok": false, "issue": "brief description", "fix": [corrected step array]}
 
 Return {"ok": true} unless there is a clear critical flaw.`,
-                    { temperature: 0.1, maxTokens: 500, tier: 'smart' }
+                    { temperature: 0.1, maxTokens: 500, tier: 'fast' }
                 ),
                 15_000,
                 'plan validation'
@@ -1001,7 +1005,7 @@ Return {"ok": true} unless there is a clear critical flaw.`,
         if (!this.max.brain?._ready) return null;
         try {
             const result = await withTimeout(
-                this.max.brain.think(
+                this.max.agentBrain.think(
                     `A task failed after multiple attempts and needs a smarter investigation approach.
 
 FAILED TASK: ${failedGoal.title}
@@ -1051,7 +1055,7 @@ Return ONLY a JSON object:
 
         try {
             const result = await withTimeout(
-                this.max.brain.think(
+                this.max.agentBrain.think(
                     `An autonomous task failed. Diagnose WHY and design a smarter follow-up goal.
 
 FAILED TASK: ${goal.title}
@@ -1108,7 +1112,7 @@ Root cause guide:
 
         try {
             const correctionResult = await withTimeout(
-                this.max.brain.think(
+                this.max.agentBrain.think(
                     `A file:replace operation failed because oldText wasn't found. Find the correct text.\n\nFILE: ${fp}\nCONTENT (first 3000 chars):\n${freshRead.content.slice(0, 3000)}\n\nFAILED oldText:\n${toolParams.oldText}\n\nINTENDED newText:\n${toolParams.newText}\n\nGOAL: ${step.action}\n\nFind the exact text in the file that should be replaced to achieve this goal.\nRespond ONLY with JSON: {"oldText": "exact matching text from file", "newText": "replacement text"}`,
                     { temperature: 0.1, maxTokens: 1500, tier: 'code' }
                 ),

@@ -84,7 +84,7 @@ export class HydraController {
             console.log('[HYDRA-SCOUT] 🔭 Scanning SOMA architecture for optimization targets...');
             const scanResult = await this.max.brain.think(
                 "You are HYDRA-SCOUT. Identify one specific, isolated piece of technical debt or performance bottleneck in SOMA's architecture that can be refactored safely. Output ONLY the file path and a 1-sentence reason.",
-                { tier: 'smart', maxTokens: 200 }
+                { tier: 'fast', maxTokens: 200 }
             );
 
             const target = scanResult.text || "Unknown";

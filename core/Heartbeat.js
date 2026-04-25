@@ -12,8 +12,8 @@ export class Heartbeat extends EventEmitter {
         this.max = max;
 
         this.config = {
-            minIntervalMs:         5 * 1000,       // 5s (Max tension)
-            maxIntervalMs:         60 * 1000,      // 60s (Idle)
+            minIntervalMs:         15 * 1000,      // 15s (Sustainable fast)
+            maxIntervalMs:         120 * 1000,     // 120s (Idle)
             momentumWindowMs:      2 * 60 * 1000,  // 2m window to stay fast
             maxConsecutiveFailures: 5,
             enabled:               false,

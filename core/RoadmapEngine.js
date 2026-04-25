@@ -62,7 +62,7 @@ Return JSON ONLY:
 }`;
 
         try {
-            const result = await this.max.brain.think(prompt, { temperature: 0.2, tier: 'smart' });
+            const result = await this.max.brain.think(prompt, { temperature: 0.2, tier: 'fast' });
             const match  = result.text.match(/\{[\s\S]*\}/);
             if (match) {
                 this.roadmap = JSON.parse(match[0]);

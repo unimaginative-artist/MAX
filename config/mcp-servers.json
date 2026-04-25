@@ -1,0 +1,37 @@
+{
+  "servers": [
+    {
+      "name": "playwright",
+      "command": "npx",
+      "args": ["@playwright/mcp@latest", "--headless"],
+      "description": "Browser automation — navigate pages, click elements, fill forms, screenshot, extract text from live sites",
+      "enabled": false,
+      "install": "npm install -g @playwright/mcp && npx playwright install chromium"
+    },
+    {
+      "name": "filesystem",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/Users/barry/Desktop"],
+      "description": "Extended filesystem access — read, write, search files across the Desktop",
+      "enabled": false,
+      "install": "npx -y @modelcontextprotocol/server-filesystem"
+    },
+    {
+      "name": "github",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "description": "GitHub — search repos, read/create issues, PRs, files via the GitHub API",
+      "enabled": false,
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "" },
+      "install": "npx -y @modelcontextprotocol/server-github"
+    },
+    {
+      "name": "memory",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "description": "Persistent knowledge graph — store and retrieve entities, relations, and observations across sessions",
+      "enabled": false,
+      "install": "npx -y @modelcontextprotocol/server-memory"
+    }
+  ]
+}

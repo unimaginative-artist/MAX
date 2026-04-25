@@ -69,7 +69,7 @@ export class ExploreLoop {
                 systemPrompt: `You are MAX in Explore mode. Synthesize research into precise, actionable findings. No padding.`,
                 temperature:  0.3,
                 maxTokens:    800,
-                tier:         'smart'
+                tier:         'fast'
             }
         );
 

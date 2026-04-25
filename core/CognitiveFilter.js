@@ -70,24 +70,22 @@ export class CognitiveFilter {
 
     /**
      * Extract a potential tool call to verify an uncertain claim.
+     * Only triggers for specific, high-confidence claims — not casual mentions.
      */
     _identifyVerificationTask(text) {
         const t = text.toLowerCase();
-        
-        // Pattern match for common claims that need verification
-        if (t.includes('file') && (t.includes('exists') || t.includes('contains'))) {
-            const match = text.match(/file\s+['"]?([\w./\\]+)['"]?/i);
-            if (match) return { tool: 'file', action: 'list', params: { path: match[1] } };
-        }
-        
-        if (t.includes('process') && (t.includes('running') || t.includes('started'))) {
+
+        // Only verify concrete file existence claims with a specific path
+        const fileExistsClaim = /(?:file|path)\s+['"]?([\w./\\-]+\.\w+)['"]?\s+(?:exists|is present|contains)/i;
+        const fileMatch = text.match(fileExistsClaim);
+        if (fileMatch) return { tool: 'file', action: 'list', params: { path: fileMatch[1] } };
+
+        // Only verify process claims if we're explicitly asserting it's currently running
+        if (/(?:process|server|service)\s+is\s+(?:running|active|started)/i.test(text)) {
             return { tool: 'shell', action: 'run', params: { command: 'tasklist' } };
         }
 
-        if (t.includes('error') || t.includes('bug')) {
-            return { tool: 'shell', action: 'run', params: { command: 'npm test' } };
-        }
-
+        // Removed: "error"/"bug" trigger — caused npm test to run on every casual mention
         return null;
     }
 
