@@ -117,11 +117,28 @@ export async function createServer(max, port = 3100) {
                 if (msg.type === 'chat_request') {
                     const { message, tier, sessionId } = msg;
                     if (!message) return;
-                    
-                    // Run chat in background, pipe tokens back via WS
+
+                    const sendToken = (token) => {
+                        try { ws.send(JSON.stringify({ type: 'token', text: token, requestId: msg.requestId })); } catch {}
+                    };
+
+                    // ── Instant fast-tier ack (Ollama, <1s) ──────────────────────────
+                    // Fires directly on the brain, bypassing the chat queue.
+                    // Gives the user immediate visual feedback before DeepSeek responds.
+                    if (max.brain?._fast?.ready && tier !== 'fast') {
+                        const ACK_PROMPT = [
+                            'On it.', 'Got it.', 'Looking into that.', 'Let me check.',
+                            'On it, one sec.', 'Working on it.', 'Sure thing.'
+                        ];
+                        const pick = ACK_PROMPT[Math.floor(Math.random() * ACK_PROMPT.length)];
+                        // Send ack immediately as pre-seeded tokens, no LLM call needed
+                        sendToken(pick + '\n\n');
+                    }
+
+                    // ── Full smart-tier response ──────────────────────────────────────
                     max.think(message, {
                         tier,
-                        onToken: (token) => ws.send(JSON.stringify({ type: 'token', text: token, requestId: msg.requestId }))
+                        onToken: sendToken
                     }).then(result => {
                         ws.send(JSON.stringify({ type: 'done', requestId: msg.requestId, ...result }));
                         trackRequest(sessionId, result.telemetry?.tokens);
