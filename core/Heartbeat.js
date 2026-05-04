@@ -12,9 +12,9 @@ export class Heartbeat extends EventEmitter {
         this.max = max;
 
         this.config = {
-            minIntervalMs:         15 * 1000,      // 15s (Sustainable fast)
-            maxIntervalMs:         120 * 1000,     // 120s (Idle)
-            momentumWindowMs:      2 * 60 * 1000,  // 2m window to stay fast
+            minIntervalMs:         10 * 1000,      // 10s (Faster response)
+            maxIntervalMs:         60 * 1000,      // 60s (was 120s)
+            momentumWindowMs:      3 * 60 * 1000,  // 3m window to stay fast
             maxConsecutiveFailures: 5,
             enabled:               false,
             ...config
@@ -144,6 +144,14 @@ export class Heartbeat extends EventEmitter {
                         tier: 'fast'
                     });
                     const result = resultObj.text;
+                    
+                    // Pipeline: Curiosity -> KnowledgeBase (full text)
+                    await this.max?.kb?.remember?.(
+                        `## Curiosity Exploration: ${curiosityTask.label}\n\n${result}`,
+                        { source: 'curiosity_engine', topic: curiosityTask.label }
+                    );
+
+                    // Also store a short summary in vector memory
                     await this.max?.memory?.remember?.(
                         `Curiosity: "${curiosityTask.label}": ${result.slice(0, 200)}`,
                         {},

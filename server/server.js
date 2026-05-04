@@ -5,13 +5,21 @@
 
 import express    from 'express';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, relative } from 'path';
 import { randomBytes }   from 'crypto';
+import { createServer as createHttpServer } from 'http';
+import { WebSocketServer } from 'ws';
 import { applyProposal, isSomaHealthy } from '../core/SomaController.js';
+import { VirtualShell } from '../core/VirtualShell.js';
 import { getRunningProcesses, getProcessLog, setProcessLogBroadcast } from '../tools/ShellTool.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ── Persistent Shell Instance for Maxwell IDE ─────────────────────────────
+const ideShell = new VirtualShell();
+ideShell.start();
 
 // ── API Key management — load or generate on first boot ──────────────────
 function loadOrCreateApiKey() {
@@ -40,18 +48,23 @@ function trackRequest(sessionId, tokensUsed = 0) {
 export async function createServer(max, port = 3100) {
     const API_KEY = loadOrCreateApiKey();
     const app = express();
+    const httpServer = createHttpServer(app);
+    const wss = new WebSocketServer({ server: httpServer });
+
     app.use(express.json());
+    app.use('/assets', express.static(join(__dirname, 'assets')));
 
     // ── Auth middleware — protect all API routes ───────────────────────────
     // Dashboard HTML + /health are public. Everything else requires the key.
-    const PUBLIC_PATHS = new Set(['/', '/health', '/favicon.ico']);
+    const PUBLIC_PATHS = new Set(['/', '/health', '/favicon.ico', '/maxwell', '/ide']);
     app.use((req, res, next) => {
         // Static dashboard and health are always public
         if (PUBLIC_PATHS.has(req.path) || req.path.startsWith('/assets')) return next();
 
         const authHeader = req.headers['authorization'] || '';
         const keyHeader  = req.headers['x-api-key']      || '';
-        const provided   = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : keyHeader;
+        const queryKey   = req.query.apiKey               || '';
+        const provided   = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : (keyHeader || queryKey);
 
         if (provided === API_KEY) return next();
 
@@ -63,17 +76,108 @@ export async function createServer(max, port = 3100) {
         });
     });
 
-    // ── SSE client registry ───────────────────────────────────────────────
+    // ── WebSocket & SSE client registry ──────────────────────────────────
     const sseClients = new Set();
+    const wsClients = new Set();
 
     function broadcast(obj) {
-        const payload = `data: ${JSON.stringify(obj)}\n\n`;
-        sseClients.forEach(res => { try { res.write(payload); } catch {} });
+        const payload = JSON.stringify(obj);
+        // SSE
+        const sseData = `data: ${payload}\n\n`;
+        sseClients.forEach(res => { try { res.write(sseData); } catch {} });
+        // WS
+        wsClients.forEach(ws => { try { ws.send(payload); } catch {} });
     }
 
-    // Forward MAX insights to all SSE clients
+    wss.on('connection', (ws, req) => {
+        // Simple auth check for WS (via query or header)
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const provided = url.searchParams.get('apiKey') || req.headers['x-api-key'];
+        
+        if (provided !== API_KEY) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized' }));
+            ws.close();
+            return;
+        }
+
+        wsClients.add(ws);
+        ws.send(JSON.stringify({ type: 'connected', version: '1.0.0-ws' }));
+        ws.send(JSON.stringify({ type: 'status', ...max.getStatus() }));
+
+        // Real-time shell stream
+        const onShellData = (data) => ws.send(JSON.stringify({ type: 'shell_output', text: data }));
+        const onShellErr  = (data) => ws.send(JSON.stringify({ type: 'shell_output', text: data, isError: true }));
+        ideShell.on('data', onShellData);
+        ideShell.on('data_err', onShellErr);
+
+        ws.on('message', async (data) => {
+            try {
+                const msg = JSON.parse(data);
+                
+                if (msg.type === 'chat_request') {
+                    const { message, tier, sessionId } = msg;
+                    if (!message) return;
+                    
+                    // Run chat in background, pipe tokens back via WS
+                    max.think(message, {
+                        tier,
+                        onToken: (token) => ws.send(JSON.stringify({ type: 'token', text: token, requestId: msg.requestId }))
+                    }).then(result => {
+                        ws.send(JSON.stringify({ type: 'done', requestId: msg.requestId, ...result }));
+                        trackRequest(sessionId, result.telemetry?.tokens);
+                    }).catch(err => {
+                        ws.send(JSON.stringify({ type: 'error', message: err.message, requestId: msg.requestId }));
+                    });
+                }
+
+                if (msg.type === 'shell_input') {
+                    // Direct pipe to persistent shell
+                    if (ideShell.proc) {
+                        // Ensure command has a newline
+                        const cmd = msg.command.endsWith('\n') ? msg.command : msg.command + '\n';
+                        ideShell.proc.stdin.write(cmd);
+                    }
+                }
+
+                if (msg.type === 'cancel_request') {
+                    console.log('[Server] 🛑 Cancel requested via WebSocket');
+                    max.abortChat();
+                    ws.send(JSON.stringify({ type: 'cancelled', message: 'Task aborted by user' }));
+                }
+
+                if (msg.type === 'buffer_update') {
+                    // Maxwell IDE sending unsaved content for "Ghost Context"
+                    // We store this in a temporary map so Brain can read it if needed
+                    if (!max._ghostBuffers) max._ghostBuffers = new Map();
+                    max._ghostBuffers.set(msg.filePath, msg.content);
+                }
+
+                if (msg.type === 'ping') ws.send(JSON.stringify({ type: 'pong' }));
+
+            } catch (err) {
+                console.error('[WS] Error processing message:', err.message);
+            }
+        });
+
+        ws.on('close', () => {
+            wsClients.delete(ws);
+            ideShell.removeListener('data', onShellData);
+            ideShell.removeListener('data_err', onShellErr);
+        });
+    });
+
+    // Forward MAX insights to all SSE/WS clients
     max.heartbeat?.on('insight', insight => {
         broadcast({ type: 'insight', ...insight });
+    });
+    max.agentLoop?.on('insight', insight => {
+        broadcast({ type: 'insight', ...insight });
+    });
+    // ... (rest of listeners stay the same)
+
+    // max.say() → chat message in Maxwell IDE
+    max.heartbeat?.on('message', msg => {
+        broadcast({ type: 'agent_say', text: msg.text, details: msg.details, ts: msg.timestamp });
     });
 
     // Agent lane status — UI shows what MAX is working on in the background
@@ -82,6 +186,13 @@ export async function createServer(max, port = 3100) {
     });
     max.agentLoop?.on('goalDone', ({ goal, success }) => {
         broadcast({ type: 'agent_free', task: goal.title, goalId: goal.id, success });
+    });
+    // Step-level progress events for the task tracker
+    max.agentLoop?.on('stepStart', data => {
+        broadcast({ type: 'agent_step_start', ...data });
+    });
+    max.agentLoop?.on('stepDone', data => {
+        broadcast({ type: 'agent_step_done', ...data });
     });
 
     // Self-improvement proposals — broadcast to dashboard for one-click approve/deny
@@ -131,6 +242,97 @@ export async function createServer(max, port = 3100) {
             res.send(readFileSync(join(__dirname, 'ui.html'), 'utf8'));
         } catch {
             res.status(404).send('UI not found — run from MAX root');
+        }
+    });
+
+    // ── Maxwell IDE ───────────────────────────────────────────────────────
+    // Serves the Maxwell Warp-style IDE, injecting the API key + base URL
+    // so the frontend can authenticate without requiring manual key entry.
+    function serveMaxwell(req, res) {
+        try {
+            let html = readFileSync(join(__dirname, 'maxwell.html'), 'utf8');
+            const injection = `<script>
+window.__MAX_API_KEY = ${JSON.stringify(API_KEY)};
+window.__MAX_BASE_URL = 'http://localhost:${port}';
+try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } catch(e) {}
+</script>`;
+            html = html.replace('<script>\n// Save React/Babel\'s require', injection + '\n<script>\n// Save React/Babel\'s require');
+            res.setHeader('Content-Type', 'text/html');
+            res.send(html);
+        } catch {
+            res.status(404).send('Maxwell IDE not found — run from MAX root');
+        }
+    }
+    app.get('/maxwell', serveMaxwell);
+    app.get('/ide',     serveMaxwell);
+
+    // ── File tree ─────────────────────────────────────────────────────────
+    // Returns a structured tree for Maxwell's file explorer
+    app.get('/api/files/tree', async (req, res) => {
+        const rootDir = req.query.dir || '.';
+        const SKIP = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.cache', 'coverage']);
+        async function buildTree(dir, depth = 0) {
+            if (depth > 4) return [];
+            const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
+            const result = [];
+            for (const e of entries) {
+                if (SKIP.has(e.name) || e.name.startsWith('.')) continue;
+                const full = join(dir, e.name);
+                const rel  = relative(process.cwd(), full).replace(/\\/g, '/');
+                if (e.isDirectory()) {
+                    result.push({ name: e.name, type: 'directory', path: rel, children: await buildTree(full, depth + 1) });
+                } else {
+                    result.push({ name: e.name, type: 'file', path: rel });
+                }
+            }
+            return result.sort((a, b) => {
+                if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+                return a.name.localeCompare(b.name);
+            });
+        }
+        const files = await buildTree(rootDir);
+        res.json({ files });
+    });
+
+    // ── Raw file serve (images, binaries) ────────────────────────────────
+    app.get('/api/files/raw', async (req, res) => {
+        const filePath = req.query.path;
+        if (!filePath) return res.status(400).send('path required');
+        // Prevent path traversal
+        const abs = join(process.cwd(), filePath);
+        if (!abs.startsWith(process.cwd())) return res.status(403).send('forbidden');
+        try {
+            const data = await fsp.readFile(abs);
+            const ext = filePath.split('.').pop().toLowerCase();
+            const mime = { png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',
+              webp:'image/webp',ico:'image/x-icon',bmp:'image/bmp',tiff:'image/tiff',avif:'image/avif',
+              svg:'image/svg+xml' }[ext] || 'application/octet-stream';
+            res.setHeader('Content-Type', mime);
+            res.send(data);
+        } catch {
+            res.status(404).send('not found');
+        }
+    });
+
+    // ── Config — persist API keys to config/api-keys.env ─────────────────
+    app.post('/api/config', async (req, res) => {
+        const { deepseek, openai, anthropic } = req.body;
+        const envPath = join(process.cwd(), 'config', 'api-keys.env');
+        try {
+            let content = await fsp.readFile(envPath, 'utf8').catch(() => '');
+            const upsert = (src, key, val) => {
+                if (!val) return src;
+                const re = new RegExp(`^${key}=.*`, 'm');
+                return re.test(src) ? src.replace(re, `${key}=${val}`) : src + `\n${key}=${val}`;
+            };
+            content = upsert(content, 'DEEPSEEK_API_KEY', deepseek);
+            content = upsert(content, 'OPENAI_API_KEY', openai);
+            content = upsert(content, 'ANTHROPIC_API_KEY', anthropic);
+            await fsp.mkdir(join(process.cwd(), 'config'), { recursive: true });
+            await fsp.writeFile(envPath, content.trim() + '\n', 'utf8');
+            res.json({ ok: true });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
         }
     });
 
@@ -457,7 +659,7 @@ export async function createServer(max, port = 3100) {
     });
 
     app.get('/api/status', (req, res) => {
-        res.json(max.getStatus());
+        res.json({ ...max.getStatus(), cwd: process.cwd().replace(/\\/g, '/') });
     });
 
     // ── Health — detailed system status, always public ────────────────────
@@ -508,7 +710,7 @@ export async function createServer(max, port = 3100) {
     //   data: {"type":"token","text":"Hello"}
     //   data: {"type":"done","response":"...","persona":"...","drive":{...}}
     app.post('/api/chat', async (req, res) => {
-        const { message, temperature, maxTokens, sessionId } = req.body;
+        const { message, temperature, maxTokens, sessionId, tier } = req.body;
         if (!message) return res.status(400).json({ error: 'message required' });
 
         // Budget check before queuing
@@ -534,6 +736,7 @@ export async function createServer(max, port = 3100) {
             const result = await max.think(message, {
                 temperature,
                 maxTokens,
+                tier: tier || undefined,
                 onToken: (token) => sendAll({ type: 'token', text: token })
             });
 
@@ -735,7 +938,8 @@ export async function createServer(max, port = 3100) {
 
     // ── Debate ────────────────────────────────────────────────────────────
     app.post('/api/debate', async (req, res) => {
-        const { title, description, stakes } = req.body;
+        const { description, stakes } = req.body;
+        const title = req.body.title || req.body.topic;
         if (!title) return res.status(400).json({ error: 'title required' });
 
         try {
@@ -774,6 +978,67 @@ export async function createServer(max, port = 3100) {
         res.json(max.memory.getConversationHistory(parseInt(limit)));
     });
 
+    // ── Dependency graph ──────────────────────────────────────────────────
+    app.get('/api/graph', async (req, res) => {
+        try {
+            const root = process.cwd();
+            const jsFiles = [];
+
+            async function scan(dir, depth = 0) {
+                if (depth > 4) return;
+                const skip = new Set(['node_modules', '.git', '.max', 'dist', 'build', 'coverage']);
+                let entries;
+                try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
+                for (const e of entries) {
+                    if (skip.has(e.name)) continue;
+                    const full = join(dir, e.name);
+                    if (e.isDirectory()) { await scan(full, depth + 1); }
+                    else if (/\.(js|mjs|ts|tsx|jsx)$/.test(e.name)) jsFiles.push(full);
+                }
+            }
+            await scan(root);
+
+            const nodes = [];
+            const edgeSet = new Set();
+            const edges = [];
+            const { resolve, dirname: dn, basename } = await import('path');
+
+            for (const file of jsFiles) {
+                const rel = relative(root, file).replace(/\\/g, '/');
+                nodes.push({ id: rel, label: basename(file) });
+
+                let src;
+                try { src = await fsp.readFile(file, 'utf8'); } catch { continue; }
+
+                const importRe = /(?:import|require)\s*[\('"]*([^'"\)\n]+)['"]/g;
+                let m;
+                while ((m = importRe.exec(src)) !== null) {
+                    const dep = m[1].trim();
+                    if (!dep.startsWith('.')) continue;
+                    const resolved = resolve(dn(file), dep);
+                    const candidates = [resolved, resolved + '.js', resolved + '.mjs', resolved + '/index.js'];
+                    for (const c of candidates) {
+                        const depRel = relative(root, c).replace(/\\/g, '/');
+                        if (jsFiles.some(f => relative(root, f).replace(/\\/g, '/') === depRel)) {
+                            const key = `${rel}→${depRel}`;
+                            if (!edgeSet.has(key)) { edgeSet.add(key); edges.push({ source: rel, target: depRel }); }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            res.json({ nodes, edges });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // ── Auth check — returns 200 if key is valid ──────────────────────────
+    app.get('/api/me', (req, res) => {
+        res.json({ ok: true, keyHint: API_KEY.slice(0, 8) + '…' });
+    });
+
     // ── Tools ─────────────────────────────────────────────────────────────
     app.get('/api/tools', (req, res) => {
         res.json(max.tools.list());
@@ -807,9 +1072,10 @@ export async function createServer(max, port = 3100) {
     });
 
     await new Promise((resolve) => {
-        const server = app.listen(port, () => {
+        const server = httpServer.listen(port, () => {
             console.log(`[MAX] 🌐 API  →  http://localhost:${port}`);
             console.log(`[MAX]   POST /api/chat                    — streaming chat (SSE)`);
+            console.log(`[MAX]   WS   /api/events                  — bidirectional (WebSockets)`);
             console.log(`[MAX]   GET  /api/events                  — SSE live feed`);
             console.log(`[MAX]   GET  /api/processes               — list running processes`);
             console.log(`[MAX]   POST /api/processes/start         — start a process`);
@@ -819,6 +1085,7 @@ export async function createServer(max, port = 3100) {
             console.log(`[MAX]   POST /api/processes/:name/monitor — start health monitoring`);
             console.log(`[MAX]   GET  /api/goals                   — list goals`);
             console.log(`[MAX]   GET  /api/status                  — system status`);
+            console.log(`[MAX] 🎨 IDE  →  http://localhost:${port}/maxwell`);
             resolve();
         });
         server.on('error', (err) => {

@@ -48,7 +48,7 @@ export class Brain {
         this.smartTimeout = config.smartTimeout || 120_000;  // 2 min for chat/reasoning
         this.codeTimeout  = config.codeTimeout  || 900_000;  // 15 min for large code generation
         this.timeout      = this.codeTimeout;                // legacy alias used by _deepseek default
-        this.fastTimeout  = config.fastTimeout  || 30_000;
+        this.fastTimeout  = config.fastTimeout  || 90_000;
 
         // ── Fast tier config ─────────────────────────────────────────────
         // Local Ollama ONLY — heartbeats, yes/no checks, quick acks, verification
@@ -77,6 +77,7 @@ export class Brain {
         // Circuit breaker — after N fast-tier timeouts, stop hitting Ollama this session
         this._fastFailures = 0;
         this._fastDisabled = false;
+        this._warmupPromise = null; // resolves when Ollama model is loaded into VRAM
 
         // Convenience: _ready is true if at least one tier works
         this._ready = false;
@@ -121,9 +122,13 @@ export class Brain {
             console.error('[Brain] ❌ No LLM backend found. Start Ollama or set an API key in config/api-keys.env');
         }
 
-        // Warm up Ollama in the background — loads the model into VRAM before first real call
+        // Warm up Ollama — loads the model into VRAM. Store the promise so _runFast
+        // can await it on the first real call instead of racing a cold model.
         if (this._fast.ready && this._fast.backend === 'ollama') {
-            this._ollama(this._fast.ollamaModel, 'hi', '', 0, 1, 60_000).catch(() => {});
+            this._warmupPromise = this._ollama(this._fast.ollamaModel, 'hi', '', 0, 1, 120_000)
+                .then(() => { console.log(`[Brain] ⚡ Ollama warm-up complete — model in VRAM`); })
+                .catch(() => {})
+                .finally(() => { this._warmupPromise = null; });
         }
     }
 
@@ -131,7 +136,7 @@ export class Brain {
     // tier: 'fast' | 'smart' | 'code' — code goes straight to DeepSeek, bypassing local Ollama
     // onToken: optional (token: string) => void callback for streaming output
     // messages: optional pre-built messages array for multi-turn conversation history
-    async think(prompt, { systemPrompt = '', temperature = 0.7, maxTokens = 2048, tier = 'smart', onToken = null, messages = null } = {}) {
+    async think(prompt, { systemPrompt = '', temperature = 0.7, maxTokens = 2048, tier = 'smart', onToken = null, messages = null, signal = null } = {}) {
         if (!this._ready) throw new Error('Brain not initialized — call initialize() first');
 
         // Hard token budget guard — prevents context overflow errors.
@@ -170,11 +175,11 @@ export class Brain {
 
         let result;
         if (tier === 'fast') {
-            result = await this._runFast(prompt, systemPrompt, temperature, maxTokens, onToken, messages);
+            result = await this._runFast(prompt, systemPrompt, temperature, maxTokens, onToken, messages, signal);
         } else if (tier === 'code') {
-            result = await this._runCode(prompt, systemPrompt, temperature, maxTokens, onToken, messages);
+            result = await this._runCode(prompt, systemPrompt, temperature, maxTokens, onToken, messages, signal);
         } else {
-            result = await this._runSmart(prompt, systemPrompt, temperature, maxTokens, onToken, messages);
+            result = await this._runSmart(prompt, systemPrompt, temperature, maxTokens, onToken, messages, signal);
         }
 
         // Return object with text and performance metadata
@@ -182,10 +187,12 @@ export class Brain {
     }
 
     // ─── Fast tier execution — Ollama only, falls back to DeepSeek ───────
-    async _runFast(prompt, systemPrompt, temperature, maxTokens, onToken = null, messages = null) {
+    async _runFast(prompt, systemPrompt, temperature, maxTokens, onToken = null, messages = null, signal = null) {
         if (this._fast.ready && this._fast.backend === 'ollama' && !this._fastDisabled) {
+            // If warmup is still in progress, wait for it so we don't race a cold model
+            if (this._warmupPromise) await this._warmupPromise;
             try {
-                return await this._ollama(this._fast.ollamaModel, prompt, systemPrompt, temperature, maxTokens, this.fastTimeout, onToken, messages || null);
+                return await this._ollama(this._fast.ollamaModel, prompt, systemPrompt, temperature, maxTokens, this.fastTimeout, onToken, messages || null, signal);
             } catch (err) {
                 this._fastFailures++;
                 // Aggressive circuit breaker: 1 failure and we stop hitting local Ollama for the session.
@@ -199,27 +206,27 @@ export class Brain {
             }
         }
         // Ollama down/disabled — fall back to DeepSeek with a cost-capped token limit
-        return this._runSmart(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages);
+        return this._runSmart(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages, signal);
     }
 
     // ─── Code tier — deepseek-reasoner (deep thinking for code) ──────────
-    async _runCode(prompt, systemPrompt, temperature, maxTokens, onToken = null, messages = null) {
+    async _runCode(prompt, systemPrompt, temperature, maxTokens, onToken = null, messages = null, signal = null) {
         if (this._validKey(this._smart.deepseekKey)) {
-            return this._deepseek(prompt, systemPrompt, temperature, maxTokens, this._smart.deepseekCodeModel, onToken, messages, this.codeTimeout);
+            return this._deepseek(prompt, systemPrompt, temperature, maxTokens, this._smart.deepseekCodeModel, onToken, messages, this.codeTimeout, signal);
         }
         throw new Error('Code tier unavailable — add DEEPSEEK_API_KEY to config/api-keys.env');
     }
 
     // ─── Smart tier execution — DeepSeek only ────────────────────────────
-    async _runSmart(prompt, systemPrompt, temperature, maxTokens, onToken = null, messages = null) {
+    async _runSmart(prompt, systemPrompt, temperature, maxTokens, onToken = null, messages = null, signal = null) {
         if (this._validKey(this._smart.deepseekKey)) {
-            return this._deepseek(prompt, systemPrompt, temperature, maxTokens, null, onToken, messages, this.smartTimeout);
+            return this._deepseek(prompt, systemPrompt, temperature, maxTokens, null, onToken, messages, this.smartTimeout, signal);
         }
         throw new Error('Smart tier unavailable — add DEEPSEEK_API_KEY to config/api-keys.env');
     }
 
     // ─── Backend implementations ──────────────────────────────────────────
-    async _deepseek(prompt, systemPrompt, temperature, maxTokens, modelOverride = null, onToken = null, messages = null, timeoutMs = null) {
+    async _deepseek(prompt, systemPrompt, temperature, maxTokens, modelOverride = null, onToken = null, messages = null, timeoutMs = null, signal = null) {
         const start = Date.now();
         // Use pre-built messages array (multi-turn history) if provided, else build single-turn
         if (!messages) {
@@ -230,6 +237,11 @@ export class Brain {
 
         const model = modelOverride || this._smart.deepseekModel;
         const useStream = !!onToken;
+
+        // Combine timeout with user signal if provided
+        const fetchSignal = (signal && typeof AbortSignal.any === 'function')
+            ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs || this.timeout)])
+            : (signal || AbortSignal.timeout(timeoutMs || this.timeout));
 
         const res = await fetch(`${this._smart.deepseekUrl}/chat/completions`, {
             method:  'POST',
@@ -244,7 +256,7 @@ export class Brain {
                 max_tokens: maxTokens,
                 stream: useStream
             }),
-            signal: AbortSignal.timeout(timeoutMs || this.timeout)
+            signal: fetchSignal
         });
 
         if (!res.ok) {
@@ -261,6 +273,7 @@ export class Brain {
 
             try {
                 for await (const chunk of res.body) {
+                    if (signal?.aborted) throw new Error('AbortError');
                     partial += decoder.decode(chunk, { stream: true });
                     const lines = partial.split('\n');
                     // Keep the last (potentially incomplete) line as carry-over
@@ -282,7 +295,7 @@ export class Brain {
                     }
                 }
             } catch (err) {
-                if (err.name === 'AbortError') throw err; // rethrow timeout
+                if (err.name === 'AbortError' || err.message === 'AbortError') throw err; // rethrow timeout/cancel
                 console.warn(`[Brain] ⚠️ Stream interrupted: ${err.message}. Returning partial response.`);
             }
 
@@ -320,7 +333,7 @@ export class Brain {
         };
     }
 
-    async _ollama(model, prompt, systemPrompt, temperature, maxTokens, timeoutMs = null, onToken = null, prebuiltMessages = null) {
+    async _ollama(model, prompt, systemPrompt, temperature, maxTokens, timeoutMs = null, onToken = null, prebuiltMessages = null, signal = null) {
         const start = Date.now();
 
         let messages;
@@ -345,11 +358,15 @@ export class Brain {
             options: { temperature, num_predict: maxTokens }
         };
 
+        const fetchSignal = (signal && typeof AbortSignal.any === 'function')
+            ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs || this.timeout)])
+            : (signal || AbortSignal.timeout(timeoutMs || this.timeout));
+
         const res = await fetch(`${this.ollamaUrl}/api/chat`, {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify(body),
-            signal:  AbortSignal.timeout(timeoutMs || this.timeout)
+            signal:  fetchSignal
         });
         if (!res.ok) throw new Error(`Ollama ${res.status}`);
 
@@ -360,6 +377,7 @@ export class Brain {
             const decoder = new TextDecoder();
             let partial = '';
             for await (const chunk of res.body) {
+                if (signal?.aborted) throw new Error('AbortError');
                 partial += decoder.decode(chunk, { stream: true });
                 const lines = partial.split('\n');
                 partial = lines.pop();

@@ -13,13 +13,13 @@ export class DriveSystem {
         this.tasksWorked    = 0;
 
         this.config = {
-            tensionBuildRate:       0.04,  // +4% per idle tick
+            tensionBuildRate:       0.10,  // +10% per idle tick (was 0.04) — gets bored faster
             tensionDecayOnWork:     0.15,  // -15% on task step
             tensionDecayOnComplete: 0.50,  // -50% on goal complete
-            urgencyRatePerMinute:   1.5,
-            maxUrgencyBoost:        45,
-            baseActionThreshold:    0.30,
-            minActionThreshold:     0.12,
+            urgencyRatePerMinute:   2.5,   // (was 1.5)
+            maxUrgencyBoost:        60,    // (was 45)
+            baseActionThreshold:    0.20,  // (was 0.30) — easier to trigger
+            minActionThreshold:     0.05,  // (was 0.12)
             satisfactionDecayRate:  0.02,
             ...config
         };

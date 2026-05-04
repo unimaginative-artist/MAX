@@ -90,6 +90,30 @@ export class CognitiveFilter {
     }
 
     /**
+     * Log an uncertainty event for Kaizen improvement.
+     * Called when a claim is tagged as | UNCERTAIN.
+     */
+    logUncertainty(text, task) {
+        if (!this.max.outcomes) return;
+
+        const topic = task?.params?.path || task?.params?.command || 'conceptual';
+        
+        this.max.outcomes.record({
+            agent:   'CognitiveFilter',
+            action:  'uncertainty_event',
+            context: { text: text.slice(0, 100), topic },
+            result:  'Uncertainty identified | resolving via Grounding Loop',
+            success: true,
+            metadata: { type: task?.tool || 'thought', topic }
+        });
+
+        // Surface to ReflectionEngine if available
+        if (this.max.reflection) {
+            this.max.reflection._notePattern(`Recurring Uncertainty: ${topic}`, `MAX was unsure about this topic; triggering Grounding Loop.`);
+        }
+    }
+
+    /**
      * Tag a fact with its provenance.
      */
     getProvenance(state, source = 'brain') {

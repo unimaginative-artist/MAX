@@ -33,10 +33,11 @@ vShell.start();
 vShell.on('data', (data) => {
     const lines = data.split(/\r?\n/);
     for (const l of lines) {
-        // We filter out our internal delimiters so the user doesn't see them
-        if (l && !l.includes('__EXIT_CODE_') && !l.includes('__MAX_SHELL_DONE_')) {
-            printShellLine(l);
-        }
+        if (!l) continue;
+        if (l.includes('__EXIT_CODE_') || l.includes('__MAX_SHELL_DONE_')) continue;
+        // Filter cmd.exe prompt echoes like "C:\Users\...>"
+        if (/^[A-Za-z]:[\\\/].*>/.test(l.trim())) continue;
+        printShellLine(l);
     }
 });
 

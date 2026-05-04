@@ -185,16 +185,23 @@ export class GoalEngine {
             ? `\n\nSYSTEM ARCHITECTURE (follow this design):\n${JSON.stringify(architecture, null, 2)}`
             : '';
 
-        const prompt = `Break this goal into 3-6 concrete, executable steps.
+        const prompt = `Break this goal into concrete, executable steps (3-6 steps is typical; use as many as the task genuinely requires, but no more).
 
 GOAL: ${goal.title}
 TYPE: ${goal.type}
 ${goal.description ? `DETAILS: ${goal.description}\n` : ''}${toolLine}${archBlock}${skillBlock}${memoryContext}${outcomeContext}
 
-MANDATORY Verification (Phase 3 Evolution):
+QUALITY RULES — every step must be completable and produce a verifiable result:
+- Every step must produce a concrete, observable artifact: a file written, a command output, a written summary.
+- "Explore", "investigate", "research", "figure out" are NOT valid step actions — replace with file:read <specific file>, shell:run <specific command>, or web:search <specific query>.
+- Scope matters: if the goal says "look at the codebase", pick the 2-3 most relevant files to read, not everything.
+- DO NOT generate steps that only plan more steps or read more files without producing output.
+- The goal is COMPLETE when the final step produces its artifact. There is no "I'll continue next time".
+- A goal with vague success criteria ("looks good", "seems right") is a bad goal — success must be observable.
+
+MANDATORY Verification:
 - If type is 'fix' or 'task', the LAST STEP MUST be a verification.
-- Use 'lab:run' to run tests, or 'lab:generate' if no test exists for the modified file.
-- If it's a shell script or CLI, use 'shell:run' with a REAL command that already exists (e.g. "node -e \"require('./file')\"", "npm test", "git status").
+- Use 'shell:run' with a REAL command (e.g. "node -e \"require('./file')\"", "npm test", "git status").
 - NEVER invent benchmark scripts, test files, or commands that don't already exist in the project.
 - For non-code goals (config, credentials, connections), use 'brain' to summarize what was done instead of a shell command.
 - The goal is not finished until you prove it works with output evidence.
@@ -233,8 +240,20 @@ Return a JSON array of step objects:
 
 Return ONLY the JSON array.`;
 
+        // Phase 0.5: coordinator analysis -- understand before planning
+        let coordinatorBlock = '';
         try {
-            const result = await this.brain.think(prompt, { temperature: 0.15, maxTokens: 600, tier: 'smart' });
+            const analysis = await this._coordinatorAnalysis(goal, context);
+            if (analysis) {
+                coordinatorBlock = `\n\nCOORDINATOR ANALYSIS (use this to inform your plan):\n${analysis}`;
+                console.log(`[GoalEngine] Coordinator analysis complete for "${goal.title}"`);
+            }
+        } catch { /* non-fatal */ }
+
+        const fullPrompt = prompt + coordinatorBlock;
+
+        try {
+            const result = await this.brain.think(fullPrompt, { temperature: 0.15, maxTokens: 700, tier: 'smart' });
             const raw    = result.text;
             const match  = raw.match(/\[[\s\S]*\]/);
             if (match) {
@@ -246,6 +265,39 @@ Return ONLY the JSON array.`;
         } catch { /* fall through */ }
 
         return [{ step: 1, action: goal.description || goal.title, tool: 'brain', success: 'completed' }];
+    }
+
+    // --- Coordinator analysis: understand the goal before decomposing --------
+    // Inspired by Open-Multi-Agent two-phase coordinator pattern.
+    // Returns a short structured analysis that the planner uses to generate
+    // better, more specific steps.
+    async _coordinatorAnalysis(goal, context = {}) {
+        if (!this.brain._ready) return null;
+
+        const toolLine = context.availableTools?.length
+            ? context.availableTools.join(', ')
+            : 'file, shell, web, git, api, brain';
+
+        const analysisPrompt = `You are a coordinator analyzing a task before breaking it into steps.
+
+GOAL: ${goal.title}
+TYPE: ${goal.type}
+${goal.description ? `DETAILS: ${goal.description}\n` : ''}AVAILABLE TOOLS: ${toolLine}
+
+Answer these 4 questions concisely (1-2 sentences each):
+1. WHAT: What is this task actually asking for? What is the concrete deliverable?
+2. WHERE: What are the 2-3 most relevant specific files, directories, or systems involved? Be specific — name actual paths if you can infer them.
+3. SUCCESS: What does success look like? What specific output, file change, or state proves this is done?
+4. PITFALLS: What is the most likely way this fails? (e.g. missing dependency, wrong file path, Windows vs Unix command)
+
+Return as plain text, 4 labeled lines. No JSON. Be concise.`;
+
+        try {
+            const result = await this.brain.think(analysisPrompt, { temperature: 0.2, maxTokens: 200, tier: 'fast' });
+            return result.text.trim().slice(0, 600);
+        } catch {
+            return null;
+        }
     }
 
     // ─── Add a dependency between goals ──────────────────────────────────

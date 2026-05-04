@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Maxwell — Setup</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#09090e;--surface:#111118;--border:#1e1e30;
+  --purple:#7c3aed;--purple-l:#a78bfa;--purple-glow:rgba(124,58,237,.22);
+  --text:#e2e8f0;--dim:#94a3b8;--muted:#475569;
+  --green:#10b981;--red:#f87171;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);
+  font-family:-apple-system,'Segoe UI',system-ui,sans-serif;font-size:15px;
+  overflow:hidden;user-select:none;-webkit-user-select:none}
+
+/* ── drag bar ── */
+.titlebar{-webkit-app-region:drag;height:36px;position:fixed;top:0;left:0;right:0;
+  display:flex;align-items:center;padding:0 16px;z-index:99}
+.win-ctrl{-webkit-app-region:no-drag;display:flex;gap:8px}
+.wc{width:12px;height:12px;border-radius:50%;cursor:pointer;border:none;padding:0}
+.wc.close{background:#ff5f56}.wc.min{background:#ffbd2e}.wc.maxb{background:#27c93f}
+
+/* ── layout ── */
+.wrap{height:100%;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;padding:56px 40px 40px;position:relative}
+
+/* ── logo ── */
+.logo{font-size:11px;font-weight:700;letter-spacing:.3em;text-transform:uppercase;
+  color:var(--purple-l);margin-bottom:44px;opacity:.75}
+
+/* ── MAX avatar ── */
+.avatar{width:110px;height:110px;border-radius:50%;object-fit:cover;object-position:center top;
+  border:2px solid var(--border);
+  box-shadow:0 0 0 4px rgba(124,58,237,.18),0 0 32px rgba(255,140,0,.25);
+  margin-bottom:24px;display:block}
+
+/* ── step cards ── */
+.step{width:100%;max-width:580px;display:none;flex-direction:column;gap:24px;
+  animation:up .3s ease}
+.step.active{display:flex}
+@keyframes up{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+
+.question{font-size:22px;font-weight:700;line-height:1.4;color:var(--text);min-height:60px}
+.sub{font-size:13px;color:var(--muted);margin-top:-12px;line-height:1.6}
+
+/* ── inputs ── */
+input[type=text],input[type=password],textarea{
+  width:100%;background:var(--surface);border:1.5px solid var(--border);
+  border-radius:9px;color:var(--text);font-family:inherit;font-size:15px;
+  padding:13px 16px;outline:none;resize:none;transition:border-color .2s,box-shadow .2s;
+  -webkit-app-region:no-drag}
+input:focus,textarea:focus{border-color:var(--purple);box-shadow:0 0 0 3px var(--purple-glow)}
+textarea{min-height:88px}
+.mono{font-family:'JetBrains Mono','Fira Code',Consolas,monospace;font-size:14px;letter-spacing:.02em}
+
+/* ── chips ── */
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{padding:8px 18px;border:1.5px solid var(--border);border-radius:20px;font-size:13px;
+  cursor:pointer;transition:all .15s;background:transparent;color:var(--dim);
+  -webkit-app-region:no-drag}
+.chip:hover{border-color:var(--purple);color:var(--text)}
+.chip.on{border-color:var(--purple);background:var(--purple-glow);color:var(--purple-l);font-weight:600}
+
+/* ── style cards ── */
+.style-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sc{border:1.5px solid var(--border);border-radius:10px;padding:14px 16px;cursor:pointer;
+  transition:all .2s;background:var(--surface);-webkit-app-region:no-drag}
+.sc:hover{border-color:var(--purple);background:#16161f}
+.sc.on{border-color:var(--purple);box-shadow:0 0 0 1px var(--purple),0 0 14px var(--purple-glow)}
+.sc .t{font-size:14px;font-weight:600;color:var(--text)}
+.sc .s{font-size:12px;color:var(--muted);margin-top:3px}
+
+/* ── nav row ── */
+.nav{display:flex;align-items:center;justify-content:space-between}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:12px 28px;
+  background:var(--purple);color:#fff;border:none;border-radius:8px;font-size:14px;
+  font-weight:600;cursor:pointer;transition:background .2s,box-shadow .2s,transform .1s;
+  -webkit-app-region:no-drag}
+.btn:hover{background:#6d28d9;box-shadow:0 4px 18px var(--purple-glow)}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.back{background:none;border:none;color:var(--muted);font-size:13px;cursor:pointer;
+  padding:8px;-webkit-app-region:no-drag}
+.back:hover{color:var(--text)}
+.skip{background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;
+  text-decoration:underline;-webkit-app-region:no-drag}
+.skip:hover{color:var(--dim)}
+
+/* ── key row ── */
+.keyrow{position:relative}
+.keyrow input{padding-right:44px}
+.keye{position:absolute;right:12px;top:50%;transform:translateY(-50%);
+  background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;
+  -webkit-app-region:no-drag}
+.link{display:inline-flex;align-items:center;gap:3px;color:var(--purple-l);
+  font-size:13px;cursor:pointer;background:none;border:none;padding:0;
+  -webkit-app-region:no-drag}
+.link:hover{text-decoration:underline}
+
+/* ── progress ── */
+.dots{display:flex;gap:6px;justify-content:center;margin-top:28px}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--border);transition:all .3s}
+.dot.on{background:var(--purple-l);transform:scale(1.3)}
+.dot.done{background:var(--purple)}
+
+/* ── welcome ── */
+.wlc{font-size:17px;line-height:1.9;color:var(--dim)}
+.wlc strong{color:var(--text)}
+
+/* ── done ── */
+.done-icon{font-size:52px;text-align:center}
+.done-title{font-size:24px;font-weight:700;text-align:center}
+.done-sub{font-size:14px;color:var(--muted);text-align:center;line-height:1.7}
+.profile-summary{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:16px 20px;font-size:13px;color:var(--dim);line-height:1.8}
+.profile-summary strong{color:var(--text)}
+
+/* ── valid indicator on key ── */
+.key-ok{position:absolute;right:44px;top:50%;transform:translateY(-50%);
+  color:var(--green);font-size:14px;opacity:0;transition:opacity .3s}
+.key-ok.show{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="titlebar">
+  <div class="win-ctrl">
+    <button class="wc close" onclick="window.close()" title="Close"></button>
+    <button class="wc min"   title="Minimise"></button>
+    <button class="wc maxb"  title="Maximise"></button>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="logo" id="topLogo">Maxwell</div>
+
+  <!-- ─── Step 0: Welcome ─── -->
+  <div class="step active" id="s0" style="align-items:center;text-align:center">
+    <img class="avatar" src="assets/icon.png" alt="MAX"/>
+    <div class="wlc" style="text-align:center">
+      <strong>Hey. I'm MAX.</strong><br>
+      Autonomous engineering agent.<br>
+      I think, I plan, I build.<br><br>
+      First time we've met —<br>
+      let me get to know you.<br>
+      <span style="color:var(--muted)">Takes about a minute. I'll remember everything.</span>
+    </div>
+    <div class="nav" style="justify-content:center">
+      <button class="btn" onclick="go(1)" style="padding:13px 36px;font-size:15px">Get Started &rarr;</button>
+    </div>
+  </div>
+
+  <!-- ─── Step 1: Name ─── -->
+  <div class="step" id="s1">
+    <div class="question">What do I call you?</div>
+    <input type="text" id="iName" placeholder="Your name" maxlength="50" autocomplete="off"/>
+    <div class="nav">
+      <button class="back" onclick="go(0)">&larr; Back</button>
+      <button class="btn" onclick="go(2)">Next &rarr;</button>
+    </div>
+  </div>
+
+  <!-- ─── Step 2: Role ─── -->
+  <div class="step" id="s2">
+    <div class="question" id="q2">What do you do?</div>
+    <div class="chips">
+      <div class="chip" data-v="developer"  onclick="pickRole(this)">Developer</div>
+      <div class="chip" data-v="founder"    onclick="pickRole(this)">Founder</div>
+      <div class="chip" data-v="designer"   onclick="pickRole(this)">Designer</div>
+      <div class="chip" data-v="researcher" onclick="pickRole(this)">Researcher</div>
+      <div class="chip" data-v="student"    onclick="pickRole(this)">Student</div>
+      <div class="chip" data-v="architect"  onclick="pickRole(this)">Architect</div>
+    </div>
+    <input type="text" id="iRole" placeholder="Or describe it yourself…" maxlength="80" autocomplete="off"/>
+    <div class="nav">
+      <button class="back" onclick="go(1)">&larr; Back</button>
+      <button class="btn" onclick="go(3)">Next &rarr;</button>
+    </div>
+  </div>
+
+  <!-- ─── Step 3: Project ─── -->
+  <div class="step" id="s3">
+    <div class="question" id="q3">What are you building?</div>
+    <div class="sub">Describe the project and your stack — rough is fine.</div>
+    <textarea id="iProject" placeholder="e.g. A SaaS dashboard with React + Node, trying to ship v1 by June…" rows="4"></textarea>
+    <div class="nav">
+      <button class="back" onclick="go(2)">&larr; Back</button>
+      <button class="btn" onclick="go(4)">Next &rarr;</button>
+    </div>
+  </div>
+
+  <!-- ─── Step 4: Challenge ─── -->
+  <div class="step" id="s4">
+    <div class="question">What's your biggest current blocker?</div>
+    <div class="sub">Anything — technical, motivational, scope. I'll keep it in mind.</div>
+    <textarea id="iChallenge" placeholder="e.g. The auth layer is a mess, not sure whether to refactor or replace it…" rows="3"></textarea>
+    <div class="nav">
+      <button class="back" onclick="go(3)">&larr; Back</button>
+      <button class="btn" onclick="go(5)">Next &rarr;</button>
+    </div>
+  </div>
+
+  <!-- ─── Step 5: Goals ─── -->
+  <div class="step" id="s5">
+    <div class="question">What are you trying to ship or prove?</div>
+    <div class="sub">The bigger picture — what does success look like?</div>
+    <textarea id="iGoals" placeholder="e.g. Launch a working MVP, get 10 paying users, prove the market exists…" rows="3"></textarea>
+    <div class="sub" style="margin-top:4px">Current tasks (comma separated, optional)</div>
+    <input type="text" id="iTasks" placeholder="Fix login bug, write tests, update landing page…" autocomplete="off"/>
+    <div class="nav">
+      <button class="back" onclick="go(4)">&larr; Back</button>
+      <button class="btn" onclick="go(6)">Next &rarr;</button>
+    </div>
+  </div>
+
+  <!-- ─── Step 6: Style ─── -->
+  <div class="step" id="s6">
+    <div class="question">How should I talk to you?</div>
+    <div class="style-grid">
+      <div class="sc on" data-v="chill"   onclick="pickStyle(this)">
+        <div class="t">☕ Chill Collaborator</div>
+        <div class="s">Casual, like pair programming with a friend</div>
+      </div>
+      <div class="sc" data-v="direct"  onclick="pickStyle(this)">
+        <div class="t">→ Straight Shooter</div>
+        <div class="s">No fluff — answer first, explain if needed</div>
+      </div>
+      <div class="sc" data-v="hype"    onclick="pickStyle(this)">
+        <div class="t">⚡ Hype Partner</div>
+        <div class="s">Energy and enthusiasm for every win</div>
+      </div>
+      <div class="sc" data-v="mentor"  onclick="pickStyle(this)">
+        <div class="t">🎓 Mentor Mode</div>
+        <div class="s">Thoughtful — teaches the why, builds understanding</div>
+      </div>
+      <div class="sc" data-v="precise" onclick="pickStyle(this)">
+        <div class="t">🔬 Deep Precision</div>
+        <div class="s">Dense, technical, exhaustive — all signal</div>
+      </div>
+    </div>
+    <div class="nav">
+      <button class="back" onclick="go(5)">&larr; Back</button>
+      <button class="btn" onclick="go(7)">Next &rarr;</button>
+    </div>
+  </div>
+
+  <!-- ─── Step 7: API Key ─── -->
+  <div class="step" id="s7">
+    <div class="question">Last thing — I need a brain.</div>
+    <div class="sub">
+      DeepSeek powers MAX's thinking. It's cheap and fast.<br>
+      Get a free key (takes 30 seconds) →&nbsp;
+      <button class="link" onclick="ext('https://platform.deepseek.com/api_keys')">platform.deepseek.com ↗</button>
+    </div>
+    <div class="keyrow">
+      <input type="password" id="iKey" class="mono" placeholder="sk-…" autocomplete="off" oninput="checkKey()"/>
+      <span class="key-ok" id="keyOk">✓</span>
+      <button class="keye" id="keyToggle" onclick="toggleKey()">👁</button>
+    </div>
+    <div class="nav">
+      <button class="back" onclick="go(6)">&larr; Back</button>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
+        <button class="btn" id="btnSave" onclick="saveAndFinish()">Finish Setup &rarr;</button>
+        <button class="skip" onclick="skipKey()">Skip — I'll use Ollama locally</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Step 8: Done ─── -->
+  <div class="step" id="s8">
+    <div class="done-icon">✦</div>
+    <div class="done-title" id="doneTitle">All set.</div>
+    <div class="done-sub" id="doneSub">Maxwell is ready. Let's build something.</div>
+    <div class="profile-summary" id="profileSummary"></div>
+    <div class="nav" style="justify-content:center">
+      <button class="btn" id="btnLaunch" onclick="launch()" style="padding:14px 44px;font-size:15px">
+        Launch Maxwell &rarr;
+      </button>
+    </div>
+  </div>
+
+  <div class="dots" id="dots"></div>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+const STEPS = 9; // 0-8
+let cur = 0;
+const P = { name:'', role:'', project:'', challenge:'', goals:'', tasks:'', styleKey:'chill' };
+
+// ── Dots ──────────────────────────────────────────────────────────────────────
+const dotsEl = document.getElementById('dots');
+for (let i = 1; i <= 7; i++) {              // dots for steps 1-7
+  const d = document.createElement('div');
+  d.className = 'dot'; d.id = 'd'+i;
+  dotsEl.appendChild(d);
+}
+function syncDots() {
+  for (let i = 1; i <= 7; i++) {
+    const d = document.getElementById('d'+i);
+    if (!d) continue;
+    d.className = 'dot' + (i < cur ? ' done' : i === cur ? ' on' : '');
+  }
+}
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+function go(n) {
+  collect();
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+  document.getElementById('s'+n).classList.add('active');
+  cur = n;
+  syncDots();
+  // personalise questions after name is known
+  if (P.name) {
+    const q2 = document.getElementById('q2');
+    if (q2) q2.textContent = `Nice to meet you, ${P.name}. What do you do?`;
+    const q3 = document.getElementById('q3');
+    if (q3) q3.textContent = `What are you building, ${P.name}?`;
+  }
+  // autofocus first input
+  const inp = document.querySelector('#s'+n+' input, #s'+n+' textarea');
+  if (inp) setTimeout(() => inp.focus(), 320);
+}
+
+// ── Collect current step ──────────────────────────────────────────────────────
+function collect() {
+  switch (cur) {
+    case 1: {
+      const v = document.getElementById('iName').value.trim();
+      P.name = v ? v.replace(/^(i'm|im|call me|my name is|it's|its)\s+/i,'').trim()
+                    .replace(/[.,!?]+$/,'').split(' ')
+                    .map(w=>w[0].toUpperCase()+w.slice(1).toLowerCase()).join(' ')
+                 : 'User';
+      break;
+    }
+    case 2: {
+      const custom = document.getElementById('iRole').value.trim();
+      const chip   = document.querySelector('.chip.on');
+      P.role = custom || (chip ? chip.dataset.v : '');
+      break;
+    }
+    case 3: P.project   = document.getElementById('iProject').value.trim();   break;
+    case 4: P.challenge = document.getElementById('iChallenge').value.trim(); break;
+    case 5: {
+      P.goals = document.getElementById('iGoals').value.trim();
+      P.tasks = document.getElementById('iTasks').value.trim();
+      break;
+    }
+    case 6: {
+      const sc = document.querySelector('.sc.on');
+      P.styleKey = sc ? sc.dataset.v : 'chill';
+      break;
+    }
+  }
+}
+
+// ── Role chips ────────────────────────────────────────────────────────────────
+function pickRole(el) {
+  document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+  el.classList.add('on');
+  document.getElementById('iRole').value = '';
+}
+document.getElementById('iRole').addEventListener('input', () => {
+  document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+});
+
+// ── Style cards ───────────────────────────────────────────────────────────────
+function pickStyle(el) {
+  document.querySelectorAll('.sc').forEach(c=>c.classList.remove('on'));
+  el.classList.add('on');
+  P.styleKey = el.dataset.v;
+}
+
+// ── API key ───────────────────────────────────────────────────────────────────
+let keyVis = false;
+function toggleKey() {
+  keyVis = !keyVis;
+  document.getElementById('iKey').type = keyVis ? 'text' : 'password';
+}
+function checkKey() {
+  const v = document.getElementById('iKey').value.trim();
+  document.getElementById('keyOk').classList.toggle('show', v.length > 12);
+}
+function ext(url) {
+  if (window.maxwell) window.maxwell.openExternal(url);
+  else window.open(url,'_blank');
+}
+
+async function saveAndFinish() {
+  const btn = document.getElementById('btnSave');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  collect();
+  const key = document.getElementById('iKey').value.trim();
+  if (key && key.length > 8 && window.maxwell) {
+    await window.maxwell.saveApiKey({ key });
+  }
+  await finish();
+}
+async function skipKey() {
+  collect();
+  await finish();
+}
+
+// ── Save + show done screen ───────────────────────────────────────────────────
+async function finish() {
+  if (window.maxwell) await window.maxwell.saveProfile(P);
+
+  // Build profile summary
+  const lines = [];
+  if (P.name && P.name !== 'User') lines.push(`<strong>Name</strong> ${P.name}`);
+  if (P.role)      lines.push(`<strong>Role</strong> ${P.role}`);
+  if (P.project)   lines.push(`<strong>Building</strong> ${P.project.slice(0,80)}${P.project.length>80?'…':''}`);
+  if (P.styleKey)  lines.push(`<strong>Style</strong> ${styleLabel(P.styleKey)}`);
+  document.getElementById('profileSummary').innerHTML = lines.join('<br>');
+
+  if (P.name && P.name !== 'User') {
+    document.getElementById('doneTitle').textContent = `All set, ${P.name}.`;
+  }
+
+  go(8);
+}
+
+function styleLabel(k) {
+  return {chill:'Chill Collaborator',direct:'Straight Shooter',hype:'Hype Partner',
+          mentor:'Mentor Mode',precise:'Deep Precision'}[k] || k;
+}
+
+// ── Launch ────────────────────────────────────────────────────────────────────
+function launch() {
+  const b = document.getElementById('btnLaunch');
+  b.disabled = true; b.textContent = 'Starting…';
+  if (window.maxwell) window.maxwell.completeSetup();
+}
+
+// ── Enter key shortcut ────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || e.shiftKey) return;
+  const active = document.querySelector('.step.active');
+  if (!active || cur === 6 || cur === 0 || cur === 8) return;
+  if (e.target.tagName === 'TEXTAREA') return;
+  e.preventDefault();
+  const nextMap = {1:2,2:3,3:4,4:5,5:6,7:'save'};
+  if (nextMap[cur] === 'save') saveAndFinish();
+  else if (nextMap[cur]) go(nextMap[cur]);
+});
+
+// ── Toggle logo visibility (avatar replaces it on welcome) ───────────────────
+const _origGo = go;
+function go(n) {
+  _origGo(n);
+  document.getElementById('topLogo').style.opacity = n === 0 ? '0' : '1';
+  document.getElementById('topLogo').style.height  = n === 0 ? '0' : '';
+  document.getElementById('topLogo').style.marginBottom = n === 0 ? '0' : '';
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+go(0);
+</script>
+</body>
+</html>

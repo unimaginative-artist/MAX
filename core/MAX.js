@@ -167,6 +167,8 @@ export class MAX {
 
         // State flags
         this.isThinking       = false;
+        this._currentAbortController = null;
+        this._ghostBuffers = new Map(); // unsaved editor content streamed from Maxwell IDE
 
         // Conversation context window
         this._context         = [];
@@ -189,6 +191,13 @@ export class MAX {
     pinFile(relPath) { this.pinnedFiles.add(relPath); }
     unpinFile(relPath) { this.pinnedFiles.delete(relPath); }
     clearPinned() { this.pinnedFiles.clear(); }
+
+    abortChat() {
+        if (this._currentAbortController) {
+            this._currentAbortController.abort();
+            this._currentAbortController = null;
+        }
+    }
 
     async initialize() {
         console.log('\n' + '━'.repeat(60));
@@ -330,6 +339,24 @@ export class MAX {
             handler: () => this.ingestion.pulse()
         });
 
+        // Sentinel Loop — background project health scan
+        this.scheduler.addJob({
+            id:      'sentinel_scan',
+            label:   'Sentinel: background project health scan',
+            every:   '15m',
+            type:    'custom',
+            handler: () => this.agentLoop?._loops?.watch?.run({ title: 'Sentinel Scan' }, this, this.agentLoop)
+        });
+
+        // Diagnostics System — background architectural audit
+        this.scheduler.addJob({
+            id:      'diagnostics_audit',
+            label:   'Diagnostics: system-wide architectural audit',
+            every:   '1h',
+            type:    'custom',
+            handler: () => this.diagnostics.runAll()
+        });
+
         // Choko Relay — poll for Treats from Choko every 15m
         this.scheduler.addJob({
             id:      'choko_relay',
@@ -374,6 +401,25 @@ export class MAX {
         autoConnectDiscord(this).catch(() => {});
         autoConnectEmail(this).catch(() => {});
 
+        // Fix 5: detect project context from package.json + README
+        try {
+            const pkgPath    = path.join(process.cwd(), 'package.json');
+            const readmePath = path.join(process.cwd(), 'README.md');
+            let ctx = '';
+            if (fs.existsSync(pkgPath)) {
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).slice(0, 20).join(', ');
+                ctx += `\n## Project: ${pkg.name || 'unknown'} v${pkg.version || '?'}\n${pkg.description || ''}\nStack: ${deps}`;
+            }
+            if (fs.existsSync(readmePath)) {
+                ctx += `\n\nREADME summary:\n${fs.readFileSync(readmePath, 'utf8').slice(0, 800)}`;
+            }
+            if (ctx) {
+                this._projectContext = ctx;
+                console.log(`[MAX] 📁 Project context loaded (${ctx.length} chars)`);
+            }
+        } catch { /* non-fatal */ }
+
         // Initialize goals (loads from disk)
         this.goals.initialize();
 
@@ -404,6 +450,8 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
                     const id = this.goals.addGoal({ title, description, type, priority, source: 'user', ...(verifyCommand ? { verifyCommand } : {}) });
                     // Trigger AgentLoop on next tick — non-blocking
                     setImmediate(() => this.agentLoop?.runCycle().catch(() => {}));
+                    // Immediately surface in chat so user knows work has started
+                    this.say(`On it — queued: **${title}**`, 'Working in background...');
                     return { success: true, id, message: `Goal queued: "${title}" — starting investigation` };
                 },
                 list:   async () => ({ success: true, goals: this.goals.listActive().slice(0, 10).map(g => ({ id: g.id, title: g.title, status: g.status, priority: g.priority })) }),
@@ -731,202 +779,224 @@ Actions:
     }
 
     async _thinkInternal(userMessage, options = {}) {
-
         this.isThinking = true;
         this._chatBusy  = true;
+        this._currentAbortController = new AbortController();
+        const signal = this._currentAbortController.signal;
 
-        const selectedPersona = this.persona.currentPersona;
-        const tier = options.tier || 'smart';
+        try {
+            // Fix 3: auto-select persona based on message content + drive state
+            const selectedPersona = this.persona.selectForTask(userMessage, this.drive.getStatus());
+            const tier = options.tier || 'smart';
 
-        // Store user message in context immediately so next turn sees it in history
-        this._context.push({ role: 'user', content: userMessage });
+            // Store user message in context immediately so next turn sees it in history
+            this._context.push({ role: 'user', content: userMessage });
 
-        // ── Response cache — skip LLM for recently-seen identical questions ─
-        const cacheKey = userMessage.trim().toLowerCase().slice(0, 200);
-        const cached   = this._responseCache?.get(cacheKey);
-        if (cached && Date.now() - cached.ts < 5 * 60 * 1000) {
-            this._context.push({ role: 'assistant', content: cached.response });
+            // ── Response cache — skip LLM for recently-seen identical questions ─
+            const cacheKey = userMessage.trim().toLowerCase().slice(0, 200);
+            const cached   = this._responseCache?.get(cacheKey);
+            if (cached && Date.now() - cached.ts < 5 * 60 * 1000) {
+                this._context.push({ role: 'assistant', content: cached.response });
+                return { ...cached, wasStreamed: false };
+            }
+
+            // ── Parallel: memory recall + KB query simultaneously ─────────────
+            const budget   = tier === 'smart' ? 30000 : 8000;
+            const memCount = tier === 'smart' ? 10 : 3;
+            const kbCount  = tier === 'smart' ? 12 : 3;
+            const isTrivial = userMessage.trim().length < 12;
+
+            const [memoryResults, kbResults] = isTrivial
+                ? [[], []]
+                : await Promise.all([
+                    this.memory.recall(userMessage, { topK: memCount }),
+                    this.kb.query(userMessage, { topK: kbCount })
+                ]);
+
+            let used = userMessage.length + 2000;
+            let memoryContext = '';
+            if (memoryResults.length > 0) {
+                const memBlock = '\n\n## Relevant Memories\n' + memoryResults.map(m => `• ${m.content}`).join('\n');
+                if (used + memBlock.length < budget) { memoryContext = memBlock; used += memBlock.length; }
+            }
+
+            const kbContext   = this.kb.formatForPrompt(kbResults, Math.max(2000, budget - used));
+
+            // Drive-influenced response tuning
+            const driveState  = this.drive.getStatus();
+            let driveTemp     = options.temperature ?? 0.7;
+            let driveSystemNote = '';
+            if (driveState.isUrgent) {
+                driveSystemNote = '\n[DRIVE: High tension — be concise, action-focused, skip preamble]';
+                driveTemp = Math.max(0.3, driveTemp - 0.2);
+            } else if (driveState.satisfaction > 0.7) {
+                driveSystemNote = '\n[DRIVE: High satisfaction — you can be thorough and creative]';
+                driveTemp = Math.min(0.95, driveTemp + 0.1);
+            }
+
+            const needsLongReply = /\b(explain|analyse|analyze|investigate|compare|summarize|list all|implement|write|refactor|how does|why does)\b/i.test(userMessage)
+                || userMessage.length > 120;
+            const maxTok  = options.maxTokens ?? (needsLongReply ? 4096 : 1024);
+            const onToken = options.onToken ?? null;
+
+            // Fix 2+4: inject tool manifest + reflection patches so MAX knows its tools and learns from history
+            const systemPrompt = this.persona.getBasePrompt() + '\n\n' + selectedPersona.systemPrompt
+                + this.tools.buildManifest()
+                + (this.reflection?.getSelfModelContext() || '')
+                + this._buildStateContext() + memoryContext + kbContext + driveSystemNote;
+
+            // Fix 6: use full context window (was -9,-1 = 8 msgs; now -21,-1 = 20 msgs), and raise per-msg limit
+            const historyMsgs = this._context.slice(-21, -1).map(m => ({
+                role:    m.role,
+                content: m.content.slice(0, 4000)
+            }));
+            const messages = historyMsgs.length > 0 ? [
+                { role: 'system', content: systemPrompt },
+                ...historyMsgs,
+                { role: 'user',   content: userMessage }
+            ] : null;
+
+            // ── Step 1: Brain Think ───────────────────────────────────────────
+            let result = await this.brain.think(userMessage, {
+                systemPrompt,
+                temperature: driveTemp,
+                maxTokens:   maxTok,
+                tier:        options.tier || 'smart',
+                onToken,
+                messages,
+                signal
+            });
+
+            let response = result.text;
+            response = response.replace(/^(\**MAX:\**\s*|MAX:\s*|Assistant:\s*)/i, '').trim();
+
+            // ── Fix 1: Inline tool execution loop ────────────────────────────
+            // Execute any TOOL: calls MAX emitted, feed results back, get a real answer.
+            // goals/mcp skipped — goals handled by _analyzeIntent, mcp is meta.
+            if (!signal.aborted) {
+                const SKIP_INLINE = new Set(['goals', 'mcp']);
+                for (let _toolRound = 0; _toolRound < 3; _toolRound++) {
+                    const toolLines = response.split('\n')
+                        .map(l => l.trim())
+                        .filter(l => /^TOOL:[a-zA-Z_]+:[a-zA-Z_]+/.test(l))
+                        .filter(l => !SKIP_INLINE.has(l.split(':')[1]));
+                    if (toolLines.length === 0) break;
+
+                    const toolResults = [];
+                    for (const line of toolLines) {
+                        try {
+                            const tr = await this.tools.executeLLMToolCall(line);
+                            toolResults.push(`${line.slice(0, 80)}\n→ ${JSON.stringify(tr).slice(0, 1200)}`);
+                        } catch (e) {
+                            toolResults.push(`${line.slice(0, 80)}\n→ ERROR: ${e.message}`);
+                        }
+                    }
+
+                    const continueMsg = `TOOL RESULTS:\n${toolResults.join('\n\n')}\n\nNow give your final response to the user based on the above results. Do not output more TOOL: calls.`;
+                    const followUp = await this.brain.think(continueMsg, {
+                        systemPrompt,
+                        temperature: driveTemp,
+                        maxTokens:   maxTok,
+                        tier:        options.tier || 'smart',
+                        onToken,
+                        signal,
+                        messages: [
+                            { role: 'system',    content: systemPrompt },
+                            ...historyMsgs,
+                            { role: 'user',      content: userMessage },
+                            { role: 'assistant', content: response },
+                            { role: 'user',      content: continueMsg }
+                        ]
+                    });
+                    const followUpText = followUp.text.replace(/^(\**MAX:\**\s*|MAX:\s*|Assistant:\s*)/i, '').trim();
+                    response = response + '\n\n' + followUpText;
+                }
+            }
+
+            // ── Step 2: Cognitive Filter ──
+            const filtered = await this.cognitive.process(response);
+            if (filtered.needsVerification && !signal.aborted) {
+                console.log(`[MAX] 🧐 Uncertain claim — verifying...`);
+                try {
+                    const vResult = await this.tools.execute(
+                        filtered.verificationTask.tool,
+                        filtered.verificationTask.action,
+                        filtered.verificationTask.params
+                    );
+                    const evidencePrompt = `\n\n## VERIFICATION EVIDENCE\nResult: ${JSON.stringify(vResult)}\n\nAdjust response.`;
+                    result = await this.brain.think(userMessage + evidencePrompt, {
+                        systemPrompt, temperature: 0.3, maxTokens: maxTok, signal
+                    });
+                    response = result.text;
+                } catch { /* skip */ }
+            }
+
+            this._context.push({ role: 'assistant', content: response });
+            this._maybeCompressContext();
+
+            this.memory.addConversation('user', userMessage, selectedPersona.id, { provenance: 'STATED' });
+            this.memory.addConversation('assistant', response, selectedPersona.id, { provenance: 'GENERATED' });
+
+            const finalResult = {
+                response,
+                persona:     selectedPersona.id,
+                drive:       this.drive.getStatus(),
+                telemetry:   result.metadata,
+                wasStreamed: !!onToken
+            };
+
+            if (!onToken && userMessage.trim().length > 12) {
+                this._responseCache.set(cacheKey, { ...finalResult, ts: Date.now() });
+            }
+
+            if (userMessage.trim().length > 30) this._queueFollowUpCuriosity(userMessage);
+            this._analyzeIntent(userMessage, response).catch(() => {});
+
+            return finalResult;
+
+        } catch (err) {
+            if (err.name === 'AbortError' || signal.aborted) {
+                console.log('[MAX] 🛑 Chat execution aborted.');
+                return { response: '[Aborted by user]', persona: ' companion', aborted: true };
+            }
+            throw err;
+        } finally {
             this.isThinking = false;
             this._chatBusy  = false;
-            return { ...cached, wasStreamed: false };
+            this._currentAbortController = null;
         }
-
-        // ── Parallel: memory recall + KB query simultaneously ─────────────
-        // Skip for very short/trivial messages — no useful memories to recall
-        const budget   = tier === 'smart' ? 30000 : 8000;
-        const memCount = tier === 'smart' ? 10 : 3;
-        const kbCount  = tier === 'smart' ? 12 : 3;
-        const isTrivial = userMessage.trim().length < 12;
-
-        const [memoryResults, kbResults] = isTrivial
-            ? [[], []]
-            : await Promise.all([
-                this.memory.recall(userMessage, { topK: memCount }),
-                this.kb.query(userMessage, { topK: kbCount })
-            ]);
-
-        let used = userMessage.length + 2000;
-        let memoryContext = '';
-        if (memoryResults.length > 0) {
-            const memBlock = '\n\n## Relevant Memories\n' + memoryResults.map(m => `• ${m.content}`).join('\n');
-            if (used + memBlock.length < budget) { memoryContext = memBlock; used += memBlock.length; }
-        }
-
-        const kbContext   = this.kb.formatForPrompt(kbResults, Math.max(2000, budget - used));
-        const systemPrompt = this.persona.getBasePrompt() + '\n\n' + selectedPersona.systemPrompt
-            + this._buildStateContext() + memoryContext + kbContext + driveSystemNote;
-
-        const needsLongReply = /\b(explain|analyse|analyze|investigate|compare|summarize|list all|implement|write|refactor|how does|why does)\b/i.test(userMessage)
-            || userMessage.length > 120;
-        const maxTok  = options.maxTokens ?? (needsLongReply ? 4096 : 1024);
-        const onToken = options.onToken ?? null;
-
-        // Drive-influenced response tuning
-        const driveState  = this.drive.getStatus();
-        let driveTemp     = options.temperature ?? 0.7;
-        let driveSystemNote = '';
-        if (driveState.isUrgent) {
-            driveSystemNote = '\n[DRIVE: High tension — be concise, action-focused, skip preamble]';
-            driveTemp = Math.max(0.3, driveTemp - 0.2);
-        } else if (driveState.satisfaction > 0.7) {
-            driveSystemNote = '\n[DRIVE: High satisfaction — you can be thorough and creative]';
-            driveTemp = Math.min(0.95, driveTemp + 0.1);
-        }
-
-        // ── Build multi-turn messages array from conversation history ─────
-        // Include last 8 messages (4 turns) so MAX remembers recent context
-        const historyMsgs = this._context.slice(-9, -1).map(m => ({
-            role:    m.role,
-            content: m.content.slice(0, 1200)
-        }));
-        const messages = historyMsgs.length > 0 ? [
-            { role: 'system', content: systemPrompt },
-            ...historyMsgs,
-            { role: 'user',   content: userMessage }
-        ] : null;
-
-        // ── Step 1: Brain Think ───────────────────────────────────────────
-        let result = await this.brain.think(userMessage, {
-            systemPrompt,
-            temperature: driveTemp,
-            maxTokens:   maxTok,
-            tier:        options.tier || 'smart',
-            onToken,
-            messages
-        });
-
-        let response = result.text;
-
-        // ── Step 2: Cognitive Filter — single pass, verify only if uncertain
-        const filtered = await this.cognitive.process(response);
-        if (filtered.needsVerification) {
-            console.log(`[MAX] 🧐 Uncertain claim — verifying via ${filtered.verificationTask.tool}...`);
-            try {
-                const vResult = await this.tools.execute(
-                    filtered.verificationTask.tool,
-                    filtered.verificationTask.action,
-                    filtered.verificationTask.params
-                );
-                const evidencePrompt = `\n\n## VERIFICATION EVIDENCE\nClaim: "${filtered.originalText.slice(0, 100)}..."\nResult: ${JSON.stringify(vResult)}\n\nAdjust your response based on this evidence.`;
-                result = await this.brain.think(userMessage + evidencePrompt, {
-                    systemPrompt,
-                    temperature: 0.3,
-                    maxTokens:   maxTok
-                });
-                response = result.text;
-            } catch { /* verification failed — use original response */ }
-        }
-
-        // Store assistant response in context
-        this._context.push({ role: 'assistant', content: response });
-        this._maybeCompressContext();
-
-        // Memory bookkeeping (non-blocking writes)
-        const provenance = this.cognitive.getProvenance(filtered.state, 'brain');
-        this.memory.addConversation('user', userMessage, selectedPersona.id, { provenance: 'STATED' });
-        this.memory.addConversation('assistant', response, selectedPersona.id, { provenance });
-
-        const finalResult = {
-            response,
-            persona:     selectedPersona.id,
-            drive:       this.drive.getStatus(),
-            telemetry:   result.metadata,
-            wasStreamed: !!onToken
-        };
-
-        // Cache response for identical repeated questions (5-min TTL)
-        if (!onToken && userMessage.trim().length > 12) {
-            this._responseCache.set(cacheKey, { ...finalResult, ts: Date.now() });
-            if (this._responseCache.size > 50) {
-                // Evict oldest entry to cap memory usage
-                this._responseCache.delete(this._responseCache.keys().next().value);
-            }
-        }
-
-        // Background tasks (fire-and-forget — never block the response)
-        if (userMessage.trim().length > 30) this._queueFollowUpCuriosity(userMessage);
-        this._analyzeIntent(userMessage, response).catch(() => {});
-
-        this.isThinking = false;
-        this._chatBusy  = false;
-
-        return finalResult;
     }
 
-    async _analyzeIntent(userMsg, assistantMsg) {
+    async _analyzeIntent(userMsg, _assistantMsg) {
         if (!this.goals) return;
-        // Only analyze messages that look like they're describing a problem or requesting work.
-        // Skip short/casual messages to avoid filling the goal queue with noise.
         if (userMsg.length < 40) return;
         const taskSignals = /\b(fix|bug|broken|error|implement|add|build|create|refactor|slow|crash|failing|issue|problem|investigate|why|how do i)\b/i;
         if (!taskSignals.test(userMsg)) return;
 
-        // Fast-tier check: Did the user imply a task or problem?
-        const prompt = `You are MAX. Analyze this conversation snippet.
-USER: "${userMsg}"
-ASSISTANT: "${assistantMsg}"
-
-Has the user identified a bug, requested a feature, or described a problem that needs fixing?
-If yes, extract a CONCRETE engineering goal. 
-If no, return "NONE".
-
-Return JSON only: {"hasGoal": true, "title": "...", "priority": 0.1-1.0} or {"hasGoal": false}`;
-
+        const prompt = `You are MAX. The user said: "${userMsg}"\n\nJSON only: {"hasGoal": true, "title": "...", "priority": 0.6-0.9} or {"hasGoal": false}`;
         try {
             const res = await this.brain.think(prompt, { tier: 'fast', maxTokens: 128 });
             const jsonStr = res.text.match(/\{[\s\S]*\}/)?.[0];
             if (!jsonStr) return;
             const data = JSON.parse(jsonStr);
-
             if (data.hasGoal && data.title) {
-                this.goals.addGoal({
-                    title: data.title,
-                    priority: data.priority || 0.6,
-                    source: 'intent_analysis'
-                });
+                this.goals.addGoal({ title: data.title, priority: data.priority || 0.6, source: 'intent_analysis' });
                 await this._syncGoalsToFile();
             }
-        } catch { /* background task is best-effort */ }
+        } catch { /* skip */ }
     }
 
     async _syncGoalsToFile() {
         try {
             const active = this.goals.listActive();
             const done   = this.goals.listCompleted().slice(0, 10);
-
             let md = "# 🎯 MAX's AMBITIONS\n\n## 🛠️ ACTIVE GOALS\n";
             for (const g of active) md += `- [ ] ${g.title}\n`;
-            
             md += "\n## ✅ COMPLETED\n";
             for (const g of done) md += `- [x] ${g.title}\n`;
-
-            md += "\n---\n*This file is dynamically updated by MAX via the Intent Protocol.*";
-            
             const fs = await import('fs/promises');
             await fs.writeFile('goals.md', md);
-        } catch (err) {
-            console.warn('[MAX] ⚠️ Failed to sync goals.md:', err.message);
-        }
+        } catch (err) { console.warn('[MAX] Goals sync failed:', err.message); }
     }
 
     _queueFollowUpCuriosity(userMessage) {
@@ -941,98 +1011,42 @@ Return JSON only: {"hasGoal": true, "title": "...", "priority": 0.1-1.0} or {"ha
     _buildStateContext() {
         const drive = this.drive.getStatus();
         let ctx = `\n\n## System State\nTension: ${Math.round(drive.tension*100)}% | Satisfaction: ${Math.round(drive.satisfaction*100)}%`;
-
-        // Inject pinned file contents so MAX can reference them (/add <path>)
+        // Fix 5: inject project context (package.json + README, detected at boot)
+        if (this._projectContext) {
+            ctx += this._projectContext;
+        }
         if (this.pinnedFiles.size > 0) {
             ctx += '\n\n## Pinned Files';
             for (const relPath of this.pinnedFiles) {
                 try {
                     const content = fs.readFileSync(relPath, 'utf8');
                     ctx += `\n\n### ${relPath}\n\`\`\`\n${content.slice(0, 3000)}\n\`\`\``;
-                } catch { /* file missing — skip */ }
+                } catch { }
             }
         }
-
         return ctx;
     }
 
     _maybeCompressContext() {
         if (this._context.length <= this._contextLimit) return;
-
-        // Pin important facts from about-to-be-dropped turns to KB before slicing
-        const dropping = this._context.slice(0, this._context.length - this._contextLimit);
-        if (this.kb && dropping.length > 0) {
-            const pinned = [];
-            for (const turn of dropping) {
-                if (turn.role !== 'assistant') continue;
-                const text = typeof turn.content === 'string' ? turn.content : '';
-                // Extract file edits
-                const fileMatch = text.match(/(?:✏️|wrote|created|updated|edited)\s+([^\s]+\.[a-z]{1,5})/gi);
-                if (fileMatch) pinned.push(...fileMatch.map(m => `File edit: ${m.trim()}`));
-                // Extract key decisions (lines starting with "I " or "MAX " that contain action verbs)
-                const decisionLines = text.split('\n').filter(l =>
-                    /^(?:I |MAX |We )/.test(l) &&
-                    /\b(?:added|removed|fixed|changed|created|deleted|wired|updated|replaced|moved)\b/i.test(l)
-                ).slice(0, 3);
-                pinned.push(...decisionLines.map(l => l.trim()));
-            }
-            if (pinned.length > 0) {
-                const summary = `## Context compression summary (${new Date().toISOString().slice(0, 10)})\n\n` +
-                    pinned.map(p => `- ${p}`).join('\n');
-                this.kb.remember(summary).catch(() => {});
-            }
-        }
-
         this._context = this._context.slice(-this._contextLimit);
     }
 
     async _processChokoRelay() {
         const relayPath = path.join(__dirname, '..', '.max', 'choko_relay.json');
         if (!fs.existsSync(relayPath)) return;
-
         let treats;
-        try {
-            treats = JSON.parse(fs.readFileSync(relayPath, 'utf8'));
-        } catch { return; }
-
+        try { treats = JSON.parse(fs.readFileSync(relayPath, 'utf8')); } catch { return; }
         const unread = treats.filter(t => !t._processedByMAX);
         if (unread.length === 0) return;
-
-        console.log(`[MAX] 🍫 ${unread.length} Treat(s) from Choko — processing...`);
-
         for (const treat of unread) {
             treat._processedByMAX = true;
-
-            const priorityMap = { high: 0.85, medium: 0.65, low: 0.45 };
-            const priority = priorityMap[treat.priority] ?? 0.65;
-
-            // Surface as an insight so it appears in the terminal
-            this.heartbeat?.emit('insight', {
-                source: 'Choko 🍫',
-                label:  treat.title,
-                result: treat.detail
-            });
-
-            // Queue a goal if it sounds actionable
-            const actionable = /fix|bug|broken|fail|error|issue|improve|add|implement|missing/i.test(treat.title + treat.detail);
-            if (actionable && this.goals) {
-                this.goals.addGoal({
-                    title:       `[Choko] ${treat.title}`,
-                    description: treat.detail,
-                    type:        'fix',
-                    priority,
-                    source:      'choko_relay'
-                });
-                console.log(`[MAX] 🎯 Choko's Treat queued as goal: "${treat.title}"`);
+            this.heartbeat?.emit('insight', { source: 'Choko 🍫', label: treat.title, result: treat.detail });
+            if (this.goals && /fix|bug|broken|fail|error|issue|improve|add|implement|missing/i.test(treat.title + treat.detail)) {
+                this.goals.addGoal({ title: `[Choko] ${treat.title}`, description: treat.detail, type: 'fix', priority: 0.7, source: 'choko_relay' });
             }
-
-            // Store in KB for long-term memory
-            await this.kb.remember(`Choko reported: ${treat.title} — ${treat.detail}`, {
-                source: 'choko_relay', timestamp: treat.timestamp
-            }).catch(() => {});
+            await this.kb.remember(`Choko reported: ${treat.title} — ${treat.detail}`).catch(() => {});
         }
-
-        // Write back with processed flags
         fs.writeFileSync(relayPath, JSON.stringify(treats, null, 2));
     }
 

@@ -577,6 +577,14 @@ export class AgentLoop extends EventEmitter {
             }
         }
 
+        this.emit('stepStart', {
+            step:       step.step,
+            action:     stepAction.slice(0, 80),
+            tool:       toolName,
+            toolAction: action,
+            params:     step.params || {}
+        });
+
         try {
             let result = '';
 
@@ -769,6 +777,7 @@ export class AgentLoop extends EventEmitter {
                 }
             }
 
+            this.emit('stepDone', { step: step.step, success: true, summary });
             return { step: step.step, success: true, result, summary };
 
         } catch (err) {
@@ -790,6 +799,7 @@ export class AgentLoop extends EventEmitter {
                     const retrySummary = retryObj.text.slice(0, 200);
                     console.log(`  [AgentLoop] âœ… Search retry succeeded`);
                     this.stats.searches++;
+                    this.emit('stepDone', { step: step.step, success: true, summary: retrySummary });
                     return { step: step.step, success: true, result: retryObj.text, summary: retrySummary };
                 } catch (retryErr) {
                     console.error(`  [AgentLoop] Search retry also failed:`, retryErr.message);
@@ -797,6 +807,7 @@ export class AgentLoop extends EventEmitter {
             }
 
             console.error(`  [AgentLoop] Step ${step.step} failed:`, err.message);
+            this.emit('stepDone', { step: step.step, success: false, summary: '' });
             return { step: step.step, success: false, error: err.message, summary: '' };
         }
     }
@@ -827,41 +838,107 @@ export class AgentLoop extends EventEmitter {
         }
     }
 
-    // â”€â”€â”€ Deep research â€” called after 2+ failed replans â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Runs multiple searches and asks the brain to synthesize findings
-    // into a concise briefing that gets injected into the next plan.
+    // --- Deep research -- iterative search + synthesis ----------------------
+    // Phase 1: LLM generates targeted queries
+    // Phase 2: Run each query, collect learnings + follow-up questions
+    // Phase 3: One follow-up search on most promising question
+    // Phase 4: Synthesize all learnings into actionable guidance
     async _deepResearch(goal, lastError) {
         try {
-            const queries = [
-                `how to ${goal.title.slice(0, 80)}`,
-                `${lastError.slice(0, 60)} solution`,
-                `best approach for ${goal.title.slice(0, 60)}`
-            ];
+            // Phase 1 -- LLM generates queries
+            const queryPlan = await withTimeout(
+                this.max.agentBrain.think(
+                    `Goal: "${goal.title}"
+Failed with: ${lastError.slice(0, 120)}
 
-            const snippets = [];
-            for (const query of queries) {
+Generate exactly 3 targeted search queries to find a solution. Return as JSON array of strings, nothing else. Example: ["query one","query two","query three"]`,
+                    { temperature: 0.2, maxTokens: 150, tier: 'fast' }
+                ),
+                15_000,
+                'query generation'
+            );
+
+            let queries;
+            try {
+                const match = queryPlan.text.match(/[[sS]*]/);
+                queries = match ? JSON.parse(match[0]) : [];
+            } catch { queries = []; }
+
+            if (!queries.length) {
+                queries = [
+                    `how to ${goal.title.slice(0, 80)}`,
+                    `${lastError.slice(0, 60)} solution`,
+                    `best approach for ${goal.title.slice(0, 60)}`
+                ];
+            }
+
+            // Phase 2 -- run searches, accumulate learnings + follow-ups
+            const learnings = [];
+            const followUps = [];
+
+            for (const query of queries.slice(0, 3)) {
                 try {
-                    console.log(`  [AgentLoop] ðŸŒ Research: "${query.slice(0, 80)}"`);
+                    console.log(`  [AgentLoop] Research: "${query.slice(0, 80)}"`);
                     const r = await withTimeout(
                         this.max.tools.execute('web', 'search', { query }),
                         20_000,
                         'research search'
                     );
-                    if (r?.results?.length) {
-                        snippets.push(...r.results.slice(0, 2).map(x => `${x.title}: ${x.snippet || x.body || ''}`));
-                    }
+                    if (!r?.results?.length) continue;
+
+                    const snippets = r.results.slice(0, 3).map(x => `${x.title}: ${x.snippet || x.body || ''}`).join('\n')
+                    const extract = await withTimeout(
+                        this.max.agentBrain.think(
+                            `Query: "${query}"
+Results:
+${snippets.slice(0, 1500)}
+
+Extract 1-2 key learnings and 1 follow-up question. JSON: {"learnings":["..."],"followUp":"..."}`,
+                            { temperature: 0.2, maxTokens: 150, tier: 'fast' }
+                        ),
+                        12_000,
+                        'learning extract'
+                    );
+                    try {
+                        const m = extract.text.match(/{[sS]*}/);
+                        if (m) {
+                            const parsed = JSON.parse(m[0]);
+                            if (parsed.learnings) learnings.push(...parsed.learnings);
+                            if (parsed.followUp) followUps.push(parsed.followUp);
+                        }
+                    } catch { learnings.push(snippets.slice(0, 300)); }
                 } catch { /* skip failed individual searches */ }
             }
 
-            if (snippets.length === 0) return null;
+            // Phase 3 -- one follow-up search
+            if (followUps.length) {
+                try {
+                    const fq = followUps[0];
+                    console.log(`  [AgentLoop] Follow-up: "${fq.slice(0, 80)}"`);
+                    const r2 = await withTimeout(
+                        this.max.tools.execute('web', 'search', { query: fq }),
+                        20_000,
+                        'followup search'
+                    );
+                    if (r2?.results?.length) {
+                        learnings.push(...r2.results.slice(0, 2).map(x => `${x.title}: ${x.snippet || x.body || ''}`));
+                    }
+                } catch { /* ok */ }
+            }
 
-            const raw = snippets.join('\n\n').slice(0, 3000);
+            if (learnings.length === 0) return null;
 
-            // Synthesize with brain
+            // Phase 4 -- synthesize
             const synthesis = await withTimeout(
                 this.max.agentBrain.think(
-                    `I'm trying to: "${goal.title}"\nI've failed twice. Last error: ${lastError}\n\nSearch results:\n${raw}\n\nSummarize the key findings and the best approach in 3-5 bullet points.`,
-                    { temperature: 0.3, maxTokens: 400, tier: 'fast' }
+                    `Goal: "${goal.title}"
+Failed with: ${lastError}
+
+Research learnings:
+${learnings.map((l, i) => `${i + 1}. ${l}`).join('\n').slice(0, 2500)}
+
+Synthesize into 3-5 actionable bullet points for how to succeed on this goal.`,
+                    { temperature: 0.3, maxTokens: 400, tier: 'smart' }
                 ),
                 30_000,
                 'research synthesis'
@@ -874,7 +951,6 @@ export class AgentLoop extends EventEmitter {
         }
     }
 
-    // â”€â”€â”€ Resume a previously interrupted cycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     async _resumeCycle(saved) {
         console.log(`[AgentLoop] â–¶ï¸  Resuming "${saved.goal.title}" (${saved.completedSteps.length} steps already done)`);
         await fs.unlink(this._interruptFile).catch(() => {});

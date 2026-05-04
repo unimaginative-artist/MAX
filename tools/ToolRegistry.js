@@ -95,12 +95,9 @@ export class ToolRegistry {
     buildManifest() {
         let manifest = '\n\n## Available Tools\n';
         for (const tool of this._tools.values()) {
-            manifest += `- **${tool.name}**: ${tool.description}\n`;
-            if (tool.actions) {
-                for (const act of Object.keys(tool.actions)) {
-                    manifest += `  - ${act}\n`;
-                }
-            }
+            const oneliner = (tool.description || '').split('\n')[0].slice(0, 100);
+            const actions  = tool.actions ? Object.keys(tool.actions).join(', ') : '';
+            manifest += `- **${tool.name}**: ${oneliner}${actions ? ` [${actions}]` : ''}\n`;
         }
         return manifest;
     }

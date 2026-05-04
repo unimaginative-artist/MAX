@@ -50,6 +50,24 @@ export class VirtualShell extends EventEmitter {
         });
 
         this.ready = true;
+        // Suppress cmd.exe command echo on Windows
+        if (this.isWin) this.proc.stdin.write('@echo off\r\n');
+    }
+
+    _stripCmdEcho(output, command) {
+        if (!this.isWin) return output;
+        // cmd.exe echoes the command + our wrapper lines — strip them
+        const lines = output.split(/\r?\n/);
+        const cmdFirst = command.trim().split(/\r?\n/)[0].trim().toLowerCase();
+        return lines.filter(l => {
+            const t = l.trim().toLowerCase();
+            if (!t) return true; // keep blank lines (they're intentional output)
+            if (t === cmdFirst) return false;
+            if (t.startsWith('echo __exit_code_') || t.startsWith('echo __max_shell_done_')) return false;
+            // Filter prompt echoes like "C:\Users\barry\Desktop\MAX>"
+            if (/^[a-z]:[\\\/].*>/.test(t)) return false;
+            return true;
+        }).join('\n');
     }
 
     _checkDone() {
@@ -67,6 +85,7 @@ export class VirtualShell extends EventEmitter {
                 code = parseInt(match[1], 10);
                 cleanOut = output.replace(/__EXIT_CODE_\d+__$/, '').trim();
             }
+            cleanOut = this._stripCmdEcho(cleanOut, this._currentCommand || '');
 
             this._stdoutBuf = parts[1] || ''; // keep whatever spilled over
             
@@ -104,6 +123,7 @@ export class VirtualShell extends EventEmitter {
 
         const { command, timeoutMs, resolve } = this._queue.shift();
         this._currentResolver = resolve;
+        this._currentCommand = command;
         this._stdoutBuf = '';
         this._stderrBuf = '';
 
