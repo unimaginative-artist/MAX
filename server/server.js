@@ -212,6 +212,33 @@ export async function createServer(max, port = 3100) {
         broadcast({ type: 'agent_step_done', ...data });
     });
 
+    // ── Tool activity mirror — IDE reacts to every file op MAX performs ──────
+    // Intercept max.tools.execute so ALL tool calls (AgentLoop + inline chat)
+    // are broadcast to the IDE. This is what makes the editor "watch MAX work."
+    if (max.tools?.execute) {
+        const _origExec = max.tools.execute.bind(max.tools);
+        max.tools.execute = async (toolName, action, params) => {
+            const result = await _origExec(toolName, action, params);
+            try {
+                if (toolName === 'file') {
+                    const fp = params?.filePath || params?.path;
+                    if (fp && ['read', 'readFile'].includes(action)) {
+                        broadcast({ type: 'agent_file_read', filePath: fp });
+                    }
+                    if (fp && ['write', 'replace', 'edit', 'patch'].includes(action)) {
+                        broadcast({ type: 'agent_file_write', filePath: fp, action, content: params?.content ?? null });
+                    }
+                }
+                if (toolName === 'shell' && action === 'run' && result?.output) {
+                    const cmd = params?.command || '';
+                    const out = `$ ${cmd}\n${result.output}${result.output.endsWith('\n') ? '' : '\n'}`;
+                    broadcast({ type: 'shell_output', text: out, source: 'agent' });
+                }
+            } catch {}
+            return result;
+        };
+    }
+
     // Self-improvement proposals — broadcast to dashboard for one-click approve/deny
     max.selfImprovement?.on('proposal', (proposal) => {
         broadcast({ type: 'self_proposal', ...proposal });

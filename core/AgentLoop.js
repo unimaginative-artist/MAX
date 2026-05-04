@@ -777,7 +777,7 @@ export class AgentLoop extends EventEmitter {
                 }
             }
 
-            this.emit('stepDone', { step: step.step, success: true, summary });
+            this.emit('stepDone', { step: step.step, success: true, summary, tool: toolName, toolAction: action, params: step.params || {} });
             return { step: step.step, success: true, result, summary };
 
         } catch (err) {
@@ -799,7 +799,7 @@ export class AgentLoop extends EventEmitter {
                     const retrySummary = retryObj.text.slice(0, 200);
                     console.log(`  [AgentLoop] âœ… Search retry succeeded`);
                     this.stats.searches++;
-                    this.emit('stepDone', { step: step.step, success: true, summary: retrySummary });
+                    this.emit('stepDone', { step: step.step, success: true, summary: retrySummary, tool: toolName, toolAction: action, params: step.params || {} });
                     return { step: step.step, success: true, result: retryObj.text, summary: retrySummary };
                 } catch (retryErr) {
                     console.error(`  [AgentLoop] Search retry also failed:`, retryErr.message);
@@ -807,7 +807,7 @@ export class AgentLoop extends EventEmitter {
             }
 
             console.error(`  [AgentLoop] Step ${step.step} failed:`, err.message);
-            this.emit('stepDone', { step: step.step, success: false, summary: '' });
+            this.emit('stepDone', { step: step.step, success: false, summary: '', tool: toolName, toolAction: action, params: step.params || {} });
             return { step: step.step, success: false, error: err.message, summary: '' };
         }
     }

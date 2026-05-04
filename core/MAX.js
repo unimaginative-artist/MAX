@@ -872,9 +872,9 @@ Actions:
 
             // ── Fix 1: Inline tool execution loop ────────────────────────────
             // Execute any TOOL: calls MAX emitted, feed results back, get a real answer.
-            // goals/mcp skipped — goals handled by _analyzeIntent, mcp is meta.
+            // mcp is meta — skip. goals ARE executed inline so MAX can queue work from chat.
             if (!signal.aborted) {
-                const SKIP_INLINE = new Set(['goals', 'mcp']);
+                const SKIP_INLINE = new Set(['mcp']);
                 for (let _toolRound = 0; _toolRound < 3; _toolRound++) {
                     const toolLines = response.split('\n')
                         .map(l => l.trim())

@@ -339,6 +339,42 @@ html,body,#root { height:100%; background:var(--bg); color:var(--text); font-fam
 .atb-step-icon { flex-shrink:0; width:14px; text-align:center; }
 .atb-step-text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
 
+/* ── Agent activity message — Cursor-style live tool stream in chat ── */
+.aam { margin:2px 0 10px; border-radius:10px; border:1px solid var(--border);
+       background:rgba(12,12,20,.7); overflow:hidden; }
+.aam.running { border-color:rgba(124,58,237,.5); box-shadow:0 0 12px rgba(124,58,237,.08); }
+.aam.done    { border-color:rgba(16,185,129,.3); }
+.aam.failed  { border-color:rgba(239,68,68,.3); }
+.aam-header  { display:flex; align-items:center; gap:8px; padding:8px 12px 7px;
+               background:rgba(255,255,255,.02); border-bottom:1px solid rgba(255,255,255,.05); }
+.aam-hicon   { font-size:15px; flex-shrink:0; }
+.aam-spinner { display:inline-block; animation:tcb-spin .75s linear infinite; }
+.aam-title   { flex:1; font-size:12px; font-weight:600; color:var(--text);
+               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.aam-badge   { font-size:10px; font-weight:700; padding:2px 7px; border-radius:4px;
+               flex-shrink:0; letter-spacing:.03em; }
+.aam-badge.running { background:rgba(124,58,237,.18); color:#a78bfa; }
+.aam-badge.done    { background:rgba(16,185,129,.15);  color:#34d399; }
+.aam-badge.failed  { background:rgba(239,68,68,.15);   color:#f87171; }
+.aam-steps   { display:flex; flex-direction:column; }
+.aam-step    { display:flex; align-items:center; gap:6px; padding:5px 12px;
+               font-family:var(--mono); font-size:11px; color:#475569;
+               border-bottom:1px solid rgba(255,255,255,.025); transition:background .12s; }
+.aam-step:last-child { border-bottom:none; }
+.aam-step.running { background:rgba(124,58,237,.05); color:var(--text); }
+.aam-step.done    { color:#4b5563; }
+.aam-step.failed  { color:#f87171; background:rgba(239,68,68,.04); }
+.aam-step-status  { flex-shrink:0; width:13px; font-size:10px; text-align:center; }
+.aam-step-icon    { flex-shrink:0; font-size:12px; }
+.aam-step-verb    { flex-shrink:0; font-size:10px; min-width:52px; }
+.aam-step-file    { flex-shrink:0; font-weight:700; font-size:11px;
+                    max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.aam-step-desc    { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+                    color:#374151; font-size:10.5px; }
+.aam-summary      { padding:8px 12px 9px; font-size:12px; color:var(--text); line-height:1.5;
+                    border-top:1px solid rgba(255,255,255,.05);
+                    background:rgba(16,185,129,.03); }
+
 /* Thinking indicator */
 .thinking { display:flex; align-items:center; gap:8px; padding:6px 12px; }
 .thinking-dots span { display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--accent); margin:0 2px; animation:thinking .8s infinite; }
@@ -1295,19 +1331,98 @@ function AgentTaskBar({ task }) {
       </div>
       {task.steps.length > 0 && (
         <div className="atb-steps">
-          {task.steps.map((s,i)=>(
-            <div key={i} className={`atb-step ${s.status}`}>
-              <span className="atb-step-icon">
-                {s.status==='running' ? <span style={{display:'inline-block',animation:'tcb-spin .9s linear infinite',fontSize:10}}>⟳</span>
-                 : s.status==='done'   ? '✓'
-                 : s.status==='failed' ? '✗'
-                 : '○'}
-              </span>
-              <span className="atb-step-text" title={s.action}>{s.action}</span>
-            </div>
-          ))}
+          {task.steps.map((s,i)=>{
+            const toolMeta = {
+              'file:read':{'icon':'📄','color':'#60a5fa'},
+              'file:write':{'icon':'✏️','color':'#4ade80'},
+              'file:replace':{'icon':'✏️','color':'#4ade80'},
+              'file:edit':{'icon':'✏️','color':'#4ade80'},
+              'shell:run':{'icon':'⚡','color':'#fbbf24'},
+              'web:search':{'icon':'🌐','color':'#a78bfa'},
+              'goals:add':{'icon':'◎','color':'#fb923c'},
+            };
+            const mk = `${s.tool||''}:${s.toolAction||''}`;
+            const tm = toolMeta[mk] || {icon:'⚙',color:'#94a3b8'};
+            return (
+              <div key={i} className={`atb-step ${s.status}`}>
+                <span className="atb-step-icon">
+                  {s.status==='running' ? <span style={{display:'inline-block',animation:'tcb-spin .9s linear infinite',fontSize:10}}>⟳</span>
+                   : s.status==='done'   ? '✓'
+                   : s.status==='failed' ? '✗'
+                   : '○'}
+                </span>
+                <span style={{marginRight:4,fontSize:11}}>{tm.icon}</span>
+                <span className="atb-step-text" title={s.action}>{s.action}</span>
+                {s.file && <span style={{marginLeft:6,fontSize:10,color:tm.color,opacity:.85,fontFamily:'monospace'}}>{s.file}</span>}
+              </div>
+            );
+          })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Agent activity message — live Cursor-style tool stream ────
+const AAM_META = {
+  'file:read':    { icon:'📄', verb:'reading',   color:'#60a5fa' },
+  'file:write':   { icon:'✏️',  verb:'writing',   color:'#4ade80' },
+  'file:replace': { icon:'✏️',  verb:'editing',   color:'#4ade80' },
+  'file:edit':    { icon:'✏️',  verb:'editing',   color:'#4ade80' },
+  'file:patch':   { icon:'✏️',  verb:'patching',  color:'#4ade80' },
+  'file:list':    { icon:'📁', verb:'listing',   color:'#94a3b8' },
+  'file:search':  { icon:'🔍', verb:'searching', color:'#a78bfa' },
+  'file:delete':  { icon:'🗑️', verb:'deleting',  color:'#f87171' },
+  'shell:run':    { icon:'⚡', verb:'running',   color:'#fbbf24' },
+  'shell:start':  { icon:'▶',  verb:'starting',  color:'#4ade80' },
+  'shell:stop':   { icon:'■',  verb:'stopping',  color:'#f87171' },
+  'web:search':   { icon:'🌐', verb:'searching', color:'#a78bfa' },
+  'web:fetch':    { icon:'🌐', verb:'fetching',  color:'#a78bfa' },
+  'git:commit':   { icon:'●',  verb:'commit',    color:'#4ade80' },
+  'git:push':     { icon:'↑',  verb:'pushing',   color:'#4ade80' },
+  'git:status':   { icon:'○',  verb:'git',       color:'#4ade80' },
+  'goals:add':    { icon:'◎',  verb:'queued',    color:'#fb923c' },
+  'brain':        { icon:'◈',  verb:'reasoning', color:'#7c3aed' },
+};
+
+function AgentActivityMessage({ msg }) {
+  const isRunning = msg.status === 'running';
+  const isDone    = msg.status === 'done';
+  return (
+    <div className={`aam ${msg.status||'running'}`}>
+      <div className="aam-header">
+        <span className="aam-hicon">{isRunning ? '⚙' : isDone ? '✅' : '⚠️'}</span>
+        <span className="aam-title">{msg.task}</span>
+        <span className={`aam-badge ${msg.status||'running'}`}>
+          {isRunning
+            ? <><span className="aam-spinner">⟳</span>{' working…'}</>
+            : isDone ? '✓ done' : '✗ blocked'}
+        </span>
+      </div>
+      {msg.steps.length > 0 && (
+        <div className="aam-steps">
+          {msg.steps.map((s,i) => {
+            const mk = `${s.tool||''}:${s.toolAction||''}`;
+            const tm = AAM_META[mk] || { icon:'⚙', verb:s.toolAction||'step', color:'#94a3b8' };
+            return (
+              <div key={i} className={`aam-step ${s.status||'running'}`}>
+                <span className="aam-step-status">
+                  {s.status==='running'
+                    ? <span className="aam-spinner" style={{fontSize:9}}>⟳</span>
+                    : s.status==='done' ? <span style={{color:'#34d399'}}>✓</span>
+                    : s.status==='failed' ? <span style={{color:'#f87171'}}>✗</span>
+                    : '○'}
+                </span>
+                <span className="aam-step-icon">{tm.icon}</span>
+                <span className="aam-step-verb" style={{color:tm.color}}>{tm.verb}</span>
+                {s.file && <span className="aam-step-file" style={{color:tm.color}} title={s.file}>{s.file}</span>}
+                <span className="aam-step-desc" title={s.action}>{s.action}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {msg.summary && <div className="aam-summary">{msg.summary}</div>}
     </div>
   );
 }
@@ -3575,6 +3690,7 @@ function App() {
   // Agent task tracker — null | { task, goalId, steps:[], status:'running'|'done'|'failed' }
   const [agentTask, setAgentTask] = useState(null);
   const agentTaskTimer = useRef(null);
+  const currentActivityGoalRef = useRef(null); // tracks goalId of the active activity message
   const openFileRef   = useRef(null);  // kept fresh each render — lets SSE handler call openFile
   const messagesEndRef = useRef(null);
 
@@ -3747,30 +3863,67 @@ function App() {
               }
               if(d.type==='goal'&&d.action==='removed') setGoals(g=>g.filter(x=>x.id!==d.id));
 
-              // ── Agent task tracker ──
+              // ── Agent task tracker + live chat activity stream ──
               if(d.type==='agent_busy'){
                 clearTimeout(agentTaskTimer.current);
+                currentActivityGoalRef.current = d.goalId;
+                const actMsg = { id:'activity-'+d.goalId, role:'activity', goalId:d.goalId, task:d.task, steps:[], status:'running' };
                 setAgentTask({ task:d.task, goalId:d.goalId, steps:[], status:'running' });
+                setMessages(m=>[...m, actMsg]);
               }
               if(d.type==='agent_step_start'){
-                setAgentTask(t=>t?{...t,steps:[...t.steps,{step:d.step,action:d.action,tool:d.tool,status:'running'}]}:t);
+                const fp=(d.params?.filePath||d.params?.path||'').replace(/\\/g,'/');
+                const fileLabel=fp?fp.split('/').pop():'';
+                const newStep={step:d.step,action:d.action,tool:d.tool,toolAction:d.toolAction,file:fileLabel,status:'running'};
+                setAgentTask(t=>t?{...t,steps:[...t.steps,newStep]}:t);
+                setMessages(m=>m.map(msg=>msg.goalId===d.goalId?{...msg,steps:[...msg.steps,newStep]}:msg));
                 // Auto-open file in editor when MAX reads/writes it
                 if(d.tool==='file' && ['read','write','replace'].includes(d.toolAction)){
-                  const fp = d.params?.filePath || d.params?.path;
-                  if(fp){ const name=fp.replace(/\\/g,'/').split('/').pop(); openFileRef.current?.({name,path:fp.replace(/\\/g,'/')}); }
+                  if(fp){ openFileRef.current?.({name:fileLabel,path:fp}); }
                 }
               }
               if(d.type==='agent_step_done'){
-                setAgentTask(t=>t?{...t,steps:t.steps.map(s=>s.step===d.step?{...s,status:d.success?'done':'failed',summary:d.summary}:s)}:t);
+                const updStep=s=>s.step===d.step?{...s,status:d.success?'done':'failed',summary:d.summary}:s;
+                setAgentTask(t=>t?{...t,steps:t.steps.map(updStep)}:t);
+                setMessages(m=>m.map(msg=>msg.goalId===d.goalId?{...msg,steps:msg.steps.map(updStep)}:msg));
+                // After a successful file write, reload editor content from disk
+                if(d.success && d.tool==='file' && ['write','replace','edit','patch'].includes(d.toolAction)){
+                  const fp=(d.params?.filePath||d.params?.path||'').replace(/\\/g,'/');
+                  if(fp) openFileRef.current?.({name:fp.split('/').pop(),path:fp,forceReload:true});
+                }
+              }
+              // Live file mirror — broadcast from tool intercept in server.js
+              if(d.type==='agent_file_read'){
+                const fp=(d.filePath||'').replace(/\\/g,'/'); if(!fp) return;
+                openFileRef.current?.({name:fp.split('/').pop(),path:fp});
+              }
+              if(d.type==='agent_file_write'){
+                const fp=(d.filePath||'').replace(/\\/g,'/'); if(!fp) return;
+                const name=fp.split('/').pop();
+                if(d.content!=null && d.action==='write'){
+                  setFileContents(c=>({...c,[fp]:d.content}));
+                  openFileRef.current?.({name,path:fp});
+                } else {
+                  openFileRef.current?.({name,path:fp,forceReload:true});
+                }
               }
               if(d.type==='agent_free'){
-                setAgentTask(t=>t?{...t,status:d.success?'done':'failed'}:null);
-                agentTaskTimer.current = setTimeout(()=>setAgentTask(null), 6000);
+                const finalStatus=d.success?'done':'failed';
+                setAgentTask(t=>t?{...t,status:finalStatus}:null);
+                setMessages(m=>m.map(msg=>msg.goalId===d.goalId?{...msg,status:finalStatus}:msg));
+                agentTaskTimer.current = setTimeout(()=>{ setAgentTask(null); currentActivityGoalRef.current=null; }, 8000);
               }
-              // max.say() completion messages → inject as MAX chat message
+              // max.say() — attach completion summary to activity message instead of separate bubble
               if(d.type==='agent_say' && d.text){
-                const sysMsg = { id:nextMsgId(), role:'max', persona:'companion', text:d.text+(d.details?`\n\n_${d.details}_`:''), modelTier:'fast', streaming:false };
-                setMessages(m=>[...m, sysMsg]);
+                const summary=d.text+(d.details?`\n\n_${d.details}_`:'');
+                const gid=currentActivityGoalRef.current;
+                setMessages(m=>{
+                  if(gid && m.some(msg=>msg.goalId===gid)){
+                    return m.map(msg=>msg.goalId===gid?{...msg,summary}:msg);
+                  }
+                  // No active activity message — fall back to a plain bubble
+                  return [...m,{id:nextMsgId(),role:'max',persona:'companion',text:summary,modelTier:'fast',streaming:false}];
+                });
               }
             }catch{}
           };
@@ -4183,8 +4336,8 @@ function App() {
       setFileContents(c=>({...c,[path]:`__IMAGE__:${maxUrl}/api/files/raw?path=${encodeURIComponent(path)}`}));
       return;
     }
-    // Load real content if connected
-    if (connected && fileContents[path] === undefined) {
+    // Load content if not yet loaded, or forceReload=true (e.g. after MAX wrote the file)
+    if (connected && (fileContents[path] === undefined || f.forceReload)) {
       const content = await readFile2(path);
       if (content !== null) setFileContents(c => ({...c, [path]: content}));
     }
@@ -4730,7 +4883,11 @@ function App() {
             </div>
           )}
           <div className="mp-messages">
-            {messages.map(msg=><MaxMsg key={msg.id} msg={msg} pendingChanges={pendingChanges} setPendingChanges={setPendingChanges} setActiveTab={setActiveTab}/>)}
+            {messages.map(msg=>
+              msg.role==='activity'
+                ? <AgentActivityMessage key={msg.id} msg={msg}/>
+                : <MaxMsg key={msg.id} msg={msg} pendingChanges={pendingChanges} setPendingChanges={setPendingChanges} setActiveTab={setActiveTab}/>
+            )}
             {isThinking && <Thinking label={thinkLabel} onAbort={handleAbort}/>}
             <div ref={messagesEndRef}/>
           </div>
