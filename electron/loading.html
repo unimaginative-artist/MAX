@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>Maxwell</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#09090e;color:#e2e8f0;
+  font-family:-apple-system,'Segoe UI',system-ui,sans-serif;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px}
+.avatar{width:80px;height:80px;border-radius:50%;object-fit:cover;object-position:center top;
+  border:2px solid #1e1e30;
+  box-shadow:0 0 0 3px rgba(124,58,237,.15),0 0 24px rgba(255,140,0,.2);
+  animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 3px rgba(124,58,237,.15),0 0 24px rgba(255,140,0,.2)}
+  50%{box-shadow:0 0 0 5px rgba(124,58,237,.28),0 0 36px rgba(255,140,0,.35)}}
+.logo{font-size:11px;font-weight:700;letter-spacing:.3em;text-transform:uppercase;color:#a78bfa;opacity:.7}
+.spinner{width:24px;height:24px;border:2px solid #1e1e30;border-top-color:#7c3aed;
+  border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.msg{font-size:13px;color:#475569}
+</style>
+</head>
+<body>
+<img class="avatar" src="assets/icon.png" alt="MAX"/>
+<div class="logo">Maxwell</div>
+<div class="spinner"></div>
+<div class="msg">Starting…</div>
+</body>
+</html>

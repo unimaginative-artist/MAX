@@ -1,18 +1,20 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// Heartbeat.js — MAX's autonomous pulse
+﻿// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Heartbeat.js â€” MAX's autonomous pulse
 // Runs background cycles: curiosity tasks, self-monitoring, goal execution
-// Simplified from SOMA AutonomousHeartbeat — no SOMA framework deps
-// ═══════════════════════════════════════════════════════════════════════════
+// Simplified from SOMA AutonomousHeartbeat â€” no SOMA framework deps
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 import { EventEmitter } from 'events';
 
 export class Heartbeat extends EventEmitter {
     constructor(max, config = {}) {
         super();
-        this.max = max;   // reference to MAX instance
+        this.max = max;
 
         this.config = {
-            intervalMs:            2 * 60 * 1000,  // 2 min default
+            minIntervalMs:         10 * 1000,      // 10s (Faster response)
+            maxIntervalMs:         60 * 1000,      // 60s (was 120s)
+            momentumWindowMs:      3 * 60 * 1000,  // 3m window to stay fast
             maxConsecutiveFailures: 5,
             enabled:               false,
             ...config
@@ -22,6 +24,7 @@ export class Heartbeat extends EventEmitter {
         this._running  = false;
         this._busy     = false;
         this._failures = 0;
+        this._lastSuccessAt = 0;
 
         this.stats = {
             cycles:        0,
@@ -36,31 +39,32 @@ export class Heartbeat extends EventEmitter {
         if (this._running) return;
         this._running = true;
         this.config.enabled = true;
+        this._lastSuccessAt = 0;
         this._schedule();
-        console.log(`[Heartbeat] 💓 Started — interval ${this.config.intervalMs / 1000}s`);
+        console.log(`[Heartbeat] ðŸ’“ Started (Tension-Scaling: ${this.config.minIntervalMs/1000}sâ€“${this.config.maxIntervalMs/1000}s)`);
         this.emit('started');
-    }
-
-    stop() {
-        if (this._timer) clearTimeout(this._timer);
-        this._running = false;
-        this.config.enabled = false;
-        console.log('[Heartbeat] 💔 Stopped');
-        this.emit('stopped');
     }
 
     _schedule() {
         if (!this._running) return;
 
-        // Dynamic interval based on drive tension
-        // 100% tension = 30s pulse
-        // 0% tension = 5m pulse
         const drive = this.max?.drive?.getStatus?.();
         const tension = drive?.tension || 0;
 
-        const minInterval = 30 * 1000;
-        const maxInterval = 5 * 60 * 1000;
-        const interval = maxInterval - (tension * (maxInterval - minInterval));
+        // Base tension scaling
+        let interval = this.config.maxIntervalMs - (tension * (this.config.maxIntervalMs - this.config.minIntervalMs));
+
+        // Momentum factor: stay fast after success
+        const timeSinceSuccess = Date.now() - this._lastSuccessAt;
+        if (timeSinceSuccess < this.config.momentumWindowMs) {
+            interval = Math.min(interval, 10 * 1000);
+        }
+
+        // Work-pending factor: speed up if goals are waiting
+        const hasPendingGoals = this.max?.goals?.getNext(this.max?.drive) != null;
+        if (hasPendingGoals) {
+            interval = Math.min(interval, 15 * 1000);
+        }
 
         this._timer = setTimeout(() => this._tick().catch(err => console.error('[Heartbeat] tick error:', err.message)), interval);
     }
@@ -72,15 +76,17 @@ export class Heartbeat extends EventEmitter {
         this.stats.lastRun = new Date().toISOString();
 
         try {
-            await this._runCycle();
-            this._failures = 0;
+            const executed = await this._runCycle();
+            if (executed) {
+                this._lastSuccessAt = Date.now();
+                this._failures = 0;
+            }
         } catch (err) {
             this._failures++;
             this.stats.failures++;
-            console.error(`[Heartbeat] ❌ Cycle error (${this._failures}/${this.config.maxConsecutiveFailures}):`, err.message);
+            console.error(`[Heartbeat] âŒ Cycle error (${this._failures}/${this.config.maxConsecutiveFailures}):`, err.message);
 
             if (this._failures >= this.config.maxConsecutiveFailures) {
-                console.error('[Heartbeat] Too many failures — stopping');
                 this.stop();
                 return;
             }
@@ -91,48 +97,43 @@ export class Heartbeat extends EventEmitter {
     }
 
     async _runCycle() {
-        // ── Don't compete with active chat for the brain ──────────────────
-        // If the user is mid-conversation, skip this background cycle entirely.
-        // Prevents AgentLoop brain calls from timing out and interrupting input.
         if (this.max?._chatBusy) {
-            console.log(`[Heartbeat] 💬 Chat active — skipping background cycle`);
-            return;
+            return false;
         }
 
         const drive = this.max?.drive;
+        drive?.onIdleTick();
         const driveStatus = drive?.getStatus?.();
 
-        // ── AgentLoop: run when tension is high OR goals are waiting ─────
-        // Tension > 40% = urgency signal. Pending goals = always worth running.
+        // â”€â”€ AgentLoop: run when tension is high OR goals are waiting â”€â”€â”€â”€â”€
         const tensionHigh     = driveStatus && driveStatus.tension > 0.4;
         const hasPendingGoals = this.max?.goals?.getNext(this.max?.drive) != null;
 
         if ((tensionHigh || hasPendingGoals) && this.max?.agentLoop) {
-            console.log(`[Heartbeat] ⚡ ${hasPendingGoals ? 'Goals pending' : `Tension ${(driveStatus.tension * 100).toFixed(0)}%`} — running AgentLoop`);
+            console.log(`[Heartbeat] âš¡ ${hasPendingGoals ? 'Goals pending' : `Tension ${(driveStatus.tension * 100).toFixed(0)}%`} â€” running AgentLoop`);
             try {
                 const result = await this.max.agentLoop.runCycle();
                 if (result) {
                     this.stats.tasksExecuted++;
                     this.stats.lastTask = `goal:${result.goal}`;
+                    return true;
                 }
             } catch (err) {
                 console.error('[Heartbeat] AgentLoop error:', err.message);
             }
-            return; // AgentLoop ran — skip curiosity this tick
         }
 
-        // ── Otherwise run a curiosity task ────────────────────────────────
+        // â”€â”€ Otherwise run a curiosity task â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         const curiosityTask = this.max?.curiosity?.getNextTask?.();
 
         if (curiosityTask) {
-            console.log(`[Heartbeat] 🔍 Curiosity task: ${curiosityTask.label}`);
+            console.log(`[Heartbeat] ðŸ” Curiosity task: ${curiosityTask.label}`);
             this.stats.lastTask = curiosityTask.label;
             this.stats.tasksExecuted++;
 
-            // NOTE: intentionally NOT calling drive.onTaskExecuted() here.
-            // Curiosity is background enrichment, not real work. If we reset
-            // tension on every curiosity tick it never reaches 40% and AgentLoop
-            // never fires. Tension should only drop when AgentLoop does real work.
+            // NOTE: Intentionally NOT calling drive.onTaskExecuted() for curiosity.
+            // Curiosity is background enrichment, not primary goal work. 
+            // We want tension to build until a real Goal is executed.
             this.emit('task', curiosityTask);
 
             if (this.max?.brain?._ready && curiosityTask.prompt) {
@@ -143,6 +144,14 @@ export class Heartbeat extends EventEmitter {
                         tier: 'fast'
                     });
                     const result = resultObj.text;
+                    
+                    // Pipeline: Curiosity -> KnowledgeBase (full text)
+                    await this.max?.kb?.remember?.(
+                        `## Curiosity Exploration: ${curiosityTask.label}\n\n${result}`,
+                        { source: 'curiosity_engine', topic: curiosityTask.label }
+                    );
+
+                    // Also store a short summary in vector memory
                     await this.max?.memory?.remember?.(
                         `Curiosity: "${curiosityTask.label}": ${result.slice(0, 200)}`,
                         {},
@@ -150,42 +159,35 @@ export class Heartbeat extends EventEmitter {
                     );
                     this.emit('insight', {
                         source: 'curiosity',
-                        label:  `🔍 Explored: ${curiosityTask.label}`,
+                        label:  `ðŸ” Explored: ${curiosityTask.label}`,
                         result: typeof result === 'string' ? result : JSON.stringify(result)
                     });
 
-                    // ── Curiosity → Goal pipeline ─────────────────────────
-                    // If the insight surfaces something actionable, convert it
-                    // to a GoalEngine goal so MAX actively investigates it.
+                    // Curiosity â†’ Goal pipeline
                     if (this.max?.goals && this.max.curiosity?.signalsGoal?.(result)) {
                         const goalTitle = `Investigate: ${curiosityTask.label}`;
                         const alreadyQueued = this.max.goals.listActive()
-                            .some(g => g.title.toLowerCase().includes(
-                                curiosityTask.label.toLowerCase().slice(0, 25)
-                            ));
+                            .some(g => g.title.toLowerCase().includes(curiosityTask.label.toLowerCase().slice(0, 25)));
                         if (!alreadyQueued) {
                             this.max.goals.addGoal({
                                 title:       goalTitle,
-                                description: `Curiosity surfaced this: ${result.slice(0, 200)}`,
+                                description: `Curiosity surfaced: ${result.slice(0, 200)}`,
                                 type:        'research',
                                 priority:    0.55,
                                 source:      'curiosity'
                             });
-                            console.log(`[Heartbeat] 🎯 Curiosity → goal: "${goalTitle}"`);
+                            console.log(`[Heartbeat] ðŸŽ¯ Curiosity â†’ goal: "${goalTitle}"`);
                         }
                     }
-
+                    return true;
                 } catch (err) {
                     console.error('[Heartbeat] Brain error during curiosity task:', err.message);
                 }
             }
         } else {
-            drive?.onIdleTick();
             this.emit('idle');
 
-            // ── Auto-generate goals — always if queue is empty, else 20% chance ──
-            // Old: 10% random chance on idle only = goals almost never generated.
-            // New: guaranteed generation when queue is empty so MAX always has work.
+            // Goal generation & background cycles
             if (this.max?.goals) {
                 const hasGoals = this.max.goals.getNext() != null;
                 if (!hasGoals || Math.random() < 0.20) {
@@ -195,23 +197,26 @@ export class Heartbeat extends EventEmitter {
                 }
             }
 
-            // ── Proactive surfacing (~15% of idle ticks) ──
             if (Math.random() < 0.15) {
                 this._proactiveSurface().catch(() => {});
             }
 
-            // ── Occasional Dreaming (~5% of idle ticks) ──
             if (this.max?.reflection && Math.random() < 0.05) {
                 this.max.reflection.dream(this.max.kb).catch(() => {});
             }
+
+            if (this.max?.soma?.available && this.max?.goals && Math.random() < 0.20) {
+                this.max.soma.syncCuriosityGoals(this.max.goals).catch(() => {});
+            }
         }
+        return false;
     }
 
-    // ─── Proactive surfacing — volunteer important signals during idle ─────
+    // â”€â”€â”€ Proactive surfacing â€” volunteer important signals during idle â”€â”€â”€â”€â”€
     async _proactiveSurface() {
         const insights = [];
 
-        // 1. Stale goals — goals that haven't been touched in 7+ days
+        // 1. Stale goals â€” goals that haven't been touched in 7+ days
         const goals  = this.max.goals?.listActive() || [];
         const staleMs = 7 * 24 * 60 * 60 * 1000;
         const stale  = goals.filter(g => Date.now() - (g.updatedAt || g.createdAt) > staleMs);
@@ -233,22 +238,22 @@ export class Heartbeat extends EventEmitter {
         if (stats && stats.total >= 10) {
             const rate = stats.success / stats.total;
             if (rate < 0.4) {
-                insights.push(`Low action success rate: ${(rate * 100).toFixed(0)}% across ${stats.total} tracked actions — consider /reflect`);
+                insights.push(`Low action success rate: ${(rate * 100).toFixed(0)}% across ${stats.total} tracked actions â€” consider /reflect`);
             }
         }
 
         // 4. Memory size growing large
         const memStats = this.max.memory?.getStats?.();
         if (memStats && memStats.totalMemories > 500) {
-            insights.push(`Memory at ${memStats.totalMemories} entries — run /reflect to consolidate`);
+            insights.push(`Memory at ${memStats.totalMemories} entries â€” run /reflect to consolidate`);
         }
 
         if (insights.length === 0) return;
 
         this.emit('insight', {
             source: 'proactive',
-            label:  '📊 Things worth your attention',
-            result: '• ' + insights.join('\n• ')
+            label:  'ðŸ“Š Things worth your attention',
+            result: 'â€¢ ' + insights.join('\nâ€¢ ')
         });
     }
 
@@ -261,3 +266,4 @@ export class Heartbeat extends EventEmitter {
         };
     }
 }
+

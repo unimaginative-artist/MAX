@@ -6,23 +6,25 @@
 
 export class SomaBridge {
     constructor(config = {}) {
-        // Only activate if SOMA_URL is explicitly set — never auto-connect
-        this.baseUrl     = config.url || process.env.SOMA_URL || '';
+        // Default to localhost:3001 — degrades silently if SOMA isn't running
+        this.baseUrl     = config.url || process.env.SOMA_URL || 'http://localhost:3001';
         this._ready      = false;
         this._available  = false;
         this._lastCheck  = 0;
         this._checkEvery = 60_000;  // re-probe every 60s if it was down
         this.stats       = { calls: 0, hits: 0, errors: 0, avgLatencyMs: 0 };
         this._offlineLogged = false;  // suppress repeated offline warnings
+
+        // ── Signal bridge (WebSocket to MessageBroker network port) ──────
+        this._signalWs       = null;
+        this._signalConnected = false;
+        this._signalHandlers  = new Map(); // topic → Set<Function>
+        this._signalStopped   = false;
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
     async initialize() {
-        if (!this.baseUrl) {
-            // Silent when SOMA_URL not configured — MAX runs fully standalone
-            return this;
-        }
         await this._probe();
         return this;
     }
@@ -43,13 +45,10 @@ export class SomaBridge {
         this._lastCheck = Date.now();
 
         if (this._available) {
-            // Log every time SOMA comes (back) online
-            console.log('[SomaBridge] ✅ SOMA connected — using QuadBrain');
+            console.log('[SomaBridge] ✅ SOMA online — QuadBrain active');
             this._offlineLogged = false;
-        } else if (!this._offlineLogged) {
-            // Log only once per offline period
-            console.log('[SomaBridge] ⚠️  SOMA offline — using local brain');
-            this._offlineLogged = true;
+        } else {
+            this._offlineLogged = true;  // suppress repeated checks from logging
         }
 
         return this._available;
@@ -201,6 +200,22 @@ export class SomaBridge {
         }
     }
 
+    /** Fetch SOMA's active goals list. Returns { goals, count } or null if offline. */
+    async getSomaGoals() {
+        if (!this._available) return null;
+        try {
+            const { default: fetch } = await import('node-fetch');
+            const r = await Promise.race([
+                fetch(`${this.baseUrl}/api/goals/active`),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))
+            ]);
+            if (!r.ok) return null;
+            return await r.json();
+        } catch {
+            return null;
+        }
+    }
+
     // ── Tool Proxy ───────────────────────────────────────────────────────
 
     /**
@@ -272,6 +287,26 @@ export class SomaBridge {
     }
 
     /**
+     * Notify SOMA that MAX modified one of its files.
+     * SOMA logs the event and can trigger hot-reload / restart as needed.
+     * Fire-and-forget — never blocks the build cycle.
+     */
+    async notifyFileChanged(filePath) {
+        if (!this._available) return;
+        try {
+            const { default: fetch } = await import('node-fetch');
+            await Promise.race([
+                fetch(`${this.baseUrl}/api/soma/file-changed`, {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body:    JSON.stringify({ path: filePath, source: 'MAX', ts: Date.now() })
+                }),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000))
+            ]);
+        } catch { /* non-blocking */ }
+    }
+
+    /**
      * Section 1: Hot-patch a SOMA module.
      * Allows MAX to push code improvements directly to the SOMA kernel.
      */
@@ -281,6 +316,45 @@ export class SomaBridge {
         console.log(`[SomaBridge] 🚀 Deploying hot-patch to SOMA: ${moduleName}`);
         // This is where Section 14 (Seal of SOMA) binding would happen
         return { success: true, message: "Patch staged for SOMA kernel arbitration." };
+    }
+
+    // ── SOMA → MAX curiosity goal sync ───────────────────────────────────
+
+    /**
+     * Pull pending curiosity goals from SOMA and inject them into MAX's GoalEngine.
+     * Called periodically so MAX stays aligned with what SOMA is curious about.
+     * Returns number of goals injected.
+     */
+    async syncCuriosityGoals(maxGoals) {
+        if (!this._available || !maxGoals) return 0;
+        try {
+            const { default: fetch } = await import('node-fetch');
+            const r = await Promise.race([
+                fetch(`${this.baseUrl}/api/goals?source=curiosity&limit=5`),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))
+            ]);
+            if (!r.ok) return 0;
+            const data  = await r.json();
+            const goals = Array.isArray(data) ? data : (data.goals || data.items || []);
+            let injected = 0;
+            for (const g of goals.slice(0, 3)) {
+                if (!g?.title) continue;
+                maxGoals.addGoal({
+                    title:       `[SOMA] ${g.title}`.slice(0, 120),
+                    description: (g.description || '').slice(0, 400),
+                    type:        g.type || 'research',
+                    source:      'soma_curiosity',
+                    priority:    Math.min(0.7, g.priority || 0.4)
+                });
+                injected++;
+            }
+            if (injected > 0) {
+                console.log(`[SomaBridge] 🎯 Synced ${injected} curiosity goal(s) from SOMA`);
+            }
+            return injected;
+        } catch {
+            return 0;
+        }
     }
 
     // ── Status ────────────────────────────────────────────────────────────

@@ -19,6 +19,9 @@ tools/generated/
 .DS_Store
 Thumbs.db
 
+# Electron build output
+dist-electron/
+
 # Editor
 .vscode/settings.json
 .idea/

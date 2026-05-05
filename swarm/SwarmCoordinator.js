@@ -7,6 +7,7 @@
 
 import { EventEmitter } from 'events';
 import { commandPolicy } from '../core/CommandPolicyEngine.js';
+import { SwarmArbiter }    from './SwarmArbiter.js';
 
 export class SwarmCoordinator extends EventEmitter {
     constructor(brain, toolRegistry, config = {}) {
@@ -96,8 +97,15 @@ export class SwarmCoordinator extends EventEmitter {
         subtask.status = 'running';
         subtask.startedAt = Date.now();
 
-        console.log(`  [Swarm] ▶ ${subtask.id}: ${subtask.prompt?.slice(0, 60)}...`);
-        this.emit('subtask:start', { jobId: job.id, subtaskId: subtask.id });
+        // Assign persona if not present
+        if (!subtask.persona) {
+            const personaKeys = Object.keys(SwarmArbiter.getPersona(''));
+            subtask.persona = SwarmArbiter.getPersona(subtask.id);
+        }
+        const persona = subtask.persona;
+
+        console.log(`  [Swarm] ▶ ${subtask.id} (${persona.role}): ${subtask.prompt?.slice(0, 60)}...`);
+        this.emit('subtask:start', { jobId: job.id, subtaskId: subtask.id, persona: persona.role });
 
         try {
             // Execute any tool calls first
@@ -136,10 +144,12 @@ export class SwarmCoordinator extends EventEmitter {
             const resultObj = await this.brain.think(
                 subtask.prompt + context,
                 {
-                    systemPrompt: `You are a specialized worker in MAX's engineering swarm.
+                    systemPrompt: `You are the ${persona.role} in MAX's engineering swarm.
 Job: "${job.name}"
 Your subtask: ${subtask.id}
-Focus ONLY on your assigned subtask. 
+Focus: ${persona.focus}
+Instruction: ${persona.instruction}
+
 If you find something critical other workers should know, include a JSON block: DISCOVERY: {"key": "value"}`,
                     temperature: 0.5,
                     maxTokens: 1024
@@ -252,11 +262,42 @@ Return ONLY the JSON array. No explanation.`;
         }
     }
 
-    getStatus() {
+    /**
+     * ─── ADVERSARIAL PROTOCOL ───
+     * Pits two agents against each other: a Builder and a Breaker.
+     * The Builder implements, the Breaker attacks, then the Builder refines.
+     */
+    async adversarialRun(task) {
+        console.log(`\n  [Swarm] ⚔️  Adversarial Protocol Initiated: "${task.title}"`);
+        
+        const builder = SwarmArbiter.getPersona('Architect');
+        const breaker = SwarmArbiter.getPersona('Security');
+
+        // Step 1: Builder proposes implementation
+        console.log(`  [Swarm] 👷 Builder (Architect) is drafting implementation...`);
+        const buildRes = await this.brain.think(
+            `Task: ${task.title}\nDescription: ${task.description}\n\nDraft a complete, production-grade implementation.`,
+            { systemPrompt: builder.instruction, tier: 'smart' }
+        );
+
+        // Step 2: Breaker attacks implementation
+        console.log(`  [Swarm] 🕵️‍♂️ Breaker (Security) is red-teaming the proposal...`);
+        const attackRes = await this.brain.think(
+            `Review this implementation for security holes, edge cases, and logic bugs.\n\nPROPOSAL:\n${buildRes.text}`,
+            { systemPrompt: breaker.instruction, tier: 'smart' }
+        );
+
+        // Step 3: Builder refines based on attack
+        console.log(`  [Swarm] 🛠️  Builder is hardening code based on Breaker's findings...`);
+        const finalRes = await this.brain.think(
+            `Hardened implementation based on security review.\n\nORIGINAL:\n${buildRes.text}\n\nSECURITY REVIEW:\n${attackRes.text}\n\nApply all necessary fixes and return the definitive, secure version.`,
+            { systemPrompt: builder.instruction, tier: 'smart' }
+        );
+
+        console.log(`  [Swarm] ✅ Adversarial Protocol Complete. Code is hardened.`);
         return {
-            activeJobs:   this.activeJobs.size,
-            completedJobs: this.jobHistory.length,
-            config:        this.config
+            synthesis: finalRes.text,
+            auditTrail: attackRes.text
         };
     }
 }

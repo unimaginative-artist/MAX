@@ -61,21 +61,36 @@ export const FileTools = {
             };
         },
 
-        async write({ filePath, content, append = false }) {
+        async write({ filePath, content, append = false, aegisOverride = false }) {
             const dir = path.dirname(filePath);
             await fs.mkdir(dir, { recursive: true });
+
+            // ── AEGIS Guard: block full-rewrites that silently delete routes/functions ──
+            // Only runs on non-append writes to existing files with >100 lines.
+            // Use replace or patch for surgical edits on large files instead.
+            if (!append && !aegisOverride) {
+                const original = await fs.readFile(filePath, 'utf8').catch(() => null);
+                if (original !== null && original.split('\n').length >= 100) {
+                    const before = _aegisExtractSignatures(original);
+                    const after  = _aegisExtractSignatures(content);
+                    const missing = [...before].filter(sig => !after.has(sig));
+                    if (missing.length > 0) {
+                        return {
+                            success: false,
+                            path: filePath,
+                            error: `[AEGIS] Write blocked — would delete ${missing.length} signature(s):\n` +
+                                   missing.map(s => `  • ${s}`).join('\n') +
+                                   `\n\nUse file:replace or file:patch for surgical edits on large files. ` +
+                                   `Pass aegisOverride:true only if deletion is intentional.`
+                        };
+                    }
+                }
+            }
+
             if (append) {
                 await fs.appendFile(filePath, content, 'utf8');
             } else {
                 await fs.writeFile(filePath, content, 'utf8');
-            }
-
-            // Auto-verify syntax — catch broken files immediately
-            const syntaxError = verifySyntax(filePath, content);
-            if (syntaxError) {
-                // Revert the broken write
-                await fs.unlink(filePath).catch(() => {});
-                return { success: false, path: filePath, error: `Syntax error — file NOT written: ${syntaxError}` };
             }
 
             return { success: true, path: filePath, bytes: Buffer.byteLength(content) };
@@ -91,11 +106,6 @@ export const FileTools = {
                     ? content.split(oldText).join(newText)
                     : content.replace(oldText, newText);
                 await fs.writeFile(filePath, updated, 'utf8');
-                const syntaxError = verifySyntax(filePath, updated);
-                if (syntaxError) {
-                    await fs.writeFile(filePath, content, 'utf8');  // revert
-                    return { success: false, path: filePath, error: `Syntax error after replace — reverted: ${syntaxError}` };
-                }
                 return {
                     success: true,
                     path: filePath,
@@ -105,8 +115,6 @@ export const FileTools = {
             }
 
             // Fuzzy fallback: normalize line endings + trailing whitespace on each line
-            // This catches the common case where the LLM generated CRLF vs LF or
-            // stripped trailing spaces from a line it read.
             const normalize = (s) => s.replace(/\r\n/g, '\n').replace(/[ \t]+\n/g, '\n');
             const normContent  = normalize(content);
             const normOldText  = normalize(oldText);
@@ -114,11 +122,6 @@ export const FileTools = {
             if (normContent.includes(normOldText)) {
                 const updated = normContent.replace(normOldText, normalize(newText));
                 await fs.writeFile(filePath, updated, 'utf8');
-                const syntaxError = verifySyntax(filePath, updated);
-                if (syntaxError) {
-                    await fs.writeFile(filePath, content, 'utf8');  // revert
-                    return { success: false, path: filePath, error: `Syntax error after replace — reverted: ${syntaxError}` };
-                }
                 return {
                     success: true,
                     path: filePath,
@@ -144,6 +147,35 @@ export const FileTools = {
                 success: false,
                 error: `Target text not found in ${filePath}. Check that whitespace/indentation matches exactly.${hint}`
             };
+        },
+
+        async patch({ filePath, blocks }) {
+            // Blocks: Array of { find: string, replace: string }
+            let content = await fs.readFile(filePath, 'utf8').catch(() => null);
+            if (content === null) return { success: false, error: `File not found: ${filePath}` };
+
+            let changes = 0;
+            const applied = [];
+            
+            for (const block of blocks) {
+                if (content.includes(block.find)) {
+                    content = content.replace(block.find, block.replace);
+                    changes++;
+                    applied.push(block.find.split('\n')[0].trim());
+                }
+            }
+
+            if (changes > 0) {
+                await fs.writeFile(filePath, content, 'utf8');
+                return { 
+                    success: true, 
+                    path: filePath, 
+                    patchesApplied: changes,
+                    blocks: applied 
+                };
+            }
+
+            return { success: false, error: 'No blocks matched. Check your search context.' };
         },
 
         async list({ dir = '.', pattern = null, recursive = false }) {
@@ -245,12 +277,131 @@ export const FileTools = {
             return { success: true, pattern, matches: results, total: results.length };
         },
 
+        // ── patch ─────────────────────────────────────────────────────────
+        // Anchor-based surgical editing — designed for LLM use.
+        // Much easier to generate correctly than unified diff.
+        //
+        // Each hunk specifies:
+        //   anchor    — substring to locate the insertion point
+        //   position  — 'after' (default) | 'before' | 'replace' | 'append'
+        //   content   — new code to insert / replacement text
+        //   range     — for 'replace': lines to remove starting at anchor (default 1)
+        //
+        // Example:
+        //   TOOL:file:patch:{"filePath":"extended.js","hunks":[
+        //     {"anchor":"import { DiscoverySwarm }","position":"after",
+        //      "content":"import { ProactiveCouncil } from './ProactiveCouncil.js';"}
+        //   ]}
+        async patch({ filePath, hunks = [], createIfMissing = false }) {
+            if (!Array.isArray(hunks) || hunks.length === 0) {
+                return { success: false, error: 'hunks must be a non-empty array' };
+            }
+
+            let content = await fs.readFile(filePath, 'utf8').catch(async (err) => {
+                if (err.code === 'ENOENT' && createIfMissing) {
+                    await fs.mkdir(path.dirname(filePath), { recursive: true });
+                    return '';
+                }
+                return null;
+            });
+            if (content === null) return { success: false, error: `File not found: ${filePath}` };
+
+            let lines        = content.split('\n');
+            const hunkResults = [];
+
+            for (let h = 0; h < hunks.length; h++) {
+                const { anchor, position = 'after', content: newContent = '', range = 1 } = hunks[h];
+
+                // append — no anchor needed
+                if (position === 'append') {
+                    lines.push(...(newContent === '' ? [''] : newContent.split('\n')));
+                    hunkResults.push({ hunk: h, applied: true, position: 'append' });
+                    continue;
+                }
+
+                if (!anchor) {
+                    hunkResults.push({ hunk: h, applied: false, error: 'anchor required for non-append positions' });
+                    continue;
+                }
+
+                // Find anchor — exact substring first, then trimmed
+                let anchorIdx = lines.findIndex(l => l.includes(anchor));
+                if (anchorIdx === -1) anchorIdx = lines.findIndex(l => l.trim() === anchor.trim());
+
+                if (anchorIdx === -1) {
+                    hunkResults.push({
+                        hunk: h, applied: false,
+                        error: `Anchor not found: "${anchor.slice(0, 80)}". Use file:grep to locate exact content.`,
+                    });
+                    continue;
+                }
+
+                const newLines = newContent === '' ? [] : newContent.split('\n');
+
+                if (position === 'after')        lines.splice(anchorIdx + 1, 0, ...newLines);
+                else if (position === 'before')  lines.splice(anchorIdx, 0, ...newLines);
+                else if (position === 'replace') lines.splice(anchorIdx, Math.max(1, range), ...newLines);
+                else {
+                    hunkResults.push({ hunk: h, applied: false, error: `Unknown position: ${position}` });
+                    continue;
+                }
+
+                hunkResults.push({ hunk: h, applied: true, anchorLine: anchorIdx + 1, position });
+            }
+
+            const applied = hunkResults.filter(r => r.applied).length;
+            const failed  = hunkResults.filter(r => !r.applied).length;
+
+            const updated = lines.join('\n');
+            await fs.writeFile(filePath, updated, 'utf8');
+
+            const syntaxError = verifySyntax(filePath, updated);
+            if (syntaxError) {
+                await fs.writeFile(filePath, content, 'utf8');  // revert
+                return { success: false, path: filePath, error: `Syntax error after patch — reverted: ${syntaxError}`, hunkResults };
+            }
+
+            return {
+                success:      failed === 0,
+                path:         filePath,
+                totalLines:   lines.length,
+                hunksApplied: applied,
+                hunksFailed:  failed,
+                hunksTotal:   hunks.length,
+                hunkResults,
+                warning:      failed > 0 ? `${failed} hunk(s) failed — file written with successful hunks only` : undefined,
+            };
+        },
+
         async delete({ filePath }) {
             await fs.unlink(filePath);
             return { success: true, deleted: filePath };
         }
     }
 };
+
+// ─── AEGIS: extract structural signatures (routes, functions, classes, exports) ──
+// Used to detect when a full-rewrite would silently delete load-bearing code.
+function _aegisExtractSignatures(content) {
+    const sigs = new Set();
+    // HTTP route registrations
+    for (const m of content.matchAll(/\.\s*(get|post|put|patch|delete|use)\s*\(\s*['"`]([^'"`]+)['"`]/gi)) {
+        sigs.add(`route:${m[1].toUpperCase()}:${m[2]}`);
+    }
+    // Named function declarations
+    for (const m of content.matchAll(/(?:async\s+)?function\s+(\w+)\s*\(/g)) {
+        sigs.add(`fn:${m[1]}`);
+    }
+    // Class declarations
+    for (const m of content.matchAll(/\bclass\s+(\w+)/g)) {
+        sigs.add(`class:${m[1]}`);
+    }
+    // Top-level exports
+    for (const m of content.matchAll(/^export\s+(?:default\s+)?(?:async\s+function|function|class|const)\s+(\w+)/gm)) {
+        sigs.add(`export:${m[1]}`);
+    }
+    return sigs;
+}
 
 // ─── Syntax verifier — called after write/replace ─────────────────────────
 // Returns null if OK, or an error string describing the problem.

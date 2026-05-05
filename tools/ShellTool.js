@@ -14,36 +14,76 @@
 //   which  — check if a program is installed
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { exec, spawn } from 'child_process';
-import { promisify } from 'util';
+import { exec, spawn }  from 'child_process';
+import { promisify }    from 'util';
+import fs               from 'fs/promises';
+import path             from 'path';
+import { VirtualShell } from '../core/VirtualShell.js';
 
 const execAsync = promisify(exec);
 
-// ─── Persistent state ─────────────────────────────────────────────────────
-let _cwd   = process.cwd();          // survives across calls in the same session
+// ── Persistent state ──
 let _procs = new Map();              // name → { pid, proc, command, started, log }
-let _env   = { ...process.env };     // survives across calls
 
-export function getCwd() { return _cwd; }
-export function getEnv() { return _env; }
+// The true persistent shell
+const vShell = new VirtualShell();
+vShell.start();
 
-// ─── Blocked patterns — only truly dangerous / irreversible ops ───────────
-// Deliberately narrow. python -c, node -e, curl, etc. are legitimate dev tools.
+// ── Stream output to terminal for live viewing ──
+vShell.on('data', (data) => {
+    const lines = data.split(/\r?\n/);
+    for (const l of lines) {
+        if (!l) continue;
+        if (l.includes('__EXIT_CODE_') || l.includes('__MAX_SHELL_DONE_')) continue;
+        // Filter cmd.exe prompt echoes like "C:\Users\...>"
+        if (/^[A-Za-z]:[\\\/].*>/.test(l.trim())) continue;
+        printShellLine(l);
+    }
+});
+
+vShell.on('data_err', (data) => {
+    const lines = data.split(/\r?\n/);
+    for (const l of lines) {
+        if (l) printShellLine(l, true);
+    }
+});
+
+const PID_FILE = path.join(process.env.USERPROFILE || process.env.HOME || '.', '.max', 'pids.json');
+
+async function _savePids() {
+    try {
+        await fs.mkdir(path.dirname(PID_FILE), { recursive: true });
+        const data = {};
+        for (const [name, p] of _procs) data[name] = { pid: p.pid, command: p.command, started: p.started };
+        await fs.writeFile(PID_FILE, JSON.stringify(data, null, 2));
+    } catch {}
+}
+
+async function _killByPid(pid) {
+    if (process.platform === 'win32') {
+        try { await execAsync(`taskkill /F /T /PID ${pid}`); } catch {}
+    } else {
+        try { process.kill(-pid, 'SIGKILL'); } catch {}
+        try { process.kill(pid,  'SIGKILL'); } catch {}
+    }
+}
+
+// ── Blocked patterns ──
 const BLOCKED_PATTERNS = [
-    /\brm\s+-[a-z]*r[a-z]*f[a-z]*\s+[\/~]/i,   // rm -rf / or rm -rf ~
-    /\brm\s+-[a-z]*f[a-z]*r[a-z]*\s+[\/~]/i,   // rm -fr /
-    /\bformat\s+[a-z]:\b/i,                      // format c:
-    /\bdel\s+\/[fqs]\s+\/[fqs]\s+\/[fqs]\b/i,   // del /f /s /q (recursive delete)
-    /\bmkfs\b/i,                                  // mkfs (format disk)
-    /:\(\)\s*\{.*:\|.*&.*\}/,                    // fork bomb :(){:|:&};:
-    /\bdd\s+if=\/dev\/zero\b/i,                  // dd if=/dev/zero of=disk
-    /\bshutdown\b/i,                             // shutdown
-    /\bhalt\b/i,                                 // halt
-    /\breboot\b/i,                               // reboot
-    /\bpoweroff\b/i,                             // poweroff
-    />\s*\/dev\/sd[a-z]/i,                       // redirect to raw disk
-    /\bcurl\b.*\|\s*(ba)?sh\b/i,                 // curl | bash (remote exec)
-    /\bwget\b.*\|\s*(ba)?sh\b/i,                 // wget | bash
+    /\brm\s+-[a-z]*r[a-z]*f[a-z]*\s+[\/~]/i,
+    /\brm\s+-[a-z]*f[a-z]*r[a-z]*\s+[\/~]/i,
+    /\bformat\s+[a-z]:\b/i,
+    /\bdel\s+\/[fqs]\s+\/[fqs]\s+\/[fqs]\b/i,
+    /\bmkfs\b/i,
+    /:\(\)\s*\{.*:\|.*&.*\}/,
+    /\bdd\s+if=\/dev\/zero\b/i,
+    /\bshutdown\b/i,
+    /\bhalt\b/i,
+    /\breboot\b/i,
+    /\bpoweroff\b/i,
+    />\s*\/dev\/sd[a-z]/i,
+    /\bcurl\b.*\|\s*(ba)?sh\b/i,
+    /\bwget\b.*\|\s*(ba)?sh\b/i,
 ];
 
 function isBlocked(cmd) {
@@ -53,47 +93,6 @@ function isBlocked(cmd) {
     return null;
 }
 
-// ─── Resolve cd from a command — update _cwd and strip the cd prefix ──────
-// Handles: "cd /some/path && npm test" or just "cd /some/path"
-function resolveCd(command) {
-    const cdMatch = command.match(/^\s*cd\s+([^\s&;|]+)/);
-    if (!cdMatch) return { command, cwd: _cwd };
-
-    const target = cdMatch[1].replace(/^["']|["']$/g, '');
-    let newCwd;
-    try {
-        const { resolve, isAbsolute } = await_path_sync();
-        newCwd = isAbsolute(target) ? target : resolve(_cwd, target);
-    } catch {
-        newCwd = target;
-    }
-    _cwd = newCwd;
-
-    // Strip the "cd X && " prefix — the cwd is now set, rest runs there
-    const rest = command.replace(/^\s*cd\s+[^\s&;|]+\s*(?:&&\s*)?/, '').trim();
-    return { command: rest, cwd: newCwd };
-}
-
-// sync path resolution without importing
-function await_path_sync() {
-    const path = { resolve: (...args) => require?.resolve?.(...args) };
-    // Use native resolution
-    try {
-        const pathModule = { resolve: (...parts) => {
-            let result = parts[0];
-            for (let i = 1; i < parts.length; i++) {
-                const p = parts[i];
-                if (p.startsWith('/') || p.match(/^[A-Z]:\\/i)) { result = p; }
-                else { result = result.replace(/\/?$/, '/') + p; }
-            }
-            return result.replace(/\\/g, '/');
-        }, isAbsolute: (p) => p.startsWith('/') || /^[A-Z]:\\/i.test(p) };
-        return pathModule;
-    } catch { return { resolve: (base, rel) => base + '/' + rel, isAbsolute: () => false }; }
-}
-
-// ─── Print shell output to terminal ──────────────────────────────────────
-// This is the "Claude Code" experience — you see commands running live.
 function printShellHeader(command) {
     process.stdout.write(`\n  \x1b[36m▶\x1b[0m  \x1b[1m${command}\x1b[0m\n`);
 }
@@ -106,120 +105,61 @@ function printShellFooter(code, ms) {
     process.stdout.write(`  ${color}└─ exit ${code}\x1b[0m  \x1b[90m(${ms}ms)\x1b[0m\n\n`);
 }
 
-// ─── Exported sync snapshot — for MAX's _buildStateContext() ─────────────
 export function getRunningProcesses() {
     return [..._procs.entries()].map(([name, p]) => ({
-        name, pid: p.pid, command: p.command, started: p.started
+        name, pid: p.pid, command: p.command, started: p.started, cwd: p.cwd,
+        recentLog: p.log.slice(-20)
     }));
 }
 
+export function getProcessLog(name) {
+    return _procs.get(name)?.log || [];
+}
+
+// External broadcast hook — called when a background process emits a line
+// Set by server.js so SSE clients see live process output
+let _logBroadcast = null;
+export function setProcessLogBroadcast(fn) { _logBroadcast = fn; }
+
 export const ShellTool = {
     name: 'shell',
-    description: 'Run shell commands with live terminal output. Supports background processes, persistent CWD, long-running tasks.',
+    description: 'Run shell commands with a stateful Virtual Shell. Keeps working directory and environment variables persistent. Can start/stop background daemons.',
 
     actions: {
-        // ── run — execute a command, stream output live, wait for exit ────
-        async run({ command, cwd, timeoutMs = 120_000 }) {
+        async run({ command, timeoutMs = 120_000 }) {
             const blocked = isBlocked(command);
             if (blocked) return { success: false, error: blocked };
 
-            // Handle cd: update persistent cwd
-            let runCwd = cwd || _cwd;
-            const cdMatch = command.match(/^\s*cd\s+([^\s&;|"']+|"[^"]+"|'[^']+')(?:\s*&&\s*(.+))?$/);
-            if (cdMatch) {
-                const target = cdMatch[1].replace(/^["']|["']$/g, '');
-                const path = await import('path');
-                _cwd = path.default.resolve(_cwd, target);
-                if (!cdMatch[2]) {
-                    return { success: true, command, cwd: _cwd, stdout: '', stderr: '', note: `Working directory → ${_cwd}` };
-                }
-                command = cdMatch[2].trim();
-                runCwd  = _cwd;
-            }
-
-            // Handle export/set: update persistent env
-            const envMatch = command.match(/^\s*(?:export|set)\s+([a-zA-Z_][a-zA-Z0-9_]*)=([^&;|"']+|"[^"]+"|'[^']+')(?:\s*&&\s*(.+))?$/);
-            if (envMatch) {
-                const key = envMatch[1];
-                const val = envMatch[2].replace(/^["']|["']$/g, '');
-                _env[key] = val;
-                if (!envMatch[3]) {
-                    return { success: true, command, env: { [key]: val }, note: `Env set: ${key}=${val}` };
-                }
-                command = envMatch[3].trim();
-            }
-
             printShellHeader(command);
+            const start = Date.now();
 
-            const start     = Date.now();
-            const stdoutLines = [];
-            const stderrLines = [];
-
-            return new Promise((resolve) => {
-                const isWin = process.platform === 'win32';
-                const proc  = spawn(
-                    isWin ? 'cmd.exe' : 'bash',
-                    isWin ? ['/c', command] : ['-c', command],
-                    { cwd: runCwd, env: _env }
-                );
-
-                const timer = setTimeout(() => {
-                    proc.kill();
-                    printShellLine(`⚠  timed out after ${timeoutMs / 1000}s`, true);
-                    resolve({
-                        success: false, command, cwd: runCwd,
-                        stdout: stdoutLines.join('\n'),
-                        stderr: stderrLines.join('\n'),
-                        error:  `Timed out after ${timeoutMs}ms`
-                    });
-                }, timeoutMs);
-
-                proc.stdout.on('data', (chunk) => {
-                    const lines = chunk.toString().split(/\r?\n/);
-                    for (const l of lines) {
-                        if (l) { printShellLine(l); stdoutLines.push(l); }
-                    }
-                });
-
-                proc.stderr.on('data', (chunk) => {
-                    const lines = chunk.toString().split(/\r?\n/);
-                    for (const l of lines) {
-                        if (l) { printShellLine(l, true); stderrLines.push(l); }
-                    }
-                });
-
-                proc.on('close', (code) => {
-                    clearTimeout(timer);
-                    const ms = Date.now() - start;
-                    printShellFooter(code ?? 0, ms);
-                    resolve({
-                        success:  (code ?? 0) === 0,
-                        command,
-                        cwd:      runCwd,
-                        code:     code ?? 0,
-                        stdout:   stdoutLines.join('\n').slice(0, 8000),
-                        stderr:   stderrLines.join('\n').slice(0, 2000),
-                        ms
-                    });
-                });
-
-                proc.on('error', (err) => {
-                    clearTimeout(timer);
-                    printShellLine(`Error: ${err.message}`, true);
-                    resolve({ success: false, command, error: err.message });
-                });
-            });
+            try {
+                const res = await vShell.run(command, timeoutMs);
+                const ms = Date.now() - start;
+                printShellFooter(res.code, ms);
+                
+                return {
+                    success: res.success,
+                    command,
+                    code: res.code,
+                    stdout: res.stdout.slice(0, 8000),
+                    stderr: res.stderr.slice(0, 2000),
+                    ms
+                };
+            } catch (err) {
+                printShellLine(`Error: ${err.message}`, true);
+                printShellFooter(-1, Date.now() - start);
+                return { success: false, command, error: err.message };
+            }
         },
 
-        // ── start — spawn a background process (server, watcher, dev process) ──
         async start({ command, name, cwd }) {
             const blocked = isBlocked(command);
             if (blocked) return { success: false, error: blocked };
 
             const label   = name || command.split(' ')[0];
-            const runCwd  = cwd || _cwd;
+            const runCwd  = cwd || process.cwd();
 
-            // Kill existing process with same name
             if (_procs.has(label)) {
                 const existing = _procs.get(label);
                 try { existing.proc.kill(); } catch {}
@@ -240,76 +180,82 @@ export const ShellTool = {
                 const lines = d.toString().split(/\r?\n/).filter(Boolean);
                 log.push(...lines);
                 if (log.length > 200) log.splice(0, log.length - 200);
-                // Print to terminal so user sees output from background process
-                for (const l of lines) process.stdout.write(`  \x1b[35m[${label}]\x1b[0m ${l}\n`);
+                for (const l of lines) {
+                    process.stdout.write(`  \x1b[35m[${label}]\x1b[0m ${l}\n`);
+                    _logBroadcast?.({ process: label, line: l, stream: 'stdout', ts: Date.now() });
+                }
             });
             proc.stderr.on('data', (d) => {
                 const lines = d.toString().split(/\r?\n/).filter(Boolean);
                 log.push(...lines);
                 if (log.length > 200) log.splice(0, log.length - 200);
-                for (const l of lines) process.stdout.write(`  \x1b[31m[${label}]\x1b[0m ${l}\n`);
+                for (const l of lines) {
+                    process.stdout.write(`  \x1b[31m[${label}]\x1b[0m ${l}\n`);
+                    _logBroadcast?.({ process: label, line: l, stream: 'stderr', ts: Date.now() });
+                }
             });
             proc.on('exit', (code) => {
                 process.stdout.write(`  \x1b[35m[${label}]\x1b[0m process exited (${code})\n`);
+                _logBroadcast?.({ process: label, line: `process exited (${code})`, stream: 'system', exitCode: code, ts: Date.now() });
                 _procs.delete(label);
+                _savePids();
             });
             proc.on('error', (err) => {
                 process.stdout.write(`  \x1b[31m[${label}]\x1b[0m error: ${err.message}\n`);
                 _procs.delete(label);
+                _savePids();
             });
 
             _procs.set(label, { pid: proc.pid, proc, command, started, cwd: runCwd, log });
+            _savePids();
 
             process.stdout.write(`\n  \x1b[35m▶\x1b[0m  \x1b[1m${label}\x1b[0m started (pid ${proc.pid})\n\n`);
             return { success: true, name: label, pid: proc.pid, command, cwd: runCwd };
         },
 
-        // ── stop — kill a named background process ────────────────────────
         async stop({ name }) {
-            if (!_procs.has(name)) {
-                const running = [..._procs.keys()];
-                return { success: false, error: `No process named "${name}". Running: ${running.join(', ') || 'none'}` };
+            let pid = null;
+
+            if (_procs.has(name)) {
+                const entry = _procs.get(name);
+                pid = entry.pid;
+                try { entry.proc.kill('SIGTERM'); } catch {}
+                _procs.delete(name);
+            } else {
+                try {
+                    const saved = JSON.parse(await fs.readFile(PID_FILE, 'utf8'));
+                    if (saved[name]) pid = saved[name].pid;
+                } catch {}
+                if (!pid) {
+                    const running = [..._procs.keys()];
+                    return { success: false, error: `No process named "${name}". Running: ${running.join(', ') || 'none'}` };
+                }
             }
-            const entry = _procs.get(name);
-            try {
-                entry.proc.kill('SIGTERM');
-                setTimeout(() => { try { entry.proc.kill('SIGKILL'); } catch {} }, 3000);
-            } catch {}
-            _procs.delete(name);
-            process.stdout.write(`  \x1b[35m[${name}]\x1b[0m stopped\n\n`);
-            return { success: true, stopped: name, pid: entry.pid };
+
+            await _killByPid(pid);
+            _savePids();
+            process.stdout.write(`  \x1b[35m[${name}]\x1b[0m stopped (pid ${pid})\n\n`);
+            return { success: true, stopped: name, pid };
         },
 
-        // ── ps — list running background processes ────────────────────────
         async ps() {
             if (_procs.size === 0) return { success: true, processes: [], count: 0 };
             const list = [..._procs.entries()].map(([name, p]) => ({
-                name,
-                pid:     p.pid,
-                command: p.command,
-                started: p.started,
-                cwd:     p.cwd,
-                lastLog: p.log.slice(-3).join(' | ')
+                name, pid: p.pid, command: p.command, started: p.started, cwd: p.cwd, lastLog: p.log.slice(-3).join(' | ')
             }));
             return { success: true, processes: list, count: list.length };
         },
 
-        // ── cd — change persistent working directory ──────────────────────
         async cd({ path: targetPath }) {
-            const pathModule = await import('path');
-            _cwd = pathModule.default.resolve(_cwd, targetPath);
-            return { success: true, cwd: _cwd };
+            // Because we use a Virtual Shell, we just pass the 'cd' command directly to it!
+            const res = await vShell.run(`cd "${targetPath}"`);
+            return { success: res.success, output: res.stdout, error: res.stderr };
         },
 
-        // ── which — check if a program is installed ───────────────────────
         async which({ program }) {
             const cmd = process.platform === 'win32' ? `where ${program}` : `which ${program}`;
-            try {
-                const { stdout } = await execAsync(cmd, { timeout: 5000 });
-                return { success: true, found: true, path: stdout.trim() };
-            } catch {
-                return { success: true, found: false };
-            }
+            const res = await vShell.run(cmd, 5000);
+            return { success: true, found: res.success, path: res.stdout.trim() };
         }
     }
 };

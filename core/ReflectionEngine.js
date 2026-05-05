@@ -20,11 +20,12 @@ const REFLECT_EVERY_N  = 10;   // deep reflection every N conversation turns
 const MAX_RECENT_TURNS = 20;   // rolling window for pattern analysis
 
 export class ReflectionEngine {
-    constructor(brain, goalEngine, outcomeTracker, kb = null) {
+    constructor(brain, goalEngine, outcomeTracker, kb = null, max = null) {
         this.brain    = brain;
         this.goals    = goalEngine;
         this.outcomes = outcomeTracker;
         this.kb       = kb;
+        this.max      = max;  // for self-improvement proposals
 
         this._turnCount   = 0;
         this._recentTurns = [];  // rolling window
@@ -179,6 +180,15 @@ Return null for improvementGoal if no clear goal is identified.`;
                 console.log(`[ReflectionEngine] ➕ Goal: "${reflection.improvementGoal.title}"`);
             }
 
+            // Trigger self-improvement proposals for recurring high-frequency weaknesses
+            if (this.max?.selfImprovement) {
+                for (const weakness of (reflection.weaknesses || [])) {
+                    const pattern = this._selfModel.patterns.find(p => p.description.includes(weakness?.slice(0, 30)));
+                    const count = pattern?.count || 1;
+                    this.max.selfImprovement.onWeaknessIdentified(weakness, count).catch(() => {});
+                }
+            }
+
             this._selfModel.lastDeepReflect  = new Date().toISOString();
             this._selfModel.totalReflections++;
             this._save();
@@ -304,15 +314,47 @@ Return null for improvementGoal if no clear goal is identified.`;
         };
     }
 
-    getStatus() {
-        return {
-            turnCount:       this._turnCount,
-            lastDeepReflect: this._selfModel.lastDeepReflect,
-            totalReflections: this._selfModel.totalReflections,
-            strengthsCount:  this._selfModel.strengths.length,
-            weaknessesCount: this._selfModel.weaknesses.length,
-            patchesCount:    this._selfModel.promptPatches.length
-        };
+    /**
+     * ─── Phase 1: Trajectory Compressor ───
+     * Distills a complex multi-step execution into a single, high-fidelity entry.
+     */
+    async compressTrajectory(goal, stepResults, success) {
+        if (!this.brain?._ready) return null;
+
+        console.log(`[ReflectionEngine] 📉 Compressing trajectory for: "${goal.title}"`);
+
+        const summary = stepResults
+            .map(r => `Step ${r.step}: ${r.success ? '✓' : '✗'} - ${r.tool} - ${(r.summary || r.error || '').slice(0, 150)}`)
+            .join('\n');
+
+        const prompt = `You are MAX's memory compressor. Distill this engineering trajectory into a "Lesson Learned".
+Focus on: The exact sequence that worked (or failed), the specific file paths touched, and any critical "Gotchas" discovered.
+
+GOAL: ${goal.title}
+OUTCOME: ${success ? 'SUCCESS' : 'FAILURE'}
+RAW STEPS:
+${summary}
+
+Write a 2-3 sentence "Wisdom Block" for future reference. Be technical and precise.`;
+
+        try {
+            const result = await this.brain.think(prompt, { temperature: 0.1, maxTokens: 300, tier: 'fast' });
+            const lesson = result.text.trim();
+
+            if (this.kb?._ready && lesson) {
+                await this.kb.remember(lesson, { 
+                    source: 'trajectory_compression', 
+                    goal: goal.title,
+                    success: success ? 'TRUE' : 'FALSE'
+                });
+                console.log(`[ReflectionEngine] 💎 Wisdom stored in Knowledge Base.`);
+            }
+
+            return lesson;
+        } catch (err) {
+            console.warn('[ReflectionEngine] Trajectory compression failed:', err.message);
+            return null;
+        }
     }
 
     // ─── Reflect on task execution patterns (not just chat quality) ───────

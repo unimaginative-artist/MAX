@@ -4,7 +4,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { writeJournalEntry } from './Journal.js';
-import { MAX } from './MAX.js';
+// Superseded by SelfImprovementEngine.js — circular MAX import removed
 
 /**
  * Self‑improvement with alignment scoring.

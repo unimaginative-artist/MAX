@@ -1,17 +1,99 @@
 #!/usr/bin/env node
 // ═══════════════════════════════════════════════════════════════════════════
-// MAX launcher
-// Usage: node launcher.mjs [--mode chat|swarm|api] [--persona architect]
+// MAX launcher — OMEGA BRIDGE
+// Production-grade Sovereign Intelligence TUI
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { readFileSync, existsSync, writeFileSync } from 'fs';
+import { execSync, spawn } from 'child_process';
 import { fileURLToPath }            from 'url';
 import { dirname, join }            from 'path';
-import readline                     from 'readline';
 import { MAX }                      from './core/MAX.js';
 import { isFirstRun, runOnboarding } from './onboarding/FirstRun.js';
+import { TUI, COLORS }              from './core/ui/TUI.mjs';
+import { InputBridge }              from './core/ui/InputBridge.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ─── Ollama Auto-Pilot ──────────────────────────────────────────────────
+async function ensureOllama() {
+    console.log('[Launcher] 🛰️  Checking Ollama status...');
+    try {
+        // Simple probe to see if Ollama server is already running
+        const res = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(2000) });
+        if (res.ok) {
+            console.log('[Launcher] ✅ Ollama is already active.');
+            return true;
+        }
+    } catch (err) {
+        console.log('[Launcher] ⚠️  Ollama server not detected. Attempting to start...');
+        try {
+            // Check if 'ollama' command even exists
+            execSync('ollama --version', { stdio: 'ignore' });
+            
+            // Spawn Ollama server in background (fire and forget)
+            const ollama = spawn('ollama', ['serve'], {
+                detached: true,
+                stdio: 'ignore'
+            });
+            ollama.unref(); // Let it live independently of MAX
+
+            // Wait a few seconds for it to boot
+            for (let i = 0; i < 10; i++) {
+                process.stdout.write('.');
+                await new Promise(r => setTimeout(r, 1000));
+                try {
+                    const res = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(1000) });
+                    if (res.ok) {
+                        console.log('\n[Launcher] 🚀 Ollama started successfully.');
+                        return true;
+                    }
+                } catch {}
+            }
+            console.log('\n[Launcher] ⏳ Ollama is taking a while to start. Continuing anyway...');
+        } catch (execErr) {
+            console.warn('[Launcher] ❌ Ollama command not found. Please install it from https://ollama.com');
+            return false;
+        }
+    }
+    return false;
+}
+
+const tui = new TUI();
+let   _origLog = console.log.bind(console);
+
+// ─── Insight store ────────────────────────────────────────────────────────
+const _insights = [];
+let   _insightId = 0;
+
+function printInsight(insight) {
+    _insightId++;
+    const id = _insightId;
+    _insights.push({ id, type: 'insight', insight });
+    if (_insights.length > 30) _insights.shift();
+    console.log(`  💡 [${insight.source}] ${insight.label.slice(0, 50)}  — /expand ${id}`);
+}
+
+function printBgGroup(source, lines) {
+    _insightId++;
+    const id = _insightId;
+    _insights.push({ id, type: 'bg_group', source, lines });
+    if (_insights.length > 30) _insights.shift();
+    _origLog(`  ⊕ [${source}] ${lines.length} events  — /expand ${id}`);
+}
+
+function expandInsight(arg) {
+    let entry = arg === 'last' ? _insights[_insights.length - 1] : _insights.find(e => e.id === parseInt(arg));
+    if (!entry) return console.log(`[MAX] Entry #${arg} not found.`);
+
+    if (entry.type === 'bg_group') {
+        console.log(`\n  ┌─ [${entry.source}] ${entry.lines.length} events #${entry.id}`);
+        for (const line of entry.lines) console.log(`  │  ${line}`);
+        console.log(`  └─\n`);
+    } else {
+        tui.printBox(entry.insight.label, [entry.insight.result || ''], entry.insight.source);
+    }
+}
 
 // ─── Load config/api-keys.env ────────────────────────────────────────────
 function loadEnv() {
@@ -41,871 +123,276 @@ function parseArgs() {
     return result;
 }
 
-// ─── Insight store + printer ──────────────────────────────────────────────
-const BOX_WIDTH = 60;
-const INNER     = BOX_WIDTH - 4;
-const _insights = [];
-let   _insightId = 0;
-let   _rl        = null;
-let   _origLog   = console.log.bind(console);   // module-level so printBgGroup/expandInsight can use it
-
-function stripMarkdown(text) {
-    return text
-        .replace(/\*\*(.+?)\*\*/g, '$1')
-        .replace(/\*(.+?)\*/g,     '$1')
-        .replace(/`(.+?)`/g,       '$1')
-        .replace(/^#{1,6}\s+/gm,   '')
-        .replace(/^\s*[-*]\s+/gm,  '• ')
-        .replace(/\[(.+?)\]\(.+?\)/g, '$1')
-        .trim();
-}
-
-function boxLine(text) {
-    const words = text.split(' ').filter(Boolean);
-    const lines = [];
-    let cur = '';
-    for (const word of words) {
-        if (cur.length + word.length + 1 > INNER) {
-            if (cur) lines.push(`║  ${cur}`);
-            cur = word;
-        } else {
-            cur = cur ? `${cur} ${word}` : word;
-        }
-    }
-    if (cur) lines.push(`║  ${cur}`);
-    return lines;
-}
-
-function printFullInsight(insight, id) {
-    const border = '═'.repeat(BOX_WIDTH);
-    const div    = '─'.repeat(BOX_WIDTH);
-    process.stdout.write('\n');
-    console.log(`╔${border}╗`);
-    console.log(`║  💡 MAX [${insight.source}]${id != null ? `  #${id}` : ''}`);
-    console.log(`║  ${insight.label}`);
-    console.log(`╟${div}╢`);
-
-    const cleaned    = stripMarkdown(insight.result || '');
-    const paragraphs = cleaned.split(/\n+/).map(p => p.trim()).filter(Boolean);
-    for (const para of paragraphs) {
-        if (para !== paragraphs[0]) console.log('║');
-        for (const line of boxLine(para)) console.log(line);
-    }
-    console.log(`╚${border}╝`);
-}
-
-function printInsight(insight) {
-    _insightId++;
-    const id    = _insightId;
-    _insights.push({ id, type: 'insight', insight });
-    if (_insights.length > 30) _insights.shift();
-
-    const label = insight.label.replace(/\n.*/s, '').slice(0, 50);
-    console.log(`  💡 [${insight.source}] ${label}  — /expand ${id}`);
-}
-
-// ─── Collapsible background group ─────────────────────────────────────────
-// Called by flushBgQueue when 3+ consecutive same-source messages are queued.
-// Prints a single collapsed line; /expand N shows all lines.
-function printBgGroup(source, lines) {
-    _insightId++;
-    const id = _insightId;
-    _insights.push({ id, type: 'bg_group', source, lines });
-    if (_insights.length > 30) _insights.shift();
-    _origLog(`  ⊕ [${source}] ${lines.length} events  — /expand ${id}`);
-}
-
-function expandInsight(arg) {
-    let entry;
-    if (!arg || arg === 'last') {
-        entry = _insights[_insights.length - 1];
-    } else {
-        const id = parseInt(arg);
-        entry = _insights.find(e => e.id === id);
-    }
-    if (!entry) {
-        console.log(`[MAX] No entry #${arg || 'last'} found.\n`);
-        return;
-    }
-    if (entry.type === 'bg_group') {
-        const border = '─'.repeat(BOX_WIDTH);
-        _origLog(`\n  ┌${border}`);
-        _origLog(`  │  [${entry.source}] ${entry.lines.length} events  #${entry.id}`);
-        _origLog(`  ├${border}`);
-        for (const line of entry.lines) {
-            _origLog(`  │  ${line}`);
-        }
-        _origLog(`  └${border}\n`);
-    } else {
-        printFullInsight(entry.insight, entry.id);
-    }
-}
-
-// ─── Thinking spinner ─────────────────────────────────────────────────────
-const SPINNER = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
-let _spinnerTimer = null;
-let _spinnerPaused = false;
-
-function startSpinner(label = 'thinking') {
-    let i = 0;
-    _spinnerPaused = false;
-    _spinnerTimer = setInterval(() => {
-        if (!_spinnerPaused) {
-            process.stdout.write(`\r  ${SPINNER[i++ % SPINNER.length]}  MAX is ${label}...`);
-        }
-    }, 80);
-    return function stop() {
-        clearInterval(_spinnerTimer);
-        _spinnerTimer = null;
-        _spinnerPaused = false;
-        process.stdout.write('\r' + ' '.repeat(40) + '\r');
-    };
-}
-
-function pauseSpinner() {
-    if (_spinnerTimer && !_spinnerPaused) {
-        _spinnerPaused = true;
-        process.stdout.write('\r' + ' '.repeat(40) + '\r');
-    }
-}
-
-function resumeSpinner() {
-    _spinnerPaused = false;
-}
-
-// ─── Acknowledge a queued message while MAX is mid-response ──────────────
-// Fires non-blocking. Uses fast tier so it doesn't compete with the main call.
-// MAX reads the queued message and prints a short "I see it, hold on" reply.
-async function acknowledgeQueued(max, queuedMsg) {
-    try {
-        const result = await max.brain.think(
-            `You are MAX. While you were mid-response, the user just sent:\n"${queuedMsg.slice(0, 200)}"\n\nWrite ONE short sentence (10 words max) acknowledging you saw it and will address it next. Direct, Max Headroom style. No quotes around your reply.`,
-            { temperature: 0.6, maxTokens: 40, tier: 'fast' }
-        );
-        const ack = result.text
-            .replace(/^(MAX:\s*|["'])/i, '')
-            .replace(/["']$/, '')
-            .split('\n')[0]
-            .trim();
-        if (!ack) return;
-
-        if (_rl) {
-            process.stdout.write(`\nMAX: ${ack}\n\n`);
-        }
-    } catch { /* best-effort — never block the main response */ }
-}
-
-// ─── Clean LLM reply — strip persona announcements and MAX: prefixes ─────
-// DeepSeek sometimes echoes the persona name ("😎 Companion mode.") or the
-// agent name ("MAX: ") at the start of its response. Strip both.
-function cleanReply(text) {
-    return text
-        // Strip repeated "MAX:" / "M.A.X:" prefixes
-        .replace(/^(?:(?:MAX|M\.A\.X)[:.]\s*)*/i, '')
-        // Strip persona mode announcements on their own line, with or without emoji
-        // e.g. "😎 Companion mode.\n\n" / "Grinder mode activated.\n"
-        .replace(/^[^\w\n]{0,4}(?:Companion|Grinder|Architect|Paranoid|Breaker|Explainer|Devil(?:'s Advocate)?)\s+mode[^.\n]*[.\n]+\n*/i, '')
-        .trimStart();
-}
-
-// ─── Background noise filter — patterns suppressed from terminal output ──
-// These are high-frequency internal events that flood the terminal without
-// adding actionable information during a chat session.
 const BG_SUPPRESS = [
-    /^\[KnowledgeBase\].*Ingested "/,          // per-file ingestion spam (50+ lines on boot)
-    /^\[KnowledgeBase\].*Ingested "agent_loop/, // artifact ingestion
-    /^\[GoalEngine\] ⚠️.*Duplicate goal/,       // duplicate goal warnings
-    /^\[CodeIndexer\] 📁 Found \d+ source/,     // "indexing in progress" mid-line
-    /^\[Diagnostics\] 🔍 Running system-wide/,  // fires twice on boot
+    /^\[KnowledgeBase\].*Ingested "/,
+    /^\[GoalEngine\] ⚠️.*Duplicate goal/,
+    /^\[CodeIndexer\] 📁 Found \d+ source/,
 ];
 
-// ─── Chat mode ───────────────────────────────────────────────────────────
-async function chatMode(max, opts) {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-    _rl = rl;
-
-    // ── Background message queue ───────────────────────────────────────────
-    // Readline owns the terminal. Any console.log that fires while the user
-    // is typing (or while readline is active at all) tears the input line.
-    // Fix: buffer ALL background output while readline is active. Flush the
-    // queue cleanly just before the YOU: prompt is shown each turn.
-    _origLog = console.log.bind(console);   // update module-level ref before overriding console.log
-    const _origError = console.error.bind(console);
-    const _bgQueue   = [];
-
-    console.log   = (...args) => {
-        const msg = args.map(a => (typeof a === 'string' ? a : String(a))).join(' ');
-        if (BG_SUPPRESS.some(p => p.test(msg))) return;  // drop high-frequency noise
-        if (_rl) { _bgQueue.push(args); } else { _origLog(...args); }
+async function chatMode(max, opts = {}) {
+    const bridge = new InputBridge(max, tui);
+    
+    // ── Background output management ──────────────────────────────────────
+    const _bgQueue = [];
+    console.log = (...args) => {
+        const msg = args.join(' ');
+        if (BG_SUPPRESS.some(p => p.test(msg))) return;
+        if (max.isThinking || bridge.rl) _bgQueue.push(args); else _origLog(...args);
     };
-    console.error = (...args) => { if (_rl) { _bgQueue.push(args); } else { _origError(...args); } };
 
     function flushBgQueue() {
         if (_bgQueue.length === 0) return;
-
-        // Extract the [ModuleName] prefix from a log message for grouping
-        const getSource = (args) => {
-            const msg = args.map(a => typeof a === 'string' ? a : String(a)).join(' ');
-            const m = msg.match(/^\[([^\]]+)\]/);
-            return { source: m ? m[1] : '', msg };
-        };
-
-        // Group consecutive messages with the same source prefix
-        const groups = [];
+        const groups = new Map();
         for (const args of _bgQueue) {
-            const { source, msg } = getSource(args);
-            const last = groups[groups.length - 1];
-            if (last && last.source === source) {
-                last.items.push({ args, msg });
-            } else {
-                groups.push({ source, items: [{ args, msg }] });
-            }
+            const msg = args.join(' ');
+            const source = (msg.match(/^\[([^\]]+)\]/) || ['', 'SYSTEM'])[1];
+            if (!groups.has(source)) groups.set(source, []);
+            groups.get(source).push(msg);
         }
         _bgQueue.length = 0;
-
-        for (const group of groups) {
-            if (group.items.length >= 3) {
-                // Collapse into a single expandable line
-                printBgGroup(group.source, group.items.map(i => i.msg));
-            } else {
-                // Small group — show normally
-                for (const { args } of group.items) _origLog(...args);
-            }
+        for (const [source, lines] of groups) {
+            if (lines.length >= 3) printBgGroup(source, lines);
+            else for (const line of lines) _origLog(line);
         }
     }
 
-    let inputBuffer   = '';
-    let bufferTimer   = null;
-    let isThinking    = false;
-    let pendingInput  = null;   // message typed while thinking — processed after response
-    let swarmNext     = false;
-    let debateNext    = false;
-    let activePersona = opts.persona || null;
+    const processInput = async (line) => {
+        const input = line.trim();
+        if (!input) return bridge.prompt();
 
-    const ask = () => {
-        if (!isThinking) {
-            flushBgQueue();
-            process.stdout.write('YOU: ');
-        }
-    };
+        max.isThinking = true;
 
-    const processInput = async (input) => {
-        const line = input.trim();
-        if (!line) { ask(); return; }
+        if (input.startsWith('/')) {
+            const [cmd, ...args] = input.slice(1).split(' ');
+            const argStr = args.join(' ');
 
-        // If already thinking, queue the message and acknowledge it immediately
-        if (isThinking) {
-            const isFirstQueue = !pendingInput;
-            pendingInput = pendingInput ? pendingInput + '\n' + line : line;
-
-            readline.clearLine(process.stdout, 0);
-            readline.cursorTo(process.stdout, 0);
-            console.log(`  [queued] "${line.slice(0, 60)}${line.length > 60 ? '...' : ''}"`);
-
-            // First queued message: fire a fast acknowledgment — non-blocking
-            // MAX reads the message and prints a short "I see it" before finishing
-            if (isFirstQueue && max.brain?._ready) {
-                acknowledgeQueued(max, line).catch(() => {});
-            }
-
-            resumeSpinner();
-            return;
-        }
-
-        isThinking = true;
-
-        if (line === '/quit' || line === '/exit') {
-            // Save session state so MAX can brief himself next boot
-            try {
-                const sessionState = {
-                    timestamp:    new Date().toISOString(),
-                    goals:        max.goals?.listActive().slice(0, 8).map(g => ({ title: g.title, status: g.status })),
-                    insights:     _insights.slice(-5).map(i => ({ label: i.insight.label, result: i.insight.result?.slice(0, 300) })),
-                    outcomes:     max.outcomes?.getStats(),
-                    conversation: (max._context || []).slice(-8).map(m => ({
-                        role:    m.role,
-                        content: m.content.slice(0, 600)   // cap each turn so file stays small
-                    }))
-                };
-                writeFileSync(join(__dirname, '.max', 'session.json'), JSON.stringify(sessionState, null, 2));
-                console.log('[MAX] 📋 Session saved.');
-            } catch { /* non-fatal */ }
-            console.log('[MAX] Shutting down.');
-            max.scheduler?.stop();
-            max.heartbeat?.stop();
-            await max.memory?.shutdown?.();
-            await max.outcomes?.shutdown?.();
-            process.exit(0);
-        }
-
-        if (line === '/status') {
-            const s = max.getStatus();
-            const d = s.drive;
-            const brain = s.brain;
-            const fastInfo  = brain.fast?.ready  ? `${brain.fast.backend}/${brain.fast.model}`   : 'none';
-            const smartInfo = brain.smart?.ready ? `${brain.smart.backend}/${brain.smart.model}` : 'none';
-            console.log(`\n[MAX] Tension: ${(d.tension*100).toFixed(0)}% | Satisfaction: ${(d.satisfaction*100).toFixed(0)}%`);
-            console.log(`[MAX] Brain — fast: ${fastInfo} | smart: ${smartInfo}`);
-            console.log(`[MAX] Persona: ${s.persona.name} | Memory: ${s.memory.totalMemories} facts`);
-            console.log(`[MAX] Dashboard: http://localhost:${process.env.MAX_PORT || 3100}/dashboard\n`);
-            isThinking = false;
-            ask(); return;
-        }
-
-        if (line.startsWith('/reason ')) {
-            const q = line.slice(8).trim();
-            if (!q) { ask(); return; }
-            try {
-                const stop = startSpinner('reasoning');
-                const res = await max.reason(q);
-                stop();
-                console.log('\n' + '═'.repeat(60));
-                console.log(`STRATEGY: ${res.strategy.toUpperCase()}`);
-                console.log(`CONFIDENCE: ${(res.confidence * 100).toFixed(0)}%`);
-                console.log('─'.repeat(60));
-                console.log(res.result);
-                console.log('═'.repeat(60) + '\n');
-            } catch (err) { console.error('[MAX] Reasoning error:', err.message); }
-            isThinking = false;
-            ask(); return;
-        }
-
-        if (line.startsWith('/expand')) {
-            expandInsight(line.slice(7).trim() || 'last');
-            isThinking = false;
-            ask(); return;
-        }
-
-        // ── SOMA self-modification proposal commands ────────────────────────
-        if (line === '/proposals') {
-            const proposals = max._server?._somaProposals
-                ? [...new Set(max._server._somaProposals.values())]
-                : [];
-            if (proposals.length === 0) {
-                console.log('[MAX] No pending SOMA modification proposals.\n');
-            } else {
-                console.log(`\n[MAX] ${proposals.length} pending proposal(s):\n`);
-                for (const p of proposals) {
-                    const score = p.overallScore ? ` (${(p.overallScore * 100).toFixed(0)}%)` : '';
-                    console.log(`  ${p.taskId.slice(0, 8)}  ${p.file}  [${(p.riskLevel || 'unknown').toUpperCase()}]${score}`);
-                    console.log(`           ${p.rationale?.slice(0, 80) || ''}`);
-                }
-                console.log('\n  → /approve <id>   or   /deny <id>\n');
-            }
-            isThinking = false; ask(); return;
-        }
-
-        if (line.startsWith('/approve ')) {
-            const id = line.slice(9).trim();
-            try {
-                const res = await fetch(`http://localhost:${process.env.MAX_PORT || 3100}/api/soma/proposals/${id}/approve`, { method: 'POST' });
-                const data = await res.json();
-                if (data.accepted) {
-                    console.log(`[MAX] ✅ Approved proposal ${id} — apply pipeline running in background...\n`);
-                } else {
-                    console.log(`[MAX] ❌ ${data.error || 'Failed to approve'}\n`);
-                }
-            } catch (err) {
-                console.log(`[MAX] Error: ${err.message}\n`);
-            }
-            isThinking = false; ask(); return;
-        }
-
-        if (line.startsWith('/deny ')) {
-            const id = line.slice(6).trim();
-            try {
-                const res = await fetch(`http://localhost:${process.env.MAX_PORT || 3100}/api/soma/proposals/${id}`, { method: 'DELETE' });
-                const data = await res.json();
-                if (data.denied) {
-                    console.log(`[MAX] 🚫 Denied proposal ${id}.\n`);
-                } else {
-                    console.log(`[MAX] ❌ ${data.error || 'Not found'}\n`);
-                }
-            } catch (err) {
-                console.log(`[MAX] Error: ${err.message}\n`);
-            }
-            isThinking = false; ask(); return;
-        }
-
-        if (line === '/pause') {
-            const ok = max.agentLoop?.interrupt();
-            console.log(ok ? '[MAX] ⏸️  Pause requested — will stop at next step boundary.\n' : '[MAX] No active task to pause.\n');
-            isThinking = false; ask(); return;
-        }
-
-        if (line === '/resume') {
-            console.log('[MAX] ▶️  Resuming...\n');
-            max.agentLoop?.runCycle().catch(e => console.error('[MAX] Resume error:', e.message));
-            isThinking = false; ask(); return;
-        }
-
-        // ── /run <command> — direct shell, no LLM ─────────────────────────
-        if (line.startsWith('/run ')) {
-            const cmd = line.slice(5).trim();
-            if (!cmd) { isThinking = false; ask(); return; }
-            try {
-                await max.tools.execute('shell', 'run', { command: cmd });
-            } catch (err) { console.log(`[MAX] Shell error: ${err.message}\n`); }
-            isThinking = false; ask(); return;
-        }
-
-        // ── /ps — list background processes ───────────────────────────────
-        if (line === '/ps') {
-            try {
-                const res = await max.tools.execute('shell', 'ps', {});
-                if (res.count === 0) {
-                    console.log('[MAX] No background processes running.\n');
-                } else {
-                    console.log(`\n[MAX] ${res.count} background process(es):\n`);
-                    for (const p of res.processes) {
-                        console.log(`  [${p.name}]  pid ${p.pid}  ${p.command}`);
-                        if (p.lastLog) console.log(`         last: ${p.lastLog}`);
-                    }
-                    console.log();
-                }
-            } catch (err) { console.log(`[MAX] Error: ${err.message}\n`); }
-            isThinking = false; ask(); return;
-        }
-
-        // ── /kill <name> — stop a named background process ────────────────
-        if (line.startsWith('/kill ')) {
-            const name = line.slice(6).trim();
-            if (!name) { isThinking = false; ask(); return; }
-            try {
-                const res = await max.tools.execute('shell', 'stop', { name });
-                if (res.success) console.log(`[MAX] Stopped process "${name}" (pid ${res.pid})\n`);
-                else console.log(`[MAX] ${res.error}\n`);
-            } catch (err) { console.log(`[MAX] Error: ${err.message}\n`); }
-            isThinking = false; ask(); return;
-        }
-
-        // ── /goals — manage goal queue ────────────────────────────────────
-        if (line === '/goals' || line.startsWith('/goals ')) {
-            const sub = line.slice(6).trim();
-            const goals = max.goals;
-            if (!goals) { console.log('[MAX] Goal engine not available.\n'); isThinking = false; ask(); return; }
-
-            if (!sub || sub === 'list') {
-                const active = goals.listActive();
-                if (active.length === 0) {
-                    console.log('[MAX] No active goals.\n');
-                } else {
-                    console.log(`\n[MAX] ${active.length} goal(s):\n`);
-                    for (const g of active) {
-                        const blocked = g.blockedBy?.length ? ` [blocked: ${g.blockedBy.join(', ')}]` : '';
-                        console.log(`  [${g.id.slice(0, 8)}] [${g.status.padEnd(10)}] p${(g.priority || 0).toFixed(1)}  ${g.title}${blocked}`);
-                    }
-                    console.log();
-                }
-            } else if (sub.startsWith('add ')) {
-                const title = sub.slice(4).trim().replace(/^["']|["']$/g, '');
-                if (!title) { console.log('[MAX] Usage: /goals add "goal title"\n'); }
-                else {
-                    const id = goals.addGoal({ title, priority: 0.6, source: 'user' });
-                    console.log(`[MAX] ✅ Goal added: [${id.slice(0, 8)}] "${title}"\n`);
-                }
-            } else if (sub === 'clear') {
-                const active = goals.listActive();
-                let cleared = 0;
-                for (const g of active) {
-                    if (g.status === 'pending' || g.status === 'ready') {
-                        goals._active.delete(g.id);
-                        cleared++;
-                    }
-                }
-                console.log(`[MAX] Cleared ${cleared} pending goal(s).\n`);
-            } else if (sub.startsWith('done ')) {
-                const id = sub.slice(5).trim();
-                const goal = [...(goals._active?.values() || [])].find(g => g.id.startsWith(id));
-                if (!goal) { console.log(`[MAX] Goal "${id}" not found.\n`); }
-                else { goals.markComplete(goal.id); console.log(`[MAX] Marked complete: "${goal.title}"\n`); }
-            } else {
-                console.log('[MAX] Usage: /goals [list|add "title"|done <id>|clear]\n');
-            }
-            isThinking = false; ask(); return;
-        }
-
-        // ── /research — trigger frontier research cycle now ──────────────
-        if (line === '/research') {
-            if (!max.frontier) { console.log('[MAX] Frontier research not available.\n'); isThinking = false; ask(); return; }
-            console.log('[MAX] 🔬 Starting research cycle — this takes a few minutes...\n');
-            try {
-                const stop = startSpinner('researching');
-                const result = await max.frontier.runCycle();
-                stop();
-                if (result) {
-                    console.log(`\n[MAX] Research cycle done.`);
-                    console.log(`  Papers processed: ${result.papers}`);
-                    console.log(`  Engineering tasks generated: ${result.tasks}`);
-                    console.log(`  Results in: research.md, frontier_map.md, todo.md, system_report.md\n`);
-                } else {
-                    console.log('[MAX] Research cycle returned no results.\n');
-                }
-            } catch (err) { console.log(`[MAX] Research error: ${err.message}\n`); }
-            isThinking = false; ask(); return;
-        }
-
-        // ── /frontier — show current capability map ───────────────────────
-        if (line === '/frontier') {
-            const { readFileSync, existsSync } = await import('fs');
-            const mapPath = new URL('../frontier_map.md', import.meta.url).pathname.slice(1);
-            if (!existsSync(mapPath)) { console.log('[MAX] frontier_map.md not found — run /research first.\n'); isThinking = false; ask(); return; }
-            console.log('\n' + readFileSync(mapPath, 'utf8').slice(0, 3000) + '\n');
-            isThinking = false; ask(); return;
-        }
-
-        // ── /sysreport — show latest system report ────────────────────────
-        if (line === '/sysreport') {
-            const { readFileSync, existsSync } = await import('fs');
-            const rptPath = new URL('../system_report.md', import.meta.url).pathname.slice(1);
-            if (!existsSync(rptPath)) { console.log('[MAX] system_report.md not found — run /research first.\n'); isThinking = false; ask(); return; }
-            console.log('\n' + readFileSync(rptPath, 'utf8') + '\n');
-            isThinking = false; ask(); return;
-        }
-
-        // ── /reflect — trigger deep reflection immediately ────────────────
-        if (line === '/reflect') {
-            if (!max.reflection) { console.log('[MAX] Reflection engine not available.\n'); isThinking = false; ask(); return; }
-            try {
-                const stop = startSpinner('reflecting');
-                const summary = await max.reflection.forceReflect();
-                stop();
-                console.log('\n[MAX] Deep reflection complete.');
-                if (summary?.promptPatch) console.log(`  Prompt patch: "${summary.promptPatch.slice(0, 120)}"`);
-                if (summary?.recentScore != null) console.log(`  Recent score: ${(summary.recentScore * 100).toFixed(0)}%`);
-                console.log();
-            } catch (err) { console.log(`[MAX] Reflect error: ${err.message}\n`); }
-            isThinking = false; ask(); return;
-        }
-
-        if (line === '/artifacts' || line.startsWith('/artifacts ')) {
-            const sub = line.slice('/artifacts'.length).trim();
-            const arts = max.artifacts;
-            if (!sub || sub === 'list') {
-                const list = arts.list();
-                if (list.length === 0) {
-                    console.log('[MAX] No artifacts stored.\n');
-                } else {
-                    console.log(`\n[MAX] ${list.length} artifact(s):\n`);
-                    for (const a of list) {
-                        console.log(`  ${a.id}  "${a.name}"  (${a.type}, ${a.lineCount} lines, ${(a.byteSize/1024).toFixed(1)}KB)  ${a.timestamp}`);
-                    }
-                    console.log();
-                }
-            } else if (sub.startsWith('open ')) {
-                const id = sub.slice(5).trim();
-                const r  = await arts.open(id);
-                console.log(r.success ? `[MAX] ${r.message}\n` : `[MAX] Error: ${r.error}\n`);
-            } else if (sub.startsWith('delete ')) {
-                const id = sub.slice(7).trim();
-                const r  = arts.delete(id);
-                console.log(r.success ? `[MAX] ${r.message}\n` : `[MAX] Error: ${r.error}\n`);
-            } else if (sub.startsWith('get ')) {
-                const id  = sub.slice(4).trim();
-                const art = arts.get(id);
-                if (!art) { console.log(`[MAX] Artifact ${id} not found.\n`); }
-                else {
-                    console.log(`\n[MAX] Artifact: "${art.name}" (${art.type})\n${'─'.repeat(60)}`);
-                    console.log(art.content.slice(0, 3000));
-                    if (art.content.length > 3000) console.log(`\n... (${art.lineCount} lines total)`);
-                    console.log();
-                }
-            } else {
-                console.log('[MAX] Usage: /artifacts [list|get <id>|open <id>|delete <id>]\n');
-            }
-            isThinking = false;
-            ask(); return;
-        }
-
-        // ── /self — self-editing loop ──────────────────────────────────
-        if (line.startsWith('/self')) {
-            const sub = line.slice(5).trim();
-            const se  = max.selfEditor;
-
-            // /self read <path>
-            if (sub.startsWith('read ')) {
-                const relPath = sub.slice(5).trim();
-                try {
-                    const { code, lines } = await se.readSource(relPath);
-                    console.log(`\n[MAX] ${relPath}  (${lines} lines)\n${'─'.repeat(60)}`);
-                    console.log(code.slice(0, 4000));
-                    if (code.length > 4000) console.log(`\n... (truncated — ${lines} lines total)`);
-                    console.log();
-                } catch (err) { console.log(`[MAX] ${err.message}\n`); }
-
-            // /self edit <path> <instruction>
-            } else if (sub.startsWith('edit ')) {
-                const rest        = sub.slice(5).trim();
-                const spaceIdx    = rest.indexOf(' ');
-                if (spaceIdx === -1) {
-                    console.log('[MAX] Usage: /self edit <path> <instruction>\n');
-                } else {
-                    const relPath     = rest.slice(0, spaceIdx).trim();
-                    const instruction = rest.slice(spaceIdx + 1).trim();
-                    try {
-                        const stop = startSpinner('editing');
-                        console.log(`\n[MAX] Proposing edit to ${relPath}...`);
-                        const newCode  = await se.proposeEdit(relPath, instruction, max.brain);
-                        const stagePath = await se.stage(relPath, newCode);
-                        stop();
-
-                        console.log(`[MAX] Staged → ${stagePath}`);
-                        process.stdout.write('[MAX] Validating (syntax + import)...');
-                        const validation = await se.validate(relPath);
-                        process.stdout.write('\r' + ' '.repeat(50) + '\r');
-
-                        if (!validation.ok) {
-                            console.log(`[MAX] ❌ Validation failed (${validation.stage}): ${validation.error}\n`);
-                            console.log(`[MAX] Staged version kept — fix with /self edit or /self rollback ${relPath}\n`);
-                        } else {
-                            const diffResult = await se.diff(relPath);
-                            console.log(`[MAX] ✅ Valid — ${diffResult?.changes ?? 0} line(s) changed`);
-                            try {
-                                const opened = await se.openDiff(relPath);
-                                console.log(`[MAX] 🪟 Diff open in ${opened.method === 'vscode' ? 'VS Code' : 'system editor'}`);
-                            } catch { /* editor not available */ }
-                            console.log(`[MAX] Review the changes, then:\n  /self commit ${relPath}   — apply\n  /self rollback ${relPath} — discard\n`);
-                        }
-                    } catch (err) { console.log(`[MAX] Edit failed: ${err.message}\n`); }
-                }
-
-            // /self diff <path>
-            } else if (sub.startsWith('diff ')) {
-                const relPath = sub.slice(5).trim();
-                try {
-                    const d = await se.diff(relPath);
-                    if (!d) { console.log(`[MAX] No staged version of ${relPath}\n`); }
-                    else {
-                        console.log(`\n[MAX] Diff for ${relPath}  (+${d.addedLines} lines, ${d.changes} change(s)):`);
-                        console.log('─'.repeat(60));
-                        console.log(d.diff.slice(0, 3000));
-                        console.log();
-                    }
-                } catch (err) { console.log(`[MAX] ${err.message}\n`); }
-
-            // /self test <path>
-            } else if (sub.startsWith('test ')) {
-                const relPath = sub.slice(5).trim();
-                try {
-                    process.stdout.write(`[MAX] Testing ${relPath}...`);
-                    const result = await se.validate(relPath);
-                    process.stdout.write('\r' + ' '.repeat(60) + '\r');
-                    if (result.ok) {
-                        console.log(`[MAX] ✅ ${relPath} passes syntax + import validation\n`);
+            switch(cmd) {
+                case 'quit': case 'exit':
+                    console.log('[MAX] Shutting down.');
+                    process.exit(0);
+                    break;
+                case 'add':
+                    if (!argStr) return console.log('[MAX] Usage: /add <path>');
+                    max.pinFile(argStr);
+                    console.log(`[MAX] 📌 Pinned: ${argStr}`);
+                    break;
+                case 'drop':
+                    if (!argStr) return console.log('[MAX] Usage: /drop <path>');
+                    max.unpinFile(argStr);
+                    console.log(`[MAX] 📍 Unpinned: ${argStr}`);
+                    break;
+                case 'clear':
+                    max.clearPinned();
+                    console.log('[MAX] 🧹 Context cleared.');
+                    break;
+                case 'status':
+                    const s = max.getStatus();
+                    console.log(`\n[MAX] Tension: ${(s.drive.tension*100).toFixed(0)}% | Satisfaction: ${(s.drive.satisfaction*100).toFixed(0)}%`);
+                    console.log(`[MAX] Brain: ${s.brain.smart?.backend || 'local'} | Memory: ${s.memory.totalMemories} facts`);
+                    console.log(`[MAX] Pinned Files: ${[...max.pinnedFiles].join(', ') || 'none'}`);
+                    console.log(`[MAX] RepoGraph: ${max.graph.nodes.size} nodes | Impact logic active\n`);
+                    break;
+                case 'approve': {
+                    const approveId = argStr?.trim();
+                    // Self-improvement proposal takes priority if ID provided
+                    if (approveId && max.selfImprovement?._proposals.has(approveId)) {
+                        const r = await max.selfImprovement.approve(approveId);
+                        console.log(r.success ? `[MAX] ✅ Self-improvement applied: ${r.file}` : `[MAX] ❌ Apply failed: ${r.error}`);
+                    } else if (max.agentLoop?._pendingApproval) {
+                        max.agentLoop.approve();
+                        console.log('[MAX] ✅ Change approved.');
                     } else {
-                        console.log(`[MAX] ❌ ${result.stage} error: ${result.error}\n`);
+                        console.log('[MAX] No pending approval. Use /proposals to see self-improvement proposals.');
                     }
-                } catch (err) { console.log(`[MAX] ${err.message}\n`); }
-
-            // /self commit <path>
-            } else if (sub.startsWith('commit ')) {
-                const relPath = sub.slice(7).trim();
-                try {
-                    const { committed, backup } = await se.commit(relPath);
-                    console.log(`[MAX] ✅ Committed: ${committed}`);
-                    console.log(`[MAX] 📦 Backup saved: ${backup}\n`);
-                } catch (err) { console.log(`[MAX] Commit failed: ${err.message}\n`); }
-
-            // /self rollback <path>
-            } else if (sub.startsWith('rollback ')) {
-                const relPath = sub.slice(9).trim();
-                try {
-                    await se.rollback(relPath);
-                    console.log(`[MAX] ↩️  Rolled back ${relPath} — staged changes discarded\n`);
-                } catch (err) { console.log(`[MAX] ${err.message}\n`); }
-
-            // /self list
-            } else if (sub === 'list') {
-                const staged  = se.listStaged();
-                const backups = await se.listBackups();
-                if (staged.length > 0) {
-                    console.log(`\n[MAX] Staged (awaiting commit):\n${staged.map(p => `  ${p}`).join('\n')}`);
-                } else {
-                    console.log('[MAX] No staged edits.');
+                    break;
                 }
-                if (backups.length > 0) {
-                    console.log(`[MAX] Backups (${backups.length}):\n${backups.slice(0, 5).map(b => `  ${b}`).join('\n')}`);
+                case 'deny': {
+                    const denyId = argStr?.trim();
+                    if (denyId && max.selfImprovement?._proposals.has(denyId)) {
+                        await max.selfImprovement.deny(denyId);
+                        console.log('[MAX] ❌ Proposal denied and discarded.');
+                    } else if (max.agentLoop?._pendingApproval) {
+                        max.agentLoop.deny();
+                        console.log('[MAX] ❌ Change denied.');
+                    } else {
+                        console.log('[MAX] No pending denial target.');
+                    }
+                    break;
                 }
-                console.log();
-
-            } else {
-                console.log('[MAX] /self commands:');
-                console.log('  /self read <path>              — view source file');
-                console.log('  /self edit <path> <instruction> — propose edit via brain');
-                console.log('  /self diff <path>              — show staged changes');
-                console.log('  /self test <path>              — validate staged version');
-                console.log('  /self commit <path>            — apply changes (backs up original)');
-                console.log('  /self rollback <path>          — discard staged changes');
-                console.log('  /self list                     — staged files + backups\n');
+                case 'proposals': {
+                    const pending = max.selfImprovement?.list() || [];
+                    if (pending.length === 0) {
+                        console.log('[MAX] No self-improvement proposals pending.');
+                    } else {
+                        console.log(`\n[MAX] ${pending.length} pending self-improvement proposal(s):\n`);
+                        for (const p of pending) {
+                            console.log(`  [${p.id}] ${p.file}`);
+                            console.log(`         ${p.instruction}`);
+                            console.log(`         ${p.changes} change(s) | source: ${p.source}`);
+                            console.log(`         → /approve ${p.id}   or   /deny ${p.id}\n`);
+                        }
+                    }
+                    break;
+                }
+                case 'reason':
+                    const rStop = tui.startSpinner('reasoning');
+                    const res = await max.reason(argStr);
+                    rStop();
+                    console.log(`\nSTRATEGY: ${res.strategy.toUpperCase()}\n${res.result}\n`);
+                    break;
+                case 'expand':
+                    expandInsight(argStr || 'last');
+                    break;
+                case 'goals':
+                    const active = max.goals.listActive();
+                    console.log(`\n[MAX] ${active.length} active goals:`);
+                    for (const g of active) console.log(`  [${g.id.slice(0,8)}] ${g.title} (${g.status})`);
+                    console.log();
+                    break;
+                case 'run':
+                    try { await max.tools.execute('shell', 'run', { command: argStr }); } catch (e) { console.log(`Error: ${e.message}`); }
+                    break;
+                default:
+                    console.log(`[MAX] Unknown command: /${cmd}`);
             }
-
-            isThinking = false;
-            ask(); return;
+            max.isThinking = false;
+            flushBgQueue();
+            return bridge.prompt();
         }
 
-        if (line === '/swarm') {
-            swarmNext = true;
-            console.log('[MAX] Next message → swarm.\n');
-            isThinking = false;
-            ask(); return;
-        }
-        if (line === '/debate') { 
-            debateNext = true; 
-            console.log('[MAX] Next message → debate.\n'); 
-            isThinking = false;
-            ask(); return; 
-        }
-
-        if (line.startsWith('/persona')) {
-            const p = line.split(' ')[1];
-            if (p) {
-                try { 
-                    max.persona.switchTo(p); 
-                    activePersona = p; 
-                    console.log(`[MAX] Persona → ${p}\n`); 
-                } 
-                catch (err) { console.log(`[MAX] ${err.message}\n`); }
-            } else { 
-                console.log('[MAX] Options: architect/grinder/paranoid/breaker/explainer/devil\n'); 
-            }
-            isThinking = false;
-            ask(); return;
-        }
-
-        // ── Swarm ──
-        if (swarmNext) {
-            swarmNext = false;
-            try {
-                const stop = startSpinner('swarming');
-                const res = await max.swarmThink(line);
-                stop();
-                console.log('\n' + '═'.repeat(60) + '\nMAX (Swarm synthesis):\n' + (res.synthesis || 'No synthesis.') + '\n' + '═'.repeat(60) + '\n');
-            } catch (err) { console.error('[MAX] Swarm error:', err.message); }
-            isThinking = false;
-            ask(); return;
-        }
-
-        // ── Chat ──
         try {
-            // Streaming: stop spinner on first token, print tokens live.
-            // If the response had tool calls (wasStreamed=false), print the final clean reply normally.
-            const stop = startSpinner('thinking');
+            const stop = tui.startSpinner('thinking');
             let streamStarted = false;
 
-            let streamBuf = '';
-            let streamPrefixStripped = false;
-            const res = await max.think(line, {
-                persona: activePersona,
+            const res = await max.think(input, {
                 onToken: (token) => {
-                    if (!streamStarted) {
-                        stop();
-                        streamStarted = true;
-                    }
-                    if (!streamPrefixStripped) {
-                        streamBuf += token;
-                        // Wait until we have enough to detect a "MAX:" prefix
-                        if (streamBuf.length < 20 && !streamBuf.includes('\n')) return;
-                        streamBuf = streamBuf.replace(/^(?:(?:MAX|M\.A\.X)[:.]\s*)*/i, '');
-                        streamPrefixStripped = true;
-                        process.stdout.write('\nMAX: ' + streamBuf);
-                        streamBuf = '';
-                        return;
+                    if (!streamStarted) { 
+                        stop(); 
+                        streamStarted = true; 
+                        process.stdout.write(`\n${COLORS.BOLD}${COLORS.PINK}MAX:${COLORS.RESET} `); 
                     }
                     process.stdout.write(token);
                 }
             });
 
-            if (streamStarted) {
-                process.stdout.write('\n');
-                if (!res.wasStreamed) {
-                    const reply = cleanReply(res.response || '');
-                    console.log('\nMAX: ' + reply);
-                }
-            } else {
-                stop();
-                const reply = cleanReply(res.response || '');
-                console.log('\nMAX: ' + reply);
-            }
+            if (streamStarted) process.stdout.write(`\n`);
+            else { stop(); tui.printMAX(tui.cleanReply(res.response)); }
 
             console.log(`\n[${res.persona} | tension ${(res.drive.tension * 100).toFixed(0)}%]\n`);
-        } catch (err) { console.error('[MAX] Error:', err.message); }
-        
-        isThinking = false;
-
-        // Drain the queue — if user typed while we were thinking, process it now
-        if (pendingInput) {
-            const queued = pendingInput;
-            pendingInput = null;
-            process.stdout.write('\r' + ' '.repeat(40) + '\r');
-            console.log(`[MAX] Processing queued message: "${queued.slice(0, 60)}"\n`);
-            processInput(queued);
-        } else {
-            ask();
+        } catch (err) {
+            console.error('[MAX] Error:', err.message);
         }
+
+        max.isThinking = false;
+        tui.flushBuffer(); // Cleanly print any background messages that fired during thinking
+        flushBgQueue();
+
+        const pending = bridge.getPending();
+        if (pending) processInput(pending); else bridge.prompt();
     };
 
-    rl.on('line', (line) => {
-        // Only pause the spinner on the FIRST line of each input burst.
-        // Without this, every line of a multi-line paste calls clearLine + cursorTo,
-        // which mangles the terminal output during large pastes.
-        if (!bufferTimer) pauseSpinner();
+    bridge.start(processInput);
 
-        inputBuffer += (inputBuffer ? '\n' : '') + line;
-        if (bufferTimer) clearTimeout(bufferTimer);
-        bufferTimer = setTimeout(() => {
-            bufferTimer = null;
-            const full = inputBuffer;
-            inputBuffer = '';
-            // resumeSpinner is intentionally NOT called here — processInput handles
-            // spinner state itself. Calling it here caused the spinner to flash
-            // mid-paste, making it look like the message had already sent.
-            processInput(full);
-        }, 3000); // 3000ms — wide window for slow Windows paste / multi-paragraph text
+    // ── Lifecycle Hooks ──
+    max.heartbeat.on('insight', (insight) => {
+        tui.setActiveTask(null); // Clear working status on insight (goal completion/fail)
+        printInsight(insight);
     });
 
-    max.heartbeat.on('insight', printInsight);
+    max.heartbeat.on('message', (msg) => tui.printLive(`\n${COLORS.BOLD}${COLORS.PINK}MAX:${COLORS.RESET} ${msg.text}`, max.isThinking));
     
-    // ── Proactive direct messages from background systems ──
-    max.heartbeat.on('message', (msg) => {
-        console.log(`\nMAX [background]: ${msg.text}`);
-        if (msg.details) console.log(`[${msg.details}]`);
-        console.log();
+    max.agentLoop?.on('goalStart', ({ goal }) => {
+        tui.setActiveTask(goal.title);
+        // We only print the start line if it's a new goal (not redundant)
+        tui.printLive(`\n  ⚙️  MAX started: "${goal.title}"`, max.isThinking);
     });
-    
+
+    max.agentLoop?.on('toolStart', ({ tool, action, params }) => {
+        let details = params.filePath || params.path || params.command || params.query || '';
+        
+        // Clean up the display for common tools
+        let icon = '⚙️';
+        let label = tool.charAt(0).toUpperCase() + tool.slice(1);
+        
+        if (tool === 'file') {
+            icon = '📄';
+            label = action === 'read' ? 'ReadFile' : action === 'write' ? 'WriteFile' : action.charAt(0).toUpperCase() + action.slice(1);
+        } else if (tool === 'shell') {
+            icon = '🐚';
+            label = 'Shell';
+        } else if (tool === 'git') {
+            icon = '🔱';
+            label = 'Git';
+        }
+
+        tui.printLive(`  ${COLORS.MINT}✓${COLORS.RESET}  ${COLORS.BOLD}${label}${COLORS.RESET}  ${details.slice(0, 60)}${details.length > 60 ? '...' : ''}`, max.isThinking);
+    });
+
+    max.agentLoop?.on('approvalNeeded', ({ tool, action, params, goal }) => {
+        const isFile = tool === 'file' && ['write', 'replace', 'patch'].includes(action);
+        
+        console.log(`\n${COLORS.BOLD}╔══════════════════════════════════════════════════════════════════════╗${COLORS.RESET}`);
+        console.log(`║  ${COLORS.GOLD}🚨 APPROVAL REQUIRED${COLORS.RESET}                                             ║`);
+        console.log(`╟──────────────────────────────────────────────────────────────────────╢`);
+        console.log(`║  Goal:   ${(goal?.title || 'background task').padEnd(60)} ║`);
+        console.log(`║  Action: ${(tool + '.' + action).padEnd(60)} ║`);
+
+        if (isFile) {
+            console.log(`╟──────────────────────────────────────────────────────────────────────╢`);
+            console.log(`║  ${COLORS.MINT}PROPOSED CHANGE:${COLORS.RESET}${' '.repeat(52)}║`);
+            const target = params.filePath || params.path || 'unknown';
+            console.log(`║  Target: ${target.padEnd(60)} ║`);
+            console.log(`║${' '.repeat(70)}║`);
+
+            let preview = '';
+            if (action === 'write') preview = params.content;
+            else if (action === 'replace') preview = `FIND:\n${params.oldText}\n\nREPLACE:\n${params.newText}`;
+            else if (action === 'patch') preview = (params.hunks || []).map(h => `${h.position} ${h.anchor}:\n${h.content}`).join('\n---\n');
+
+            const lines = preview.split('\n').slice(0, 15);
+            for (const line of lines) {
+                const clean = line.replace(/\r/g, '').slice(0, 64);
+                console.log(`║  ${COLORS.DIM}${clean.padEnd(64)}${COLORS.RESET}  ║`);
+            }
+            if (preview.split('\n').length > 15) console.log(`║  ${COLORS.DIM}... (truncated)${' '.repeat(53)}${COLORS.RESET}  ║`);
+        } else if (params) {
+            const pStr = JSON.stringify(params).slice(0, 64);
+            console.log(`║  Params: ${pStr.padEnd(60)} ║`);
+        }
+
+        console.log(`╟──────────────────────────────────────────────────────────────────────╢`);
+        console.log(`║  → type ${COLORS.BOLD}/approve${COLORS.RESET} to allow  |  ${COLORS.BOLD}/deny${COLORS.RESET} to block${' '.repeat(30)}║`);
+        console.log(`${COLORS.BOLD}╚══════════════════════════════════════════════════════════════════════╝${COLORS.RESET}\n`);
+    });
+
     console.log('\n' + '─'.repeat(60));
-    console.log('  MAX is live. Dashboard: http://localhost:3100/dashboard');
-    console.log('  Commands: /status, /persona <p>, /reason <q>, /run <cmd>, /ps, /kill <n>, /goals [list|add|clear], /reflect, /swarm, /debate, /expand, /artifacts, /pause, /resume, /quit');
-    console.log('  Research: /research (run cycle now), /frontier (capability map), /sysreport (latest report)');
-    console.log('  Self-edit: /self edit <path> <instruction>  →  /self test  →  /self commit | /self rollback');
+    console.log('  MAX OMEGA BRIDGE ACTIVE. System responsive. Memory isolated.');
     console.log('─'.repeat(60) + '\n');
 
-    // Delay the ready message so boot logs print first, then MAX speaks last
     setTimeout(() => {
-        const status  = max.brain?.getStatus?.();
-        const backend = status?.smart?.backend || 'local';
-        const model   = status?.smart?.model   || 'unknown';
-        console.log(`\nMAX: Online. Running on ${backend} (${model}). What are we building?\n`);
-        ask();
-    }, 1500);
+        const s = max.brain.getStatus();
+        console.log(`\nMAX: Online. Running on ${s.smart?.backend} (${s.smart?.model}). Ready for directives.\n`);
+        bridge.prompt();
+    }, 1000);
 }
 
 async function main() {
     loadEnv();
     const opts = parseArgs();
-    console.log('[Launcher] 🚀 Booting MAX...');
+    console.log('[Launcher] 🚀 Booting MAX OMEGA...');
+
+    // Auto-start local engine
+    await ensureOllama();
 
     const max = new MAX({
         geminiKey:  process.env.GEMINI_API_KEY,
         memory:     { dbPath: join(__dirname, '.max', 'memory.db') },
-        // 'write' = auto-approve reads + writes; only gate git push/commit + file delete
-        // Set MAX_AUTO_APPROVE=all in api-keys.env for fully hands-off operation
         agentLoop:  { autoApproveLevel: process.env.MAX_AUTO_APPROVE || 'write' }
     });
 
     console.log('[Launcher] ⚙️  Initializing core systems...');
     await max.initialize();
     
-    // Always start API server for Dashboard
     const { createServer } = await import('./server/server.js');
     await createServer(max, opts.port || process.env.MAX_PORT || 3100);
 
@@ -914,9 +401,8 @@ async function main() {
     }
 }
 
-// Catch unhandled rejections from background tasks — log and continue rather than crash
 process.on('unhandledRejection', (err) => {
-    console.error('[MAX] ⚠️  Unhandled rejection (background task):', err?.message || err);
+    console.error('[MAX] ⚠️  Unhandled rejection:', err?.message || err);
 });
 process.on('uncaughtException', (err) => {
     console.error('[MAX] ⚠️  Uncaught exception:', err?.message || err);

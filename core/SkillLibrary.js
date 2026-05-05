@@ -108,6 +108,13 @@ Return ONLY a JSON object:
             this._skills.sort((a, b) => (b.successRate * b.usedCount) - (a.successRate * a.usedCount));
             if (this._skills.length > MAX_SKILLS) this._skills.pop();
 
+            // ─── Phase 4: Cognitive Capacitor (Autonomous Tool Generation) ───
+            // If a skill is used multiple times successfully, promote it to a permanent tool
+            const promoted = existing || this._skills.find(s => s.name === meta.name);
+            if (promoted && promoted.usedCount >= 2 && promoted.successRate >= 0.9) {
+                await this._promoteToTool(promoted, brain);
+            }
+
             await this._save();
             console.log(`[SkillLibrary] 💾 Encoded skill: "${meta.name}"`);
             return meta.name;
@@ -115,6 +122,41 @@ Return ONLY a JSON object:
         } catch (e) {
             console.warn('[SkillLibrary] Encode error:', e.message);
             return null;
+        }
+    }
+
+    async _promoteToTool(skill, brain) {
+        const toolDir = path.join(process.cwd(), 'tools', 'generated');
+        const toolFile = path.join(toolDir, `${skill.name}.js`);
+        
+        // Check if tool already exists
+        try {
+            await fs.access(toolFile);
+            return; // Already promoted
+        } catch {}
+
+        console.log(`[SkillLibrary] 🚀 Promoting skill "${skill.name}" to Executable Tool...`);
+
+        const prompt = `Convert this successful engineering skill pattern into a standalone Node.js tool.
+SKILL: ${skill.name}
+STEPS:
+${skill.steps.map(s => `${s.step}. [${s.tool}] ${s.action}`).join('\n')}
+
+The tool must be an object exported as 'export const ${skill.name} = { ... }'.
+It should use the ToolRegistry for any sub-tool calls.
+Return ONLY the raw JavaScript code inside a markdown block.`;
+
+        try {
+            const res = await brain.think(prompt, { tier: 'smart', temperature: 0.1 });
+            const code = res.text.match(/```javascript\n([\s\S]*?)```/)?.[1] || res.text.match(/```\n([\s\S]*?)```/)?.[1];
+            
+            if (code) {
+                await fs.mkdir(toolDir, { recursive: true });
+                await fs.writeFile(toolFile, code);
+                console.log(`[SkillLibrary] ✨ Autonomous Tool Created: tools/generated/${skill.name}.js`);
+            }
+        } catch (err) {
+            console.warn(`[SkillLibrary] ⚠️ Tool promotion failed: ${err.message}`);
         }
     }
 

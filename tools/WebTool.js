@@ -78,114 +78,100 @@ function _parseDDGResults(html, maxResults) {
 
 export const WebTool = {
     name: 'web',
-    description: 'Search the web and fetch page content',
+    description: 'The Odyssey Gateway — High-fidelity web search and deep Markdown scraping.',
 
     actions: {
         async search({ query, maxResults = 6 }) {
             return _cached(`search:${query}`, async () => {
                 const encoded = encodeURIComponent(query);
 
-                // ── AgenticSeek style: Private SearxNG search ────────────────
-                // If SEARXNG_BASE_URL is set, use it for private, high-quality search
-                if (process.env.SEARXNG_BASE_URL) {
+                // ── Odyssey Layer: Priority Search (Brave) ──────────────────
+                if (process.env.BRAVE_SEARCH_API_KEY) {
                     try {
-                        const res = await fetch(`${process.env.SEARXNG_BASE_URL}/search`, {
-                            method:  'POST',
-                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                            body:    `q=${encoded}&format=json&categories=general&language=auto`,
-                            signal:  AbortSignal.timeout(10000)
+                        const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encoded}&count=${maxResults}`, {
+                            headers: {
+                                'X-Subscription-Token': process.env.BRAVE_SEARCH_API_KEY
+                            },
+                            signal: AbortSignal.timeout(10000)
                         });
                         if (res.ok) {
                             const data = await res.json();
-                            const results = (data.results || []).slice(0, maxResults).map(r => ({
+                            const results = (data.web?.results || []).map(r => ({
                                 title:   r.title,
-                                snippet: r.content || r.snippet,
+                                snippet: r.description,
                                 url:     r.url
                             }));
-                            if (results.length > 0) {
-                                return { success: true, query, source: 'searxng', results };
-                            }
+                            if (results.length > 0) return { success: true, query, source: 'brave', results };
                         }
-                    } catch (err) {
-                        console.warn(`[WebTool] SearxNG search failed: ${err.message}`);
-                    }
+                    } catch (err) { console.warn(`[Odyssey] Brave search failed: ${err.message}`); }
                 }
 
-                // Try DuckDuckGo HTML (real results, not instant API)
+                // ── Fallback: DuckDuckGo Deep Scrape ────────────────────────
                 try {
-                    const res = await fetch(
-                        `https://html.duckduckgo.com/html/?q=${encoded}&kl=us-en`,
-                        {
-                            signal:  AbortSignal.timeout(12000),
-                            headers: {
-                                'User-Agent': 'Mozilla/5.0 (compatible; MAX-Agent/1.0)',
-                                'Accept':     'text/html'
-                            }
+                    const res = await fetch(`https://html.duckduckgo.com/html/?q=${encoded}`, {
+                        signal:  AbortSignal.timeout(12000),
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                            'Accept':     'text/html'
                         }
-                    );
+                    });
 
                     if (res.ok) {
                         const html    = await res.text();
                         const results = _parseDDGResults(html, maxResults);
-                        if (results.length > 0) {
-                            return { success: true, query, source: 'duckduckgo', results };
-                        }
+                        if (results.length > 0) return { success: true, query, source: 'odyssey-ddg', results };
                     }
                 } catch { /* fall through */ }
 
-                // Fallback: DuckDuckGo instant answer API
-                try {
-                    const res  = await fetch(
-                        `https://api.duckduckgo.com/?q=${encoded}&format=json&no_html=1&skip_disambig=1`,
-                        { signal: AbortSignal.timeout(8000) }
-                    );
-                    const data = await res.json();
-                    const results = [];
-
-                    if (data.AbstractText) {
-                        results.push({ title: data.Heading, snippet: data.AbstractText, url: data.AbstractURL });
-                    }
-                    for (const r of (data.RelatedTopics || []).slice(0, maxResults - results.length)) {
-                        if (r.Text && r.FirstURL) {
-                            results.push({ title: r.Text.split(' - ')[0] || r.Text, snippet: r.Text, url: r.FirstURL });
-                        }
-                    }
-
-                    return { success: true, query, source: 'ddg-instant', results: results.slice(0, maxResults) };
-                } catch (err) {
-                    return { success: false, query, error: err.message, results: [] };
-                }
+                return { success: false, query, error: 'All search layers failed' };
             });
         },
 
-        async fetch({ url, maxChars = 8000 }) {
+        async fetch({ url, maxChars = 15000 }) {
             return _cached(`fetch:${url}`, async () => {
+                // ── THE ODYSSEY GATEWAY: Jina Reader Protocol ────────────────
+                // This protocol converts ANY site (even JS-heavy ones) into clean Markdown.
+                // It is the industry standard for production agents.
+                try {
+                    console.log(`  [Odyssey] 🌀 Deep Scrape: ${url}`);
+                    const readerUrl = `https://r.jina.ai/${url}`;
+                    const res = await fetch(readerUrl, {
+                        signal:  AbortSignal.timeout(20000),
+                        headers: {
+                            'Accept': 'text/event-stream', // triggers high-fidelity mode
+                            'X-No-Cache': 'true'
+                        }
+                    });
+
+                    if (res.ok) {
+                        const markdown = await res.text();
+                        return {
+                            success: true,
+                            url,
+                            content: markdown.slice(0, maxChars),
+                            method: 'jina-odyssey',
+                            length: markdown.length
+                        };
+                    }
+                } catch (err) {
+                    console.warn(`[Odyssey] Jina scrape failed: ${err.message}. Falling back...`);
+                }
+
+                // ── STANDALONE FALLBACK: Mimic Browser ───────────────────────
                 try {
                     const res = await fetch(url, {
                         signal:  AbortSignal.timeout(15000),
                         headers: {
-                            'User-Agent': 'Mozilla/5.0 (compatible; MAX-Agent/1.0)',
-                            'Accept':     'text/html,text/plain'
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,webp,*/*;q=0.8'
                         }
                     });
 
                     if (!res.ok) return { success: false, url, error: `HTTP ${res.status}` };
-
-                    const contentType = res.headers.get('content-type') || '';
-                    if (!contentType.includes('text')) {
-                        return { success: false, url, error: 'Non-text content type' };
-                    }
-
-                    const raw  = await res.text();
+                    const raw = await res.text();
                     const text = _htmlToText(raw, maxChars);
 
-                    return {
-                        success:   true,
-                        url,
-                        content:   text,
-                        truncated: raw.length > maxChars,
-                        length:    text.length
-                    };
+                    return { success: true, url, content: text, method: 'browser-mimic' };
                 } catch (err) {
                     return { success: false, url, error: err.message };
                 }

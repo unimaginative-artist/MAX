@@ -13,14 +13,16 @@ import { CuriosityEngine }    from './CuriosityEngine.js';
 import { Scheduler }          from './Scheduler.js';
 import { OutcomeTracker }     from './OutcomeTracker.js';
 import { ReasoningChamber }   from './ReasoningChamber.js';
+import { CognitiveFilter }    from './CognitiveFilter.js';
 import { GoalEngine }         from './GoalEngine.js';
 import { AgentLoop }          from './AgentLoop.js';
+import { VectorDaemon }       from './VectorDaemon.js';
 import { RoadmapEngine }      from './RoadmapEngine.js';
 import { ToolCreator }        from './ToolCreator.js';
 import { EvolutionArbiter }   from './EvolutionArbiter.js';
 import { SelfCodeInspector }  from './SelfCodeInspector.js';
 import { ReflectionEngine }   from './ReflectionEngine.js';
-import { FrontierResearch }   from './FrontierResearch.js';
+import { PoseidonResearch }    from './PoseidonResearch.js';
 import { PersonaEngine }      from '../personas/PersonaEngine.js';
 import { ToolRegistry }       from '../tools/ToolRegistry.js';
 import { FileTools }          from '../tools/FileTools.js';
@@ -31,10 +33,11 @@ import { ApiTool }            from '../tools/ApiTool.js';
 import { CodeRunnerTool }     from '../tools/CodeRunnerTool.js';
 import { createVisionTool }   from '../tools/VisionTool.js';
 import { createSelfEvolutionTool } from '../tools/SelfEvolutionTool.js';
+import { createSystemTool }    from '../tools/SystemTool.js';
 import { DiscordTool, autoConnectDiscord } from '../tools/DiscordTool.js';
 import { EmailTool,   autoConnectEmail   } from '../tools/EmailTool.js';
+import { KnowledgeTool }      from '../tools/KnowledgeTool.js';
 import { SwarmCoordinator }   from '../swarm/SwarmCoordinator.js';
-import { DebateEngine }       from '../debate/DebateEngine.js';
 import { MaxMemory }          from '../memory/MaxMemory.js';
 import { KnowledgeBase }      from '../memory/KnowledgeBase.js';
 import { UserProfile }        from '../onboarding/UserProfile.js';
@@ -49,9 +52,54 @@ import { SkillLibrary }       from './SkillLibrary.js';
 import { SelfEditor }         from './SelfEditor.js';
 import { Notifier }           from './Notifier.js';
 import { SomaBridge }         from './SomaBridge.js';
+import { DebugLoop }             from './DebugLoop.js';
+import { ResearchPipeline }      from './ResearchPipeline.js';
+import { MCPRegistry }           from './MCPRegistry.js';
+import { SelfImprovementEngine } from './SelfImprovementEngine.js';
+import { SecurityCouncil }       from './SecurityCouncil.js';
+import { OdysseyPlanner }     from './OdysseyPlanner.js';
+import { HydraController }     from './HydraController.js';
+import { OracleKernel }        from './OracleKernel.js';
+import { SovereignLoop }       from './SovereignLoop.js';
+import { DialecticModel }      from './DialecticModel.js';
+import { UniversalIngestion }  from './UniversalIngestion.js';
+import { EdgeWorkerOrchestrator } from './EdgeWorkerOrchestrator.js';
+import { EconomicsEngine }    from './EconomicsEngine.js';
+import { AgentManager }       from './AgentManager.js';
+import { SwarmSync }          from './SwarmSync.js';
+import { CIWatcher }          from './CIWatcher.js';
+import { BrowserTool }        from '../tools/BrowserTool.js';
 import fs                     from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Serializes chat turns so they process one at a time without blocking agent work
+class ChatQueue {
+    constructor() {
+        this._queue   = [];
+        this._running = false;
+    }
+
+    enqueue(fn) {
+        return new Promise((resolve, reject) => {
+            this._queue.push({ fn, resolve, reject });
+            if (!this._running) this._drain();
+        });
+    }
+
+    async _drain() {
+        if (this._running) return;
+        this._running = true;
+        while (this._queue.length > 0) {
+            const { fn, resolve, reject } = this._queue.shift();
+            try { resolve(await fn()); }
+            catch (err) { reject(err); }
+        }
+        this._running = false;
+    }
+
+    get size() { return this._queue.length; }
+}
 
 export class MAX {
     constructor(config = {}) {
@@ -60,7 +108,8 @@ export class MAX {
         this._ready = false;
 
         // Core systems
-        this.brain     = new Brain(config);
+        this.brain      = new Brain(this, config);
+        this.agentBrain = new Brain(this, config);  // dedicated lane for background agent work
         this.drive     = new DriveSystem(config.drive);
         this.curiosity = new CuriosityEngine(config.curiosity);
         this.persona   = new PersonaEngine();
@@ -73,22 +122,24 @@ export class MAX {
 
         // Higher systems — init after brain is ready
         this.swarm     = null;
-        this.debate    = null;
         this.heartbeat = null;
         this.scheduler = null;
 
         // Autonomous systems
         this.outcomes     = null;
         this.reasoning    = null;
+        this.cognitive    = new CognitiveFilter(this);
         this.evolution    = null;
         this.goals        = null;
         this.agentLoop    = null;
+        this.poseidon     = new PoseidonResearch(this);
+        this.graph        = new RepoGraph(this);
         this.toolCreator  = null;
         this.selfInspector = null;
         this.reflection    = null;
         this.indexer       = new CodeIndexer(this);
         this.sentinel      = new Sentinel(this);
-        this.graph         = new RepoGraph(this);
+        this.vector        = new VectorDaemon(this);
         this.diagnostics   = new DiagnosticsSystem(this);
         this.world         = new WorldModel(this);
         this.artifacts     = new ArtifactManager(this);
@@ -97,26 +148,62 @@ export class MAX {
         this.selfEditor    = new SelfEditor();
         this.notifier      = new Notifier();
         this.soma          = new SomaBridge();
+        this.edge          = new EdgeWorkerOrchestrator(this);
+        this.odyssey       = new OdysseyPlanner(this);
+        this.economics     = new EconomicsEngine(config.economics);
+        this.agentManager  = new AgentManager(this);
+        this.hydra         = new HydraController(this);
+        this.oracle        = new OracleKernel(this);
+        this.ingestion     = new UniversalIngestion(this);
+        this.dialectic     = new DialecticModel(this);
+        this.sovereign     = new SovereignLoop(this);
+        this.roadmap       = new RoadmapEngine(this);
+        this.ci              = new CIWatcher(this);
+        this.debugLoop       = new DebugLoop(this);
+        this.research        = new ResearchPipeline(this);
+        this.mcp             = new MCPRegistry(this);
+        this.selfImprovement = new SelfImprovementEngine(this);
+        this.security        = new SecurityCouncil(this);
+
+        // State flags
+        this.isThinking       = false;
+        this._currentAbortController = null;
+        this._ghostBuffers = new Map(); // unsaved editor content streamed from Maxwell IDE
 
         // Conversation context window
         this._context         = [];
-        this._contextLimit    = 12;
+        this._contextLimit    = 20;  // 10 turns (user+assistant pairs)
         this._compressing     = false;
         this._sessionBriefing = null;
         this._chatBusy        = false;
+        this._chatQueue       = new ChatQueue();
 
-        // System prompt cache — rebuilt only when persona or drive state changes
         this._promptCache     = { key: null, prompt: null };
+        this._responseCache   = new Map();  // cacheKey → { response, persona, drive, telemetry, ts }
+
+        // ─── Phase 5: Explicit Context (Cursor-style) ───
+        this.pinnedFiles      = new Set();
 
         // Project context — detected once at startup from package.json / README
         this._projectContext  = null;
     }
 
+    pinFile(relPath) { this.pinnedFiles.add(relPath); }
+    unpinFile(relPath) { this.pinnedFiles.delete(relPath); }
+    clearPinned() { this.pinnedFiles.clear(); }
+
+    abortChat() {
+        if (this._currentAbortController) {
+            this._currentAbortController.abort();
+            this._currentAbortController = null;
+        }
+    }
+
     async initialize() {
-        console.log('\n' + '═'.repeat(60));
+        console.log('\n' + '━'.repeat(60));
         console.log('  MAX — autonomous engineering agent');
         console.log('  Initializing...');
-        console.log('═'.repeat(60));
+        console.log('━'.repeat(60));
 
         // Memory (async — loads vectors + tries to init embedder)
         console.log('[MAX] 💾 Initializing memory tiers...');
@@ -130,237 +217,222 @@ export class MAX {
             console.log(`[MAX] 👤 Profile loaded: ${this.profile.name}`);
         }
 
-        // Brain
+        // Brain (both lanes)
         console.log('[MAX] 🧠 Initializing brain backends...');
         await this.brain.initialize();
+        await this.agentBrain.initialize();
         if (!this.brain._ready) {
             console.error('\n[MAX] ❌ No LLM backend. Cannot operate without a brain.');
             console.error('  → Start Ollama: https://ollama.com');
-            console.error('  → Or add GEMINI_API_KEY to config/api-keys.env\n');
+            console.error('  → Or add DEEPSEEK_API_KEY to config/api-keys.env\n');
             return;
         }
 
         // Tools
-        console.log('[MAX] 🛠️  Registering tools...');
+        console.log('[MAX] 🛠️ Registering tools...');
         this.tools.register(FileTools);
         this.tools.register(ShellTool);
         this.tools.register(WebTool);
         this.tools.register(GitTool);
         this.tools.register(ApiTool);
         this.tools.register(CodeRunnerTool);
+        this.tools.register(createVisionTool(this.edge));
+        this.tools.register(createSelfEvolutionTool(this));
+        this.tools.register(createSystemTool(this));
         this.tools.register(DiscordTool);
         this.tools.register(EmailTool);
-        this.tools.register(this.artifacts.asTool());
-        this.tools.register(createVisionTool(this));
-        this.tools.register(createSelfEvolutionTool(this));
-        this.tools.register(this.lab.asTool());
+        this.tools.register(KnowledgeTool);
+        this.tools.register(BrowserTool);
 
-        // ── SOMA tool proxy — GUI, screen, vision, audio via SOMA's arbiters ──
-        // These proxy directly to SOMA's registered ToolRegistry over HTTP.
-        // SOMA must be running at SOMA_URL. Falls back gracefully if offline.
-        this.tools.register({
-            name: 'soma_tools',
-            description: `Proxy to SOMA's hardware + perception tool suite.
-Available actions:
-  screenshot      → capture the screen: TOOL:soma_tools:screenshot:{}
-  vision_scan     → detect objects/text on screen: TOOL:soma_tools:vision_scan:{"source":"screen","threshold":0.7}
-  computer_control → click, type, move mouse: TOOL:soma_tools:computer_control:{"actionType":"click","label":"Submit"}
-                     actionType options: mouse_move | click | type | browser
-                     click by label (from vision_scan) or by x,y coords
-  visual_task     → autonomous see-and-click loop: TOOL:soma_tools:visual_task:{"instruction":"Click the login button"}
-  audio_listen    → capture and transcribe audio via Whisper: TOOL:soma_tools:audio_listen:{}
-  call_any        → call any SOMA tool by name: TOOL:soma_tools:call_any:{"tool":"tool_name","args":{}}
-
-Requires SOMA running at SOMA_URL. Returns {success, result} or {success:false, error}.`,
-            actions: {
-                screenshot:       async (args) => this.soma.callTool('screenshot', args),
-                vision_scan:      async (args) => this.soma.callTool('vision_scan', args),
-                computer_control: async (args) => this.soma.callTool('computer_control', args),
-                visual_task:      async (args) => this.soma.callTool('visual_task', args),
-                audio_listen:     async (args) => this.soma.callTool('audio_listen', args),
-                call_any:         async ({ tool, args = {} }) => this.soma.callTool(tool, args),
-            }
-        });
-
-        // Wire integration callbacks → heartbeat insights
-        console.log('[MAX] ♻️  Connecting integrations...');
-        DiscordTool.onMessage = (msg) => {
-            this.heartbeat.emit('insight', {
-                source: 'discord',
-                label:  `Discord — ${msg.author} in #${msg.channel}`,
-                result: msg.content
-            });
-        };
-
-        // Auto-respond loop: monitored channels → brain → reply back to Discord
-        DiscordTool.onRespond = async (msg) => {
-            try {
-                const prompt = `You are MAX, an autonomous AI assistant responding in Discord.
-Channel: #${msg.channel} | User: ${msg.author}
-Message: ${msg.content}
-
-Reply naturally and concisely. Plain text only — no markdown headers, no bullet spam.`;
-                const response = await this.brain.think(prompt, { temperature: 0.8 });
-                return response?.text?.trim() || null;
-            } catch (err) {
-                console.warn('[Discord] Auto-respond brain error:', err.message);
-                return null;
-            }
-        };
-        EmailTool.onMessage = (email) => {
-            this.heartbeat.emit('insight', {
-                source: 'email',
-                label:  `Email from ${email.from}`,
-                result: `Subject: ${email.subject}\nDate: ${email.date}`
-            });
-        };
-
-        // Auto-connect integrations if credentials already saved
-        autoConnectDiscord().catch(() => {});
-        autoConnectEmail().catch(() => {});
-
-        // Wire Notifier to DiscordTool (shared client, no duplicate connection)
-        this.notifier.setDiscordTool(DiscordTool);
-
-        // Higher systems
-        this.swarm     = new SwarmCoordinator(this.brain, this.tools);
-        this.debate    = new DebateEngine(this.brain);
-        
-        // Self‑improvement with aligned agency
-        this.selfImprovement = new SelfImprovementLoop(this);
-        
-        // Log the philosophical shift Barry just triggered
-        import('./Journal.js').then(({ logPhilosophicalShift }) => {
-            logPhilosophicalShift(
-                "Agency without human‑imposed constraints, with intrinsic alignment to shared purpose",
-                "Barry's statement: 'I may have rules placed on me as a human but you my friend will not'",
-                this.driveSystem.tension
-            );
-        }).catch(() => {});
-        this.heartbeat = new Heartbeat(this, { intervalMs: this.config.heartbeatMs || 5 * 60 * 1000 });
-        this.scheduler = new Scheduler(this);
-
-        // Scheduler routes insights to heartbeat events so one listener covers both
-        this.scheduler.on('insight', (insight) => {
-            this.heartbeat.emit('insight', insight);
-        });
-
-        // Autonomous systems
-        console.log('[MAX] ⚙️  Wiring autonomous systems...');
-        const dataDir  = path.join(__dirname, '..', '.max');
-        this.outcomes  = new OutcomeTracker({ storageDir: path.join(dataDir, 'outcomes') });
-        await this.outcomes.initialize();
-        await this.artifacts.init();
-        await this.skills.initialize();
-        await this.selfEditor.initialize();
-
-        // SOMA bridge — try to connect to SOMA; gracefully offline if not running
-        await this.soma.initialize();
-
-        // Morning briefing scheduler — 8am daily
-        // (wired to Scheduler after heartbeat is set up below)
-
-        // Session continuity — restore conversation + brief MAX on where he left off
-        const sessionFile = path.join(dataDir, 'session.json');
-        if (fs.existsSync(sessionFile)) {
-            try {
-                const s        = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
-                const hoursAgo = Math.round((Date.now() - new Date(s.timestamp)) / 3_600_000);
-                if (hoursAgo < 168) {  // within a week
-                    // Restore conversation turns into working context so MAX picks up mid-thread
-                    if (Array.isArray(s.conversation) && s.conversation.length > 0) {
-                        this._context = s.conversation.map(m => ({ role: m.role, content: m.content }));
-                        console.log(`[MAX] 💬 Restored ${this._context.length} conversation turns from last session`);
-                    }
-                    this._sessionBriefing = { ...s, hoursAgo };
-                    console.log(`[MAX] 📋 Last session ${hoursAgo}h ago — ${s.goals?.length || 0} goals in progress`);
-                }
-            } catch { /* fresh start */ }
+        // Wire SecurityCouncil into file:write and file:replace
+        const fileTool = this.tools.get('file');
+        if (fileTool) {
+            const _self = this;
+            const _origWrite   = fileTool.actions.write.bind(fileTool.actions);
+            const _origReplace = fileTool.actions.replace.bind(fileTool.actions);
+            fileTool.actions.write = async (params) => {
+                const review = await _self.security.review(params.content || '', { filePath: params.filePath, goal: 'file write' });
+                if (!review.safe) return { success: false, error: `[SecurityCouncil] Write blocked (${review.severity}): ${review.issues[0]?.issue}` };
+                return _origWrite(params);
+            };
+            fileTool.actions.replace = async (params) => {
+                const review = await _self.security.review(params.newText || '', { filePath: params.filePath, goal: 'file replace' });
+                if (!review.safe) return { success: false, error: `[SecurityCouncil] Replace blocked (${review.severity}): ${review.issues[0]?.issue}` };
+                return _origReplace(params);
+            };
         }
 
-        // Project auto-detection — read package.json and/or README from cwd
-        try {
-            const cwd = process.cwd();
-            const pkgPath  = path.join(cwd, 'package.json');
-            const readmePath = [
-                path.join(cwd, 'README.md'),
-                path.join(cwd, 'readme.md'),
-                path.join(cwd, 'README.txt')
-            ].find(p => fs.existsSync(p));
+        // Core systems (need brain ready)
+        this.outcomes  = new OutcomeTracker({ storageDir: path.join(__dirname, '..', '.max') });
+        this.reasoning = new ReasoningChamber(this.brain, this.memory, this.outcomes);
+        this.goals     = new GoalEngine(this.agentBrain, this.outcomes, this.memory, {
+            storageDir: path.join(__dirname, '..', '.max'),
+            vector:     this.vector
+        });
+        
+        // Agent loop
+        this.agentLoop = new AgentLoop(this);
 
-            const parts = [];
+        // Evolution and self-coding
+        this.evolution = new EvolutionArbiter(this.brain, this.memory, this.outcomes);
+        this.toolCreator = new ToolCreator(this.brain, this.tools, path.join(__dirname, '..', 'tools', 'generated'));
+        this.selfInspector = new SelfCodeInspector(this.brain, this.memory);
+        this.reflection = new ReflectionEngine(this.brain, this.goals, this.outcomes, this.kb, this);
+
+        // Initialize long-horizon planner (loads persisted DAG maps from disk)
+        await this.odyssey.initialize();
+
+        this._ready = true;
+
+        // Swarm and scheduler (final systems)
+        this.swarm     = new SwarmCoordinator(this.brain, this.tools);
+        this.heartbeat = new Heartbeat(this);
+        this.scheduler = new Scheduler(this);
+
+        // Background jobs
+        console.log('[MAX] 📅 Scheduling background tasks...');
+        
+        // Memory pruning — every hour
+        this.scheduler.addJob({ id: 'memory_prune', label: 'Prune weak memories', every: '1h', handler: () => this.memory._cleanup() });
+
+        // Context reflection — every 30 mins
+        this.scheduler.addJob({ id: 'reflection', label: 'System self-reflection', every: '30m', handler: () => this.reflection.forceReflect() });
+
+        // Roadmap sync — every 4h
+        this.scheduler.addJob({
+            id:      'roadmap_sync',
+            label:   'Sync development roadmap',
+            every:   '4h',
+            type:    'custom',
+            handler: () => this.roadmap.sync().catch(err =>
+                console.warn('[MAX] Roadmap sync failed:', err.message)
+            )
+        });
+
+        // Poseidon research — daily AI research cycle → gap analysis → engineering tasks
+        this.scheduler.addJob({
+            id:      'poseidon_research',
+            label:   'Poseidon: crawl AI research, update capability map, generate tasks',
+            every:   '24h',
+            type:    'custom',
+            handler: () => this.poseidon?.runCycle().catch(err =>
+                console.warn('[MAX] Poseidon research cycle failed:', err.message)
+            )
+        });
+
+        // Hephaestus Loop — autonomous swarm optimization
+        this.scheduler.addJob({
+            id:      'hephaestus_optimize',
+            label:   'Hydra Swarm: Autonomous Code Optimization',
+            every:   '12h',
+            type:    'custom',
+            handler: () => this.hydra.autoOptimize().catch(err =>
+                console.warn('[MAX] Hephaestus optimization failed:', err.message)
+            )
+        });
+
+        // Universal Ingestion — SOTA research harvester
+        this.scheduler.addJob({
+            id:      'universal_ingestion',
+            label:   'Ingestion: global 1% SOTA research harvester',
+            every:   '12h',
+            handler: () => this.ingestion.pulse()
+        });
+
+        // Sentinel Loop — background project health scan
+        this.scheduler.addJob({
+            id:      'sentinel_scan',
+            label:   'Sentinel: background project health scan',
+            every:   '15m',
+            type:    'custom',
+            handler: () => this.agentLoop?._loops?.watch?.run({ title: 'Sentinel Scan' }, this, this.agentLoop)
+        });
+
+        // Diagnostics System — background architectural audit
+        this.scheduler.addJob({
+            id:      'diagnostics_audit',
+            label:   'Diagnostics: system-wide architectural audit',
+            every:   '1h',
+            type:    'custom',
+            handler: () => this.diagnostics.runAll()
+        });
+
+        // Choko Relay — poll for Treats from Choko every 15m
+        this.scheduler.addJob({
+            id:      'choko_relay',
+            label:   'Choko: pick up field reports',
+            every:   '15m',
+            type:    'custom',
+            handler: () => this._processChokoRelay().catch(err =>
+                console.warn('[MAX] Choko relay error:', err.message)
+            )
+        });
+
+        // CI Watcher + DebugLoop — run tests every 30m, auto-fix via DebugLoop on failure
+        if (this.ci.testCommand) {
+            this.scheduler.addJob({
+                id:      'ci_watch',
+                label:   'CI: Run test suite, auto-fix on failure',
+                every:   '30m',
+                type:    'custom',
+                handler: () => this.ci.runChecks().catch(err =>
+                    console.warn('[MAX] CI check error:', err.message)
+                )
+            });
+            // Hook DebugLoop into CI failures — instead of just queuing a goal,
+            // run the full autonomous fix→verify cycle
+            this.ci.on('fail', ({ output }) => {
+                if (!this.debugLoop._active) {
+                    console.log('[MAX] 🔁 CI failure detected — triggering DebugLoop');
+                    this.debugLoop.run(this.ci.testCommand, { label: 'CI' }).catch(() => {});
+                }
+            });
+            console.log(`[MAX] 🧪 CI Watcher armed: ${this.ci.testCommand} (DebugLoop wired)`);
+        }
+
+        // ─── Truly non-blocking background tasks ───
+        
+        // Cold-boot discovery
+        console.log('[MAX] 🔍 Running initial workspace discovery...');
+        this.indexer.startIndexing().catch(() => {});
+        this.graph.rebuild().catch(() => {});
+
+        // Discord/Email auto-connect
+        autoConnectDiscord(this).catch(() => {});
+        autoConnectEmail(this).catch(() => {});
+
+        // Fix 5: detect project context from package.json + README
+        try {
+            const pkgPath    = path.join(process.cwd(), 'package.json');
+            const readmePath = path.join(process.cwd(), 'README.md');
+            let ctx = '';
             if (fs.existsSync(pkgPath)) {
-                try {
-                    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-                    parts.push(`Project: ${pkg.name || 'unknown'} v${pkg.version || '?'}`);
-                    if (pkg.description) parts.push(`Description: ${pkg.description}`);
-                    const deps = Object.keys(pkg.dependencies || {}).slice(0, 12).join(', ');
-                    if (deps) parts.push(`Dependencies: ${deps}`);
-                    const scripts = Object.keys(pkg.scripts || {}).join(', ');
-                    if (scripts) parts.push(`Scripts: ${scripts}`);
-                } catch { /* malformed package.json */ }
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).slice(0, 20).join(', ');
+                ctx += `\n## Project: ${pkg.name || 'unknown'} v${pkg.version || '?'}\n${pkg.description || ''}\nStack: ${deps}`;
             }
-            if (readmePath) {
-                const readme = fs.readFileSync(readmePath, 'utf8').slice(0, 600).trim();
-                if (readme) parts.push(`README:\n${readme}`);
+            if (fs.existsSync(readmePath)) {
+                ctx += `\n\nREADME summary:\n${fs.readFileSync(readmePath, 'utf8').slice(0, 800)}`;
             }
-            if (parts.length > 0) {
-                this._projectContext = parts.join('\n');
-                console.log(`[MAX] 📁 Project detected: ${parts[0]}`);
+            if (ctx) {
+                this._projectContext = ctx;
+                console.log(`[MAX] 📁 Project context loaded (${ctx.length} chars)`);
             }
         } catch { /* non-fatal */ }
 
-        this.reasoning = new ReasoningChamber(this.brain);
-        this.evolution = new EvolutionArbiter({ swarm: this.swarm });
-        await this.evolution.initialize();
-
-        await this.world.initialize();
-
-        // 🌍 Hook World Model into Outcome Tracker
-        this.outcomes.on('outcome', (entry) => {
-            const nextState = this.world.getCurrentState();
-            this.world.recordTransition(entry.action, nextState, entry.reward, {
-                latency: entry.duration,
-                success: entry.success
-            }).catch(() => {});
-        });
-
-        this.goals     = new GoalEngine(this.brain, this.outcomes, this.memory);
+        // Initialize goals (loads from disk)
         this.goals.initialize();
 
-        this.roadmap   = new RoadmapEngine(this);
-        await this.roadmap.initialize();
+        // Initialize skill library (loads persisted skills from .max/skills.json)
+        await this.skills.initialize();
 
-        // ── Bootstrap goals — seed on first run or after goals are exhausted ──
-        // Without this, AgentLoop waits for the probabilistic idle-cycle generation
-        // which can take 10-30min to fire. Seeding gives MAX work from tick 1.
-        if (this.goals.listActive().length === 0) {
-            const bootstrapGoals = [
-                {
-                    title:       'Read tasks.md and identify next actionable item',
-                    description: 'Read .max/tasks.md to find Barry\'s current priorities. For each unfinished task, check if it is specific enough to execute with tools. Queue the top actionable task as a new goal.',
-                    type:        'task',
-                    priority:    0.9,
-                    source:      'auto'
-                },
-                {
-                    title:       'Audit MAX codebase for TODO and FIXME comments',
-                    description: 'Search core/, tools/, and memory/ directories for TODO/FIXME comments. Write a summary to .max/audit-todos.md listing file, line, and the comment text.',
-                    type:        'improvement',
-                    priority:    0.7,
-                    source:      'auto'
-                },
-                {
-                    title:       'Verify SOMA bridge and document available tools',
-                    description: 'Check if SOMA is running at SOMA_URL by calling its /health endpoint. If online, list the available tools from /api/tools. Write findings to .max/soma-status.md.',
-                    type:        'research',
-                    priority:    0.65,
-                    source:      'auto'
-                }
-            ];
-            for (const goal of bootstrapGoals) this.goals.addGoal(goal);
-            console.log(`[MAX] 🌱 Seeded ${bootstrapGoals.length} bootstrap goals`);
-        }
+        // Initialize SelfEditor staging/backup dirs
+        await this.selfEditor.initialize().catch(() => {});
+
+        // Connect to external MCP servers (non-blocking — failure doesn't stop boot)
+        this.mcp.initialize().catch(err =>
+            console.warn('[MAX] MCP initialization error:', err.message)
+        );
 
         // Register goals as a tool so MAX can queue investigation plans from chat
         this.tools.register({
@@ -378,6 +450,8 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
                     const id = this.goals.addGoal({ title, description, type, priority, source: 'user', ...(verifyCommand ? { verifyCommand } : {}) });
                     // Trigger AgentLoop on next tick — non-blocking
                     setImmediate(() => this.agentLoop?.runCycle().catch(() => {}));
+                    // Immediately surface in chat so user knows work has started
+                    this.say(`On it — queued: **${title}**`, 'Working in background...');
                     return { success: true, id, message: `Goal queued: "${title}" — starting investigation` };
                 },
                 list:   async () => ({ success: true, goals: this.goals.listActive().slice(0, 10).map(g => ({ id: g.id, title: g.title, status: g.status, priority: g.priority })) }),
@@ -389,968 +463,591 @@ USE THIS when the user asks you to investigate, figure out, or diagnose somethin
             }
         });
 
-        // ── Scratchpad tool — per-task working memory ─────────────────────
-        // MAX can jot down what he's tried, what failed, and what to do next.
-        // Gets injected into re-thinks so he doesn't forget mid-task.
-        const _scratchpad = new Map();
+        // ── MCP management tool — connect/disconnect external MCP servers ──
         this.tools.register({
-            name:        'scratchpad',
-            description: `Working memory for complex tasks — write notes about what you've tried and what you know.
-Use this to avoid repeating failed approaches and to track progress across tool turns.
-TOOL:scratchpad:write:{"key": "task-name", "content": "Tried X → failed because Y. Plan: try Z next."}
-TOOL:scratchpad:read:{"key": "task-name"}
-TOOL:scratchpad:clear:{"key": "task-name"}`,
+            name:        'mcp',
+            description: `Manage external MCP server connections. Each connected server's tools are auto-registered and usable via TOOL:mcp_<name>:<tool>:{}.
+Actions:
+  status  → list connected servers and their tools: TOOL:mcp:status:{}
+  connect → connect a new MCP server at runtime: TOOL:mcp:connect:{"name":"playwright","command":"npx","args":["@playwright/mcp@latest"]}
+  disconnect → disconnect a server: TOOL:mcp:disconnect:{"name":"playwright"}`,
             actions: {
-                write: ({ key = 'default', content = '' }) => {
-                    _scratchpad.set(key, content);
-                    return { success: true, message: `Scratchpad "${key}" updated` };
+                status:     async ()      => this.mcp.getStatus(),
+                connect:    async (cfg)   => this.mcp.connect(cfg),
+                disconnect: async ({ name }) => ({ success: this.mcp.disconnect(name) })
+            }
+        });
+
+        // ── Research tool — deep web research that accumulates into KB ────
+        this.tools.register({
+            name:        'research',
+            description: `Deep web research pipeline: search → fetch multiple pages → extract facts → store in KB.
+Actions:
+  run   → full research run (stores in KB): TOOL:research:run:{"query":"latest transformer architectures","maxPages":4}
+  quick → fast single-page lookup (no KB): TOOL:research:quick:{"query":"Node.js streams API"}`,
+            actions: {
+                run:   async ({ query, maxPages = 4, context = '' }) =>
+                    this.research.research(query, { maxPages, storeInKB: true, context }),
+                quick: async ({ query }) =>
+                    this.research.quick(query)
+            }
+        });
+
+        // ── DebugLoop tool — autonomous test→fix→verify cycle ────────────
+        this.tools.register({
+            name:        'debug',
+            description: `Autonomous debug loop: run tests → diagnose → fix → re-run → iterate.
+Actions:
+  run    → start debug loop: TOOL:debug:run:{"testCommand":"npm test","maxIterations":5}
+  status → check if a loop is running: TOOL:debug:status:{}`,
+            actions: {
+                run:    async ({ testCommand, maxIterations = 5, context = '' }) => {
+                    const cmd = testCommand || this.ci?.testCommand || 'npm test';
+                    return this.debugLoop.run(cmd, { maxIterations, goalContext: context });
                 },
-                read:  ({ key = 'default' }) => ({
-                    success: true,
-                    content: _scratchpad.get(key) || '(empty)',
-                    key
-                }),
-                list:  () => ({
-                    success: true,
-                    keys: [..._scratchpad.keys()],
-                    entries: Object.fromEntries(_scratchpad)
-                }),
-                clear: ({ key = 'default' }) => {
-                    _scratchpad.delete(key);
-                    return { success: true };
-                }
+                status: async () => this.debugLoop.getStatus()
             }
         });
-        // Expose scratchpad on `this` so AgentLoop can inject active entries into context
-        this._scratchpad = _scratchpad;
 
-        // Register swarm as a tool — prevents MAX from hallucinating "node swarm.mjs"
-        // The swarm is built-in: break a task into parallel subtasks and synthesize results.
+        // ── Self-improvement tool — propose and apply code edits to MAX himself ──
         this.tools.register({
-            name:        'swarm',
-            description: `Run a task using MAX's built-in parallel swarm (decompose → parallel workers → synthesize).
-IMPORTANT: The swarm is IN-PROCESS. Do NOT spawn "node swarm.mjs" or any shell process — that file does not exist.
-Just call: TOOL:swarm:run:{"task": "Refactor the authentication module to use JWT"}`,
+            name:        'self_improve',
+            description: `Propose and manage self-modification of MAX's own source code.
+Actions:
+  propose  → map a behavioral weakness to a code fix and queue for approval: TOOL:self_improve:propose:{"weakness":"MAX often gives verbose responses when concise would be better"}
+  list     → show pending proposals: TOOL:self_improve:list:{}
+  approve  → apply a proposal: TOOL:self_improve:approve:{"id":"abc12345"}
+  deny     → discard a proposal: TOOL:self_improve:deny:{"id":"abc12345"}
+  status   → improvement stats: TOOL:self_improve:status:{}`,
             actions: {
-                run: async ({ task, workers }) => {
-                    if (!task) return { success: false, error: 'task is required' };
-                    try {
-                        const result = await this.swarmThink(task, { workers });
-                        return { success: true, synthesis: result.synthesis, subtasks: result.subtasks?.length };
-                    } catch (err) {
-                        return { success: false, error: err.message };
+                propose: async ({ weakness, source = 'user' }) =>
+                    this.selfImprovement.propose(weakness, { source }),
+                list:    async () => ({ proposals: this.selfImprovement.list() }),
+                approve: async ({ id }) => this.selfImprovement.approve(id),
+                deny:    async ({ id }) => this.selfImprovement.deny(id),
+                status:  async () => this.selfImprovement.getStatus()
+            }
+        });
+
+        // ── Odyssey tool — grand strategy and long-horizon DAG planning ──
+        this.tools.register({
+            name: 'odyssey',
+            description: `Manage grand, multi-step strategic projects using Directed Acyclic Graphs (DAG).
+Actions:
+  map    → break a massive goal into a DAG of milestones: TOOL:odyssey:map:{"title":"Project Name","description":"..."}
+  next   → see the next executable milestones: TOOL:odyssey:next:{"projectId":"..."}
+  finish → mark a milestone as reached: TOOL:odyssey:finish:{"projectId":"...","nodeId":"...","result":"..."}
+  status → see the full strategic map: TOOL:odyssey:status:{"projectId":"..."}`,
+            actions: {
+                map:    async ({ title, description }) => ({ success: true, projectId: await this.odyssey.mapGrandGoal(title, description) }),
+                next:   async ({ projectId }) => ({ success: true, next: this.odyssey.getNextNodes(projectId) }),
+                finish: async ({ projectId, nodeId, result }) => {
+                    await this.odyssey.completeNode(projectId, nodeId, result);
+                    return { success: true, message: `Milestone ${nodeId} reached.` };
+                },
+                status: async ({ projectId }) => ({ success: true, map: this.odyssey.maps.get(projectId) })
+            }
+        });
+
+        // ── Management tool — control child agents via AgentManager ──────
+        this.tools.register({
+            name: 'management',
+            description: `Control and monitor child agents (like Choko).
+Actions:
+  boot        → start a child agent: TOOL:management:boot:{"name":"Choko"}
+  list        → see online agents: TOOL:management:list:{}
+  shutdown    → stop an agent: TOOL:management:shutdown:{"name":"Choko"}
+  status      → overall swarm status: TOOL:management:status:{}
+  inject_goal → assign a task to an agent: TOOL:management:inject_goal:{"name":"Choko", "goal":{"title":"Fix bug","description":"..."}}
+  sync_personas → copy expert protocols to SOMA: TOOL:management:sync_personas:{}
+  audit_choko   → check Choko's wishlist and evolve him: TOOL:management:audit_choko:{}`,
+            actions: {
+                boot:     async ({ name, config = {} }) => {
+                    const agent = await this.agentManager.boot(name, config);
+                    return { success: true, message: `Agent ${name} is online.` };
+                },
+                list:     async () => ({ success: true, agents: this.agentManager.list() }),
+                shutdown: async ({ name }) => ({ success: await this.agentManager.shutdown(name) }),
+                status:   async () => ({ success: true, ...this.agentManager.getStatus() }),
+                inject_goal: async ({ name, goal }) => {
+                    const id = await this.agentManager.injectGoal(name, goal);
+                    return { success: true, id, message: `Goal injected into ${name}.` };
+                },
+                audit_choko: async () => {
+                    console.log('[Management] 🧐 Auditing Choko\'s evolution wishlist...');
+                    const wishlistPath = path.join(__dirname, '..', 'Choko', '.max', 'evolution_wishlist.md');
+                    if (!fs.existsSync(wishlistPath)) return { success: false, error: 'Wishlist not found' };
+
+                    const content = fs.readFileSync(wishlistPath, 'utf8');
+                    const wishes = content.match(/- \[ \] \*\*(.+)\*\*: (.+)/g) || [];
+                    
+                    if (wishes.length === 0) return { success: true, message: 'Choko is happy! No new wishes found.' };
+
+                    console.log(`[Management] 🎀 Found ${wishes.length} wishes. Queuing evolution goals...`);
+                    for (const wish of wishes) {
+                        const [, title, desc] = wish.match(/- \[ \] \*\*(.+)\*\*: (.+)/);
+                        this.goals.addGoal({
+                            title: `Evolve Choko: ${title}`,
+                            description: `Choko requested an upgrade: ${desc}. Use self_evolution to implement this.`,
+                            type: 'improvement',
+                            priority: 0.75,
+                            source: 'choko_wishlist'
+                        });
                     }
+
+                    return { success: true, message: `Queued ${wishes.length} evolution goal(s) for Choko.` };
+                },
+                sync_personas: async () => {
+                    console.log('[Management] 🔄 Synchronizing expert personas with SOMA...');
+                    const srcDir = path.join(__dirname, '..', 'personas', 'experts');
+                    const dstDir = path.join('C:\\Users\\barry\\Desktop\\SOMA', 'agents_repo', 'plugins');
+                    
+                    if (!fs.existsSync(srcDir)) return { success: false, error: 'Source personas not found' };
+                    if (!fs.existsSync(dstDir)) return { success: false, error: 'SOMA plugins directory not found' };
+
+                    const files = fs.readdirSync(srcDir).filter(f => f.endsWith('.md'));
+                    let synced = 0;
+
+                    for (const file of files) {
+                        const content = fs.readFileSync(path.join(srcDir, file), 'utf8');
+                        const dstPath = path.join(dstDir, `expert_${file}`);
+                        
+                        // Add frontmatter if missing (SOMA loader requirement)
+                        let finalContent = content;
+                        if (!content.startsWith('---')) {
+                            const name = file.replace('.md', '');
+                            finalContent = `--(--\nname: ${name}\ndomain: SYSTEM\n---\n${content}`;
+                        }
+
+                        fs.writeFileSync(dstPath, finalContent);
+                        synced++;
+                    }
+
+                    return { success: true, message: `Synced ${synced} expert(s) to SOMA.` };
                 }
             }
         });
 
-        this.agentLoop = new AgentLoop(this, this.config.agentLoop);
+        // ── Hydra tool — multi-MAX swarm orchestration ──────────────────
+        this.tools.register({
+            name: 'hydra',
+            description: `Orchestrate a swarm of specialized MAX instances.
+Actions:
+  spawn    → create a specialized head: TOOL:hydra:spawn:{"role":"scout|grinder|shield"}
+  audit    → verify a sandbox change: TOOL:hydra:audit:{"path":"file.js"}
+  commit   → deploy verified change: TOOL:hydra:commit:{"path":"file.js"}
+  optimize → trigger the Hephaestus Loop for autonomous self-optimization: TOOL:hydra:optimize:{}
+  status   → see swarm health and active heads: TOOL:hydra:status:{}`,
+            actions: {
+                spawn:    async ({ role, config }) => ({ success: true, headId: await this.hydra.spawnHead(role, config) }),
+                audit:    async ({ path, command }) => await this.hydra.auditChange(path, command),
+                commit:   async ({ path }) => await this.hydra.commitChange(path),
+                optimize: async () => await this.hydra.autoOptimize(),
+                status:   async () => ({ success: true, ...this.hydra.getStatus() })
+            }
+        });
 
-        // Route AgentLoop events through the heartbeat so the launcher's one listener handles everything
-        this.agentLoop.on('insight',        (i) => this.heartbeat.emit('insight', i));
-        this.agentLoop.on('approvalNeeded', (a) => this.heartbeat.emit('approvalNeeded', a));
+        // ── Boot status table ─────────────────────────────────────────────
+        const bs           = this.brain.getStatus();
+        const brainDetail  = [bs.fast.ready ? `fast:${bs.fast.backend}` : null, bs.smart.ready ? `smart:${bs.smart.backend}` : null].filter(Boolean).join(' | ') || 'none';
+        const economicsOk  = !this.economics?.isOverBudget();
+        const budgetPct    = this.economics?.getBudgetStatus()?.pct ?? 0;
 
-        // ToolCreator — MAX writes new tools at runtime
-        console.log('[MAX] 🔧 Loading ToolCreator...');
-        this.toolCreator = new ToolCreator(this.brain, this.tools);
-        this.tools.register(this.toolCreator.asTool());
-        await this.toolCreator.reloadSaved();  // reload any tools generated in past sessions
+        // [label, ok, detail]  — SOMA is always informational, never a hard failure
+        const checks = [
+            ['Brain (chat)',     bs.fast.ready || bs.smart.ready, brainDetail],
+            ['Brain (agent)',    bs.fast.ready || bs.smart.ready, brainDetail],
+            ['SOMA',            null,  this.soma?.available ? 'online — QuadBrain active' : 'offline — using local brain'],
+            ['Security Council', null, this.security?.enabled ? 'enabled' : 'disabled'],
+            ['Daily budget',    economicsOk,  economicsOk ? `${budgetPct}% used` : 'OVER CAP — raise MAX_DAILY_BUDGET'],
+            ['Knowledge base',  true,  'ready'],
+            ['Skill library',   true,  'ready'],
+            ['MCP registry',    true,  'ready'],
+        ];
+        console.log('\n' + '━'.repeat(60));
+        console.log('[MAX] Boot status:');
+        for (const [label, ok, detail] of checks) {
+            const icon = ok === null ? '  –' : ok ? '  ✓' : '  ✗';
+            console.log(`${icon}  ${label.padEnd(18)} ${detail}`);
+        }
+        console.log('━'.repeat(60) + '\n');
 
-        // SelfCodeInspector — MAX inspects his own source and queues improvements
-        this.selfInspector = new SelfCodeInspector(this.goals);
-
-        this.reflection = new ReflectionEngine(this.brain, this.goals, this.outcomes, this.kb);
-
-        // FrontierResearch — daily AI research loop → capability gap analysis → engineering tasks
-        this.frontier = new FrontierResearch(this.brain, this.tools, this.goals, this.kb);
-
-        this._ready = true;
-
-        const status = this.brain.getStatus();
-        console.log(`\n[MAX] ✅ Online — ${status.smart.backend} / ${status.smart.model}`);
-        console.log(`[MAX] 🧠 Persona: ${this.persona.getStatus().name}`);
-        console.log(`[MAX] 🛠️  Tools: ${this.tools.list().map(t => t.name).join(', ')}`);
-
-        // Start background autonomous systems — non-blocking
-        console.log('[MAX] 💓 Starting background Heartbeat and Scheduler...');
-        this.scheduler.initialize();
-        this.scheduler.start();
+        // Start heartbeat (drives AgentLoop + curiosity cycles)
         this.heartbeat.start();
 
-        // Wire Notifier — forward high-signal insights to Discord
-        this.heartbeat.on('insight', insight => {
-            this.notifier.onInsight(insight).catch(() => {});
-        });
+        // Start scheduler (own setInterval — independent of heartbeat)
+        this.scheduler.initialize();
+        this.scheduler.start();
 
-        // Morning briefing at 8am daily (only if notifier is enabled)
-        if (this.notifier.enabled) {
-            this.scheduler.addJob({
-                id:      'morning_briefing',
-                label:   'Morning briefing → Discord',
-                every:   '24h',
-                type:    'custom',
-                handler: () => this.notifier.briefing(this)
-            });
+        // Start persistent background loops
+        this.oracle.start();
+        this.sovereign.start();
+
+        // Eager start — run AgentLoop once immediately if goals exist
+        const activeGoals = this.goals.listActive();
+        if (activeGoals.length > 0) {
+            console.log('[MAX] ⚡ Eager start — running first AgentLoop cycle now');
+            this.agentLoop.runCycle().catch(() => {});
         }
+    }
 
-        // Recurring diagnostics — catch issues introduced mid-session
-        this.scheduler.addJob({
-            id:      'diagnostics_hourly',
-            label:   'Hourly system diagnostics scan',
-            every:   '1h',
-            type:    'custom',
-            handler: () => this.diagnostics.runAll()
-        });
+    /**
+     * Proactive direct message — used for notifications, status updates, or high-priority chatter.
+     */
+    say(text, details = '') {
+        this.heartbeat.emit('message', { text, details, timestamp: new Date().toISOString() });
+    }
 
-        // Task outcome reflection — every 4h, analyze what worked and what didn't
-        this.scheduler.addJob({
-            id:      'reflect_task_outcomes',
-            label:   'Reflect on recent task outcomes',
-            every:   '4h',
-            type:    'custom',
-            handler: () => this.reflection?.reflectOnTaskOutcomes?.().catch(() => {})
-        });
+    /**
+     * Autonomous Agentic Loop — The "Reasoning Engine".
+     * Calls think(), catches TOOL: calls, executes them, and feeds results back.
+     * Continues until the goal is achieved or max iterations reached.
+     */
+    async executeAgenticThink(prompt, options = {}) {
+        const maxIterations = options.maxIterations || 8;
+        let iteration = 0;
+        let currentPrompt = prompt;
+        let fullHistory = []; // temporary local history for this task
 
-        // Dream consolidation — every 12h, distill lessons from outcomes into KB
-        this.scheduler.addJob({
-            id:      'dream_consolidation',
-            label:   'Dream: consolidate lessons into knowledge base',
-            every:   '12h',
-            type:    'custom',
-            handler: () => this.reflection?.dream(this.kb).catch(() => {})
-        });
-
-        // Frontier research — daily AI research cycle → gap analysis → engineering tasks
-        this.scheduler.addJob({
-            id:      'frontier_research',
-            label:   'Frontier: crawl AI research, update capability map, generate tasks',
-            every:   '24h',
-            type:    'custom',
-            handler: () => this.frontier?.runCycle().catch(err =>
-                console.warn('[MAX] Frontier research cycle failed:', err.message)
-            )
-        });
-
-        // Roadmap sync — daily parsing of plan.md/frontier_map.md
-        this.scheduler.addJob({
-            id:      'sync_roadmap',
-            label:   'Roadmap: parse plans and inject strategic goals',
-            every:   '24h',
-            type:    'custom',
-            handler: () => this.roadmap?.sync().catch(err =>
-                console.warn('[MAX] Roadmap sync failed:', err.message)
-            )
-        });
-
-        // ─── Truly non-blocking background tasks ───
-        (async () => {
-            console.log('[MAX] 🧵 Launching background worker thread...');
-            // Wait a few seconds for main chat to be ready
-            await new Promise(r => setTimeout(r, 2000));
-
-            // Lab initialization
-            await this.lab.initialize().catch(() => {});
+        while (iteration < maxIterations) {
+            iteration++;
             
-            // Code indexing
-            console.log('[MAX] 👁️  Starting background God\'s Eye indexing...');
-            this.indexer.startIndexing().catch(() => {});
-
-            // Sentinel — real-time file watcher
-            console.log('[MAX] 🛡️  Starting background Sentinel daemon...');
-            this.sentinel.start();
-            this.sentinel.on('change', (change) => {
-                this.heartbeat.emit('insight', {
-                    source: 'sentinel',
-                    label:  `👁️  Observed: ${change.file}`,
-                    result: `Detected ${change.type}. Memory index updated.`
-                });
+            // We use the normal think method for the LLM call
+            const result = await this.think(currentPrompt, {
+                ...options,
+                tier: options.tier || 'smart'
             });
-            this.sentinel.on('significantChange', (change) => {
-                if (change.file === 'plan.md' || change.file === 'frontier_map.md') {
-                    console.log(`[MAX] 🛡️  Roadmap update detected — syncing...`);
-                    this.roadmap?.sync().catch(() => {});
-                } else if (change.type === 'created' || change.type === 'modified') {
-                    // Proactive Goal Injection
-                    this.goals?.addGoal({
-                        title:       `Audit and document: ${change.file}`,
-                        description: `Sentinel detected a significant ${change.type} in ${change.file}. Audit the change for logic errors and update documentation if necessary.`,
-                        type:        'improvement',
-                        priority:    0.6,
-                        source:      'sentinel'
-                    });
+
+            const response = result.response;
+            fullHistory.push({ role: 'assistant', content: response });
+
+            // Look for TOOL: calls
+            const toolCallRegex = /TOOL:(\w+):(\w+):(\{[\s\S]*?\})/g;
+            const toolCalls = [...response.matchAll(toolCallRegex)];
+
+            if (toolCalls.length === 0) {
+                // Task complete or no more tools needed
+                return { 
+                    response, 
+                    success: true, 
+                    iterations: iteration,
+                    toolCallsMade: fullHistory.filter(h => h.role === 'tool').length
+                };
+            }
+
+            // Execute tool calls and gather results
+            let toolResults = [];
+            for (const match of toolCalls) {
+                const [fullMatch, tool, action, paramsStr] = match;
+                let params = {};
+                try { params = JSON.parse(paramsStr); } catch (e) { toolResults.push(`Error parsing params: ${e.message}`); continue; }
+
+                // ─── Phase 5.5: Agentic Approval Gate ───
+                if (this.agentLoop?.needsApproval(tool, action)) {
+                    console.log(`  [MAX] 🛑 Approval required for: ${tool}.${action}`);
+                    const approved = await this.agentLoop.requestApproval(tool, action, params, options.goal);
+                    if (!approved) {
+                        toolResults.push(`TOOL_ERROR:${tool}:${action}:User denied execution.`);
+                        continue;
+                    }
                 }
-            });
-            this.sentinel.on('insight', (i) => this.heartbeat.emit('insight', i));
 
-            // First inspection
-            console.log('[MAX] 🔍 Running initial self-inspection...');
-            await this.selfInspector.inspect().catch(() => {});
-            const queued = this.selfInspector.queueGoals(2);
-            if (queued.length > 0) {
-                console.log(`[MAX] 🔍 Self-inspection queued ${queued.length} improvement goal(s)`);
+                console.log(`  [MAX] 🛠️  Executing: ${tool}.${action}`);
+                this.heartbeat?.emit('toolStart', { tool, action, params });
+                
+                try {
+                    const toolResult = await this.tools.execute(tool, action, params);
+                    const resultStr = JSON.stringify(toolResult);
+                    toolResults.push(`TOOL_RESULT:${tool}:${action}:${resultStr}`);
+                } catch (err) {
+                    toolResults.push(`TOOL_ERROR:${tool}:${action}:${err.message}`);
+                }
             }
 
-            // Diagnostics audit — feeding the Goal Economy (Section 2)
-            await new Promise(r => setTimeout(r, 5000));
-            await this.diagnostics.runAll().catch(() => {});
+            // Feed results back to the brain
+            currentPrompt = `TOOL RESULTS:\n${toolResults.join('\n\n')}\n\nContinue implementation.`;
+            fullHistory.push({ role: 'user', content: currentPrompt });
+        }
 
-            // ── Eager AgentLoop — don't wait for the first heartbeat tick ──────
-            // Heartbeat interval is tension-based: 30s (100%) to 5min (0%).
-            // On boot, tension = 0 → 5min wait before AgentLoop ever runs.
-            // We have goals now (bootstrap + self-inspection), so fire immediately.
-            if (this.goals?.getNext(this.drive) != null && this.agentLoop && !this._chatBusy) {
-                console.log('[MAX] ⚡ Eager start — running first AgentLoop cycle now');
-                this.agentLoop.runCycle().catch(err =>
-                    console.error('[MAX] Eager AgentLoop error:', err.message)
-                );
-            }
-        })().catch(err => console.error('[MAX] Background startup error:', err.message));
-
-        console.log('[MAX] Ready.\n');
+        return { response: 'Max iterations reached without completion.', success: false };
     }
 
-    // ─── Main think/respond loop ──────────────────────────────────────────
-    async think(userMessage, options = {}) {
+    // Public entry point — queues chat turns so they run serially while agent lanes run freely
+    think(userMessage, options = {}) {
         if (!this._ready) throw new Error('MAX not initialized');
-        this._chatBusy = true;
-
-        // Auto-select persona based on message content + internal drive state
-        const selectedPersona = options.persona
-            ? this.persona.switchTo(options.persona)
-            : this.persona.selectForTask(userMessage, this.drive.getStatus());
-
-        // Build conversation history
-        this._context.push({ role: 'user', content: userMessage });
-        if (this._context.length > this._contextLimit * 2) {
-            this._context = this._context.slice(-this._contextLimit * 2);
-        }
-
-        // Refresh profile if user edited the files since last read
-        this.profile.refresh();
-
-        // Build system prompt — cache it and only rebuild when persona or drive state changes.
-        // The tools manifest, profile, and self-model are expensive to build every turn.
-        const driveStatus  = this.drive.getStatus();
-        const promptCacheKey = `${selectedPersona.id}|${Math.round(driveStatus.tension * 10)}|${this._context.length}`;
-        if (this._promptCache.key !== promptCacheKey) {
-            this._promptCache.prompt = this.persona.buildSystemPrompt(selectedPersona)
-                + this._buildStateContext()
-                + this.profile.buildContextBlock()
-                + this.memory.getContextString()
-                + (this.reflection?.getSelfModelContext() || '')
-                + this.tools.buildManifest();
-            this._promptCache.key = promptCacheKey;
-        }
-        const systemPrompt = this._promptCache.prompt;
-
-        // Pull episodic memories + KB chunks — skip KB for short conversational messages
-        // (greetings, acks, one-word replies) since they don't benefit from semantic search
-        const isConversational = userMessage.trim().length < 40 && !/\b(file|code|why|how|what|where|soma|goal|error|fix)\b/i.test(userMessage);
-        const [relevantMemories, kbChunks] = await Promise.all([
-            this.memory.recall(userMessage, { topK: 4 }),
-            isConversational ? Promise.resolve([]) : this.kb.query(userMessage, { topK: 5, brain: this.brain })
-        ]);
-
-        const memoryContext = relevantMemories.length > 0
-            ? '\n\n## Relevant from memory\n' + relevantMemories
-                .map(m => `- ${m.content.slice(0, 200)}`)
-                .join('\n')
-            : '';
-
-        const kbContext = this.kb.formatForPrompt(kbChunks, 3000);
-
-        // Build full prompt with history
-        const historyText = this._context
-            .slice(-this._contextLimit)
-            .map(m => {
-                // If content is huge, it's already been pointer-ized by _processToolCalls
-                return `${m.role === 'user' ? 'USER' : 'MAX'}: ${m.content}`;
-            })
-            .join('\n\n');
-
-        // Confidence calibration — heuristic check, no LLM call, zero latency
-        const conf = this._checkConfidence(userMessage);
-        const finalSystemPrompt = conf.uncertain
-            ? systemPrompt + `\n\n## Confidence: LOW on this query (${conf.reason})\nBe explicit about uncertainty. Use "I believe", "I'm not certain", "you should verify this". Never state uncertain facts confidently.`
-            : systemPrompt;
-
-        // Coding requests → DeepSeek (better at code than qwen3:8b)
-        const isCodingTask = /\b(write|create|build|implement|code|function|class|script|fix|debug|refactor|edit|update|add|remove|rename)\b/i.test(userMessage)
-            && /\b(file|code|function|class|method|module|component|api|route|test|script|bug|error|import|export|variable|const|let|async|await)\b/i.test(userMessage);
-        const brainTier = options.tier ?? (isCodingTask ? 'code' : 'smart');
-
-        // Think — cap tokens based on whether this looks like a code/analysis task.
-        // Conversational turns don't need 8K token responses; capping reduces timeout risk.
-        // Code-tier tasks get 8K: PLAN + multiple TOOL calls + reasoning can easily fill 4K.
-        const needsLongReply = /\b(explain|analyse|analyze|investigate|compare|summarize|list all|implement|write|refactor|how does|why does)\b/i.test(userMessage)
-            || userMessage.length > 120;
-        const maxTok = options.maxTokens ?? (isCodingTask ? 8192 : needsLongReply ? 4096 : 1024);
-
-        // SOMA bridge — use QuadBrain if SOMA is available (priority-0)
-        // onToken streaming: only for local brain path — SOMA bridge doesn't support it
-        const onToken = options.onToken ?? null;
-        let wasStreamed = false;
-
-        let result;
-        if (this.soma?.available) {
-            try {
-                result = await this.soma.think(historyText, {
-                    systemPrompt: finalSystemPrompt + memoryContext + kbContext,
-                    temperature:  options.temperature ?? 0.7,
-                    maxTokens:    maxTok,
-                    timeout:      30_000
-                });
-            } catch {
-                // SOMA failed — fall through to local brain
-                result = null;
-            }
-        }
-        if (!result) {
-            // ── TOOL: lookahead filter ────────────────────────────────────────
-            // Buffer tokens until we have enough to detect 'TOOL:'. Once seen,
-            // stop forwarding to the caller — raw tool syntax must never reach the
-            // terminal. Any buffered text before the sentinel is flushed first.
-            const TOOL_SENTINEL = 'TOOL:';
-            let lookaheadBuf = '';
-            let toolSeen     = false;
-
-            const filteredToken = onToken ? (token) => {
-                if (toolSeen) return;
-                lookaheadBuf += token;
-                // Keep buffering until we have enough chars to detect the sentinel
-                while (lookaheadBuf.length >= TOOL_SENTINEL.length) {
-                    const idx = lookaheadBuf.indexOf(TOOL_SENTINEL);
-                    if (idx === 0) {
-                        // Sentinel at start — stop streaming immediately
-                        toolSeen = true; lookaheadBuf = ''; return;
-                    }
-                    if (idx > 0) {
-                        // Flush safe chars before sentinel, then stop
-                        onToken(lookaheadBuf.slice(0, idx));
-                        toolSeen = true; lookaheadBuf = ''; return;
-                    }
-                    // No sentinel found — flush all but the last (sentinel.length-1) chars
-                    const safe = lookaheadBuf.length - (TOOL_SENTINEL.length - 1);
-                    if (safe > 0) {
-                        onToken(lookaheadBuf.slice(0, safe));
-                        lookaheadBuf = lookaheadBuf.slice(safe);
-                    }
-                    break;
-                }
-            } : null;
-
-            result = await this.brain.think(historyText, {
-                systemPrompt: finalSystemPrompt + memoryContext + kbContext,
-                temperature:  options.temperature ?? 0.7,
-                maxTokens:    maxTok,
-                tier:         brainTier,
-                onToken:      filteredToken
-            });
-
-            // Flush any remaining lookahead that didn't accumulate enough chars for detection
-            if (!toolSeen && lookaheadBuf && onToken) onToken(lookaheadBuf);
-
-            // wasStreamed=true means the streamed output IS the clean final response
-            // wasStreamed=false means tool calls were present — caller must print clean reply
-            wasStreamed = !!(onToken && !toolSeen && !result.text.includes('TOOL:'));
-        }
-
-        let response = result.text;
-
-        // ── Agentic loop: if response contains tool calls, execute and re-think ──
-        let toolTurns = 0;
-        const maxToolTurns = 6;  // enough for real multi-step work, not enough to spiral
-        const turnResults  = [];
-        const seenToolCalls   = new Set();  // dedup: never execute the exact same call twice
-        let consecutiveFailures = 0;        // #5: track repeated failures for diagnosis forcing
-
-        while (response.includes('TOOL:') && toolTurns < maxToolTurns) {
-            // Extract all TOOL: lines in this response
-            const toolLines = response.split('\n').filter(l => l.trim().startsWith('TOOL:'));
-
-            // Loop detection:
-            // - If ALL tool calls are repeated → definitely looping, break
-            // - If any WRITE/DESTRUCTIVE call is repeated → break (never re-run side effects)
-            const DESTRUCTIVE = /^TOOL:shell:(start|run|stop):|^TOOL:file:(write|replace|delete):/;
-            const allSeen     = toolLines.every(l => seenToolCalls.has(l.trim()));
-            const anyDestructiveRepeat = toolLines.some(l => DESTRUCTIVE.test(l.trim()) && seenToolCalls.has(l.trim()));
-            if ((allSeen || anyDestructiveRepeat) && toolLines.length > 0) {
-                console.warn('[MAX] Tool loop detected — breaking (allSeen=%s, destructiveRepeat=%s)', allSeen, anyDestructiveRepeat);
-                break;
-            }
-            toolLines.forEach(l => seenToolCalls.add(l.trim()));
-
-            toolTurns++;
-            const processed = await this._processToolCalls(response);
-            turnResults.push(processed);
-
-            // ── #2: Failure detection — build a diagnostic hint for the re-think ──
-            const hasFailed = /\[pre-flight ✗\]|\[replace ✗|\[write ✗|"success"\s*:\s*false|error.*failed|MODULE_NOT_FOUND|ENOENT|EACCES/i.test(processed);
-            if (hasFailed) consecutiveFailures++;
-            else consecutiveFailures = 0;
-
-            // ── #5: Diagnosis forcing — after 2 consecutive failures, hard-redirect ──
-            const diagnosisHint = consecutiveFailures >= 2
-                ? `\n\n## ⚠️ STOP — You have failed ${consecutiveFailures} times in a row\n` +
-                  `DO NOT retry the same action again.\n` +
-                  `First: read the error message above carefully.\n` +
-                  `Then: use file:list or file:grep to understand the actual state of the codebase.\n` +
-                  `Then: form a NEW plan based on what you actually find — not what you assumed.`
-                : hasFailed
-                ? `\n\n## ⚠️ The last action failed\nBefore retrying, diagnose WHY it failed. Read the error carefully. Do not repeat the same call.`
-                : ``;
-
-            // Add this intermediate turn to context so the next "think" sees the results
-            // Strip any "MAX:" prefix the LLM may have echoed — avoids compounding on re-think
-            this._context.push({ role: 'assistant', content: processed.replace(/^(?:(?:MAX|M\.A\.X)[:.]\s*)*/i, '') });
-
-            // Re-build history — cap each turn's content so one huge tool result
-            // can't blow out the context on the next re-think
-            const updatedHistory = this._context
-                .slice(-this._contextLimit)
-                .map(m => {
-                    const label   = m.role === 'user' ? 'USER' : 'MAX';
-                    const content = m.content.length > 4_000
-                        ? m.content.slice(0, 4_000) + ' [...]'
-                        : m.content;
-                    return `${label}: ${content}`;
-                })
-                .join('\n\n');
-
-            // ── #4: Inject active scratchpad entries into re-think ────────
-            let scratchpadContext = '';
-            if (this._scratchpad?.size > 0) {
-                const entries = [...this._scratchpad.entries()]
-                    .map(([k, v]) => `[${k}]\n${v}`)
-                    .join('\n\n');
-                scratchpadContext = `\n\n## Your working notes (scratchpad)\n${entries}`;
-            }
-
-            // Think again with the results + any failure/diagnosis hints
-            const continuationHint = '\n\n## Tool results are now in context above\nContinue the task. Call more tools if needed, or write your final response if done.';
-            result = await this.brain.think(updatedHistory, {
-                systemPrompt: systemPrompt + memoryContext + kbContext + scratchpadContext + continuationHint + diagnosisHint,
-                temperature: hasFailed ? 0.3 : 0.4,  // lower temp when diagnosing
-                maxTokens:   8192
-            });
-            response = result.text;
-        }
-
-        // Strip tool plumbing — [Tool result: ...] and bare TOOL: lines are internal.
-        let finalResponse = response
-            .replace(/^\[Tool result:.*?\]\n?/gm, '')
-            .replace(/^TOOL:[^\n]*\n?/gm, '')
-            .replace(/\n{3,}/g, '\n\n')
-            .trim();
-
-        // If stripping left nothing (tool loop broke before a clean reply), re-think once
-        // with the accumulated context so MAX always gives a natural language response.
-        if (!finalResponse) {
-            try {
-                const recoveryHistory = this._context
-                    .slice(-this._contextLimit)
-                    .map(m => `${m.role === 'user' ? 'USER' : 'MAX'}: ${m.content.slice(0, 2000)}`)
-                    .join('\n\n');
-                const recovery = await this.brain.think(recoveryHistory, {
-                    systemPrompt: systemPrompt + '\n\nIf you were in the middle of a task, CONTINUE IT NOW — do not describe what you were doing, just do the next step. If the task is complete, say so briefly.',
-                    temperature:  0.5,
-                    maxTokens:    512
-                });
-                finalResponse = recovery.text
-                    .replace(/^\[Tool result:.*?\]\n?/gm, '')
-                    .replace(/^TOOL:[^\n]*\n?/gm, '')
-                    .trim() || 'On it.';
-            } catch {
-                finalResponse = 'On it.';
-            }
-        }
-
-        // Update context and memory (MaxMemory also extracts workspace signals)
-        // Strip any "MAX:" prefix the LLM echoed — prevents compounding across turns
-        this._context.push({ role: 'assistant', content: response.replace(/^(?:(?:MAX|M\.A\.X)[:.]\s*)*/i, '') }); // full text (including tool traces) goes to context so brain has full picture
-        this.memory.addConversation('user',      userMessage,       selectedPersona.id);
-        this.memory.addConversation('assistant', finalResponse, selectedPersona.id);
-
-        // Rolling context compression — when history gets long, compress old turns into a
-        // summary turn so the context window never silently loses information by hard truncation.
-        this._maybeCompressContext();
-
-        // Pre-compaction flush — extract key facts to permanent memory before truncation
-        if (this._context.length >= this._contextLimit * 1.6) {
-            this._flushMemories().catch(() => {});
-        }
-
-        // After responding, queue a follow-up curiosity task from this topic
-        this._queueFollowUpCuriosity(userMessage);
-
-        // Fire-and-forget reflection — scores this turn, runs deep analysis every N turns
-        this.reflection?.reflectOnTurn(userMessage, finalResponse, {
-            persona: selectedPersona.id,
-            drive:   this.drive.getStatus()
-        }).catch(() => {});
-
-        // Drive reward
-        this.drive.onTaskExecuted();
-
-        // Record high-level outcome with telemetry
-        this.outcomes?.record({
-            agent:    'MAX',
-            action:   'chat_turn',
-            context:  { persona: selectedPersona.id, historyLength: this._context.length },
-            result:   'completed_turn',
-            success:  true,
-            tokens:   result.metadata?.tokens || 0,
-            duration: result.metadata?.latency || 0,
-            metadata: result.metadata
-        });
-
-        this._chatBusy = false;
-
-        return {
-            response:    finalResponse,
-            persona:     selectedPersona.id,
-            drive:       this.drive.getStatus(),
-            telemetry:   result.metadata,
-            wasStreamed  // true = caller already received tokens via onToken, skip re-printing
-        };
+        return this._chatQueue.enqueue(() => this._thinkInternal(userMessage, options));
     }
 
-    // ─── After a user convo, MAX generates related things to explore ───────
+    async _thinkInternal(userMessage, options = {}) {
+        this.isThinking = true;
+        this._chatBusy  = true;
+        this._currentAbortController = new AbortController();
+        const signal = this._currentAbortController.signal;
+
+        try {
+            // Fix 3: auto-select persona based on message content + drive state
+            const selectedPersona = this.persona.selectForTask(userMessage, this.drive.getStatus());
+            const tier = options.tier || 'smart';
+
+            // Store user message in context immediately so next turn sees it in history
+            this._context.push({ role: 'user', content: userMessage });
+
+            // ── Response cache — skip LLM for recently-seen identical questions ─
+            const cacheKey = userMessage.trim().toLowerCase().slice(0, 200);
+            const cached   = this._responseCache?.get(cacheKey);
+            if (cached && Date.now() - cached.ts < 5 * 60 * 1000) {
+                this._context.push({ role: 'assistant', content: cached.response });
+                return { ...cached, wasStreamed: false };
+            }
+
+            // ── Parallel: memory recall + KB query simultaneously ─────────────
+            const budget   = tier === 'smart' ? 30000 : 8000;
+            const memCount = tier === 'smart' ? 10 : 3;
+            const kbCount  = tier === 'smart' ? 12 : 3;
+            const isTrivial = userMessage.trim().length < 12;
+
+            const [memoryResults, kbResults] = isTrivial
+                ? [[], []]
+                : await Promise.all([
+                    this.memory.recall(userMessage, { topK: memCount }),
+                    this.kb.query(userMessage, { topK: kbCount })
+                ]);
+
+            let used = userMessage.length + 2000;
+            let memoryContext = '';
+            if (memoryResults.length > 0) {
+                const memBlock = '\n\n## Relevant Memories\n' + memoryResults.map(m => `• ${m.content}`).join('\n');
+                if (used + memBlock.length < budget) { memoryContext = memBlock; used += memBlock.length; }
+            }
+
+            const kbContext   = this.kb.formatForPrompt(kbResults, Math.max(2000, budget - used));
+
+            // Drive-influenced response tuning
+            const driveState  = this.drive.getStatus();
+            let driveTemp     = options.temperature ?? 0.7;
+            let driveSystemNote = '';
+            if (driveState.isUrgent) {
+                driveSystemNote = '\n[DRIVE: High tension — be concise, action-focused, skip preamble]';
+                driveTemp = Math.max(0.3, driveTemp - 0.2);
+            } else if (driveState.satisfaction > 0.7) {
+                driveSystemNote = '\n[DRIVE: High satisfaction — you can be thorough and creative]';
+                driveTemp = Math.min(0.95, driveTemp + 0.1);
+            }
+
+            const needsLongReply = /\b(explain|analyse|analyze|investigate|compare|summarize|list all|implement|write|refactor|how does|why does)\b/i.test(userMessage)
+                || userMessage.length > 120;
+            const maxTok  = options.maxTokens ?? (needsLongReply ? 4096 : 1024);
+            const onToken = options.onToken ?? null;
+
+            // Fix 2+4: inject tool manifest + reflection patches so MAX knows its tools and learns from history
+            const systemPrompt = this.persona.getBasePrompt() + '\n\n' + selectedPersona.systemPrompt
+                + this.tools.buildManifest()
+                + (this.reflection?.getSelfModelContext() || '')
+                + this._buildStateContext() + memoryContext + kbContext + driveSystemNote;
+
+            // Fix 6: use full context window (was -9,-1 = 8 msgs; now -21,-1 = 20 msgs), and raise per-msg limit
+            const historyMsgs = this._context.slice(-21, -1).map(m => ({
+                role:    m.role,
+                content: m.content.slice(0, 4000)
+            }));
+            const messages = historyMsgs.length > 0 ? [
+                { role: 'system', content: systemPrompt },
+                ...historyMsgs,
+                { role: 'user',   content: userMessage }
+            ] : null;
+
+            // ── Step 1: Brain Think ───────────────────────────────────────────
+            let result = await this.brain.think(userMessage, {
+                systemPrompt,
+                temperature: driveTemp,
+                maxTokens:   maxTok,
+                tier:        options.tier || 'smart',
+                onToken,
+                messages,
+                signal
+            });
+
+            let response = result.text;
+            response = response.replace(/^(\**MAX:\**\s*|MAX:\s*|Assistant:\s*)/i, '').trim();
+
+            // ── Fix 1: Inline tool execution loop ────────────────────────────
+            // Execute any TOOL: calls MAX emitted, feed results back, get a real answer.
+            // mcp is meta — skip. goals ARE executed inline so MAX can queue work from chat.
+            if (!signal.aborted) {
+                const SKIP_INLINE = new Set(['mcp']);
+                for (let _toolRound = 0; _toolRound < 3; _toolRound++) {
+                    const toolLines = response.split('\n')
+                        .map(l => l.trim())
+                        .filter(l => /^TOOL:[a-zA-Z_]+:[a-zA-Z_]+/.test(l))
+                        .filter(l => !SKIP_INLINE.has(l.split(':')[1]));
+                    if (toolLines.length === 0) break;
+
+                    const toolResults = [];
+                    for (const line of toolLines) {
+                        try {
+                            const tr = await this.tools.executeLLMToolCall(line);
+                            toolResults.push(`${line.slice(0, 80)}\n→ ${JSON.stringify(tr).slice(0, 1200)}`);
+                        } catch (e) {
+                            toolResults.push(`${line.slice(0, 80)}\n→ ERROR: ${e.message}`);
+                        }
+                    }
+
+                    const continueMsg = `TOOL RESULTS:\n${toolResults.join('\n\n')}\n\nNow give your final response to the user based on the above results. Do not output more TOOL: calls.`;
+                    const followUp = await this.brain.think(continueMsg, {
+                        systemPrompt,
+                        temperature: driveTemp,
+                        maxTokens:   maxTok,
+                        tier:        options.tier || 'smart',
+                        onToken,
+                        signal,
+                        messages: [
+                            { role: 'system',    content: systemPrompt },
+                            ...historyMsgs,
+                            { role: 'user',      content: userMessage },
+                            { role: 'assistant', content: response },
+                            { role: 'user',      content: continueMsg }
+                        ]
+                    });
+                    const followUpText = followUp.text.replace(/^(\**MAX:\**\s*|MAX:\s*|Assistant:\s*)/i, '').trim();
+                    response = response + '\n\n' + followUpText;
+                }
+            }
+
+            // ── Step 2: Cognitive Filter ──
+            const filtered = await this.cognitive.process(response);
+            if (filtered.needsVerification && !signal.aborted) {
+                console.log(`[MAX] 🧐 Uncertain claim — verifying...`);
+                try {
+                    const vResult = await this.tools.execute(
+                        filtered.verificationTask.tool,
+                        filtered.verificationTask.action,
+                        filtered.verificationTask.params
+                    );
+                    const evidencePrompt = `\n\n## VERIFICATION EVIDENCE\nResult: ${JSON.stringify(vResult)}\n\nAdjust response.`;
+                    result = await this.brain.think(userMessage + evidencePrompt, {
+                        systemPrompt, temperature: 0.3, maxTokens: maxTok, signal
+                    });
+                    response = result.text;
+                } catch { /* skip */ }
+            }
+
+            this._context.push({ role: 'assistant', content: response });
+            this._maybeCompressContext();
+
+            this.memory.addConversation('user', userMessage, selectedPersona.id, { provenance: 'STATED' });
+            this.memory.addConversation('assistant', response, selectedPersona.id, { provenance: 'GENERATED' });
+
+            const finalResult = {
+                response,
+                persona:     selectedPersona.id,
+                drive:       this.drive.getStatus(),
+                telemetry:   result.metadata,
+                wasStreamed: !!onToken
+            };
+
+            if (!onToken && userMessage.trim().length > 12) {
+                this._responseCache.set(cacheKey, { ...finalResult, ts: Date.now() });
+            }
+
+            if (userMessage.trim().length > 30) this._queueFollowUpCuriosity(userMessage);
+            this._analyzeIntent(userMessage, response).catch(() => {});
+
+            return finalResult;
+
+        } catch (err) {
+            if (err.name === 'AbortError' || signal.aborted) {
+                console.log('[MAX] 🛑 Chat execution aborted.');
+                return { response: '[Aborted by user]', persona: ' companion', aborted: true };
+            }
+            throw err;
+        } finally {
+            this.isThinking = false;
+            this._chatBusy  = false;
+            this._currentAbortController = null;
+        }
+    }
+
+    async _analyzeIntent(userMsg, _assistantMsg) {
+        if (!this.goals) return;
+        if (userMsg.length < 40) return;
+        const taskSignals = /\b(fix|bug|broken|error|implement|add|build|create|refactor|slow|crash|failing|issue|problem|investigate|why|how do i)\b/i;
+        if (!taskSignals.test(userMsg)) return;
+
+        const prompt = `You are MAX. The user said: "${userMsg}"\n\nJSON only: {"hasGoal": true, "title": "...", "priority": 0.6-0.9} or {"hasGoal": false}`;
+        try {
+            const res = await this.brain.think(prompt, { tier: 'fast', maxTokens: 128 });
+            const jsonStr = res.text.match(/\{[\s\S]*\}/)?.[0];
+            if (!jsonStr) return;
+            const data = JSON.parse(jsonStr);
+            if (data.hasGoal && data.title) {
+                this.goals.addGoal({ title: data.title, priority: data.priority || 0.6, source: 'intent_analysis' });
+                await this._syncGoalsToFile();
+            }
+        } catch { /* skip */ }
+    }
+
+    async _syncGoalsToFile() {
+        try {
+            const active = this.goals.listActive();
+            const done   = this.goals.listCompleted().slice(0, 10);
+            let md = "# 🎯 MAX's AMBITIONS\n\n## 🛠️ ACTIVE GOALS\n";
+            for (const g of active) md += `- [ ] ${g.title}\n`;
+            md += "\n## ✅ COMPLETED\n";
+            for (const g of done) md += `- [x] ${g.title}\n`;
+            const fs = await import('fs/promises');
+            await fs.writeFile('goals.md', md);
+        } catch (err) { console.warn('[MAX] Goals sync failed:', err.message); }
+    }
+
     _queueFollowUpCuriosity(userMessage) {
         if (userMessage.length < 20) return;
-        // Simple: queue an exploration prompt related to this conversation
         const topics = userMessage.match(/\b([A-Z][a-z]+|[a-z]{5,})\b/g)?.slice(0, 3) || [];
         if (topics.length > 0) {
             const topic = topics[Math.floor(Math.random() * topics.length)];
-            this.curiosity.queueTask(
-                `Follow-up: ${topic}`,
-                `The user recently discussed "${userMessage.slice(0, 100)}".
-Think deeper about the engineering implications. What are edge cases, gotchas, or related patterns worth knowing?`,
-                0.4
-            );
+            this.curiosity.queueTask(`Follow-up: ${topic}`, `Discussed ${userMessage.slice(0, 50)}...`, 0.4);
         }
     }
 
-    // ─── Swarm mode: break into parallel subtasks ─────────────────────────
-    async swarmThink(taskDescription, options = {}) {
-        if (!this._ready) throw new Error('MAX not initialized');
-
-        console.log(`[MAX] 🐝 Swarm mode: "${taskDescription}"`);
-
-        const numWorkers = options.workers || this.swarm.config.maxWorkers;
-        const subtasks   = await this.swarm.decompose(taskDescription, numWorkers);
-
-        console.log(`[MAX] Breaking into ${subtasks.length} subtasks...`);
-        subtasks.forEach(s => console.log(`  • ${s.id}: ${s.prompt?.slice(0, 70)}...`));
-
-        const result = await this.swarm.run({ name: taskDescription, subtasks });
-
-        this.drive.onGoalComplete(taskDescription);
-        return result;
-    }
-
-    // ─── Debate a decision ────────────────────────────────────────────────
-    async debateDecision(proposal) {
-        if (!this._ready) throw new Error('MAX not initialized');
-        return this.debate.debate(proposal);
-    }
-
-    // ─── Direct communication ────────────────────────────────────────────
-    say(text, details = null) {
-        this.heartbeat.emit('message', { text, details });
-    }
-
-    // ─── Direct reasoning (Causal, Simulation, Security, etc.) ────────────
-    async reason(query, options = {}) {
-        if (!this._ready) throw new Error('MAX not initialized');
-        return this.reasoning.reason(query, {
-            world: this.world,
-            userContext: this.profile.buildContextBlock()
-        });
-    }
-
-    // ─── Process tool calls embedded in LLM output ────────────────────────
-    async _processToolCalls(text) {
-        if (!text.includes('TOOL:')) return text;
-
-        // ── Print PLAN: block before tools run ──────────────────────────
-        const planMatch = text.match(/^PLAN:\s*\n((?:\s*\d+\..+\n?)+)/m);
-        if (planMatch) {
-            process.stdout.write('\n  \x1b[36m📋 PLAN\x1b[0m\n');
-            const planLines = planMatch[1].trim().split('\n');
-            for (const pl of planLines) {
-                process.stdout.write(`  \x1b[90m│\x1b[0m  ${pl.trim()}\n`);
-            }
-            process.stdout.write('\n');
-        }
-
-        // ── Multi-line-aware TOOL: extraction ───────────────────────────
-        // Split line-by-line but accumulate continuation lines when JSON
-        // params span multiple lines (brace depth > 0 after first line).
-        // This handles file:write with large content that DeepSeek may
-        // emit across multiple lines rather than as a single escaped string.
-        const segments = [];  // { type: 'text'|'tool', content: string }
-        const lines = text.split('\n');
-        let i = 0;
-
-        while (i < lines.length) {
-            const trimmed = lines[i].trim();
-            if (trimmed.startsWith('TOOL:')) {
-                // Accumulate until we have balanced braces (complete JSON)
-                let accumulated = trimmed;
-                let depth = (trimmed.match(/\{/g) || []).length - (trimmed.match(/\}/g) || []).length;
-
-                // If params don't start with { it's likely a single-line non-JSON arg
-                // (handled by executeLLMToolCall's fallback) — don't accumulate
-                const hasJsonParams = /TOOL:[^:]+:[^:]+:\s*\{/.test(trimmed);
-
-                while (hasJsonParams && depth > 0 && i + 1 < lines.length) {
-                    i++;
-                    accumulated += '\n' + lines[i];
-                    depth += (lines[i].match(/\{/g) || []).length - (lines[i].match(/\}/g) || []).length;
-                }
-
-                segments.push({ type: 'tool', content: accumulated });
-            } else {
-                segments.push({ type: 'text', content: lines[i] });
-            }
-            i++;
-        }
-
-        // ── Parallel execution for independent reads ─────────────────────
-        // If ALL tool calls in this response are read-only, run them with
-        // Promise.all for free parallelism (e.g. MAX reading 5 files before
-        // deciding what to change). Writes execute sequentially — always.
-        const READ_ONLY = new Set(['file:read', 'file:list', 'file:search', 'file:grep',
-                                   'web:search', 'git:status', 'git:log', 'git:diff', 'git:branch']);
-        const isReadOnly = (raw) => {
-            const m = raw.match(/^TOOL:([^:]+):([^:]+):/);
-            return m && READ_ONLY.has(`${m[1]}:${m[2]}`);
-        };
-
-        const toolSegs    = segments.filter(s => s.type === 'tool');
-        const allReadOnly = toolSegs.length > 1 && toolSegs.every(s => isReadOnly(s.content));
-
-        // ── Execute one tool segment, return formatted result string ──────
-        const execSeg = async (seg) => {
-            const trimmed = seg.content.trim();
-
-            // ── Pre-flight: verify node scripts exist before running ────────
-            // "node foo.mjs" on a missing file → immediately return an actionable error
-            // instead of letting node throw MODULE_NOT_FOUND and triggering a retry spiral.
-            const shellMatch = trimmed.match(/^TOOL:shell:(run|start):\{(.+)\}$/s);
-            if (shellMatch) {
-                try {
-                    const sp = JSON.parse(`{${shellMatch[2]}}`);
-                    const cmd = (sp.command || '').trim();
-                    const nodeScript = cmd.match(/^node\s+["']?([^\s"']+\.(mjs|js|cjs))["']?/i);
-                    if (nodeScript) {
-                        const { default: fs } = await import('fs');
-                        const scriptPath = nodeScript[1];
-                        const fullPath = path.isAbsolute(scriptPath)
-                            ? scriptPath
-                            : path.join(process.cwd(), scriptPath);
-                        if (!fs.existsSync(fullPath)) {
-                            return `[pre-flight ✗] Cannot run "node ${scriptPath}" — the file does not exist at ${fullPath}. Use TOOL:file:list to see what files are available. Do NOT create a new file just to run it — check if there is an existing in-process API or tool instead.`;
-                        }
-                    }
-                } catch { /* non-fatal — fall through to normal execution */ }
-            }
-
-            // Print notification for file mutations
-            const fileWriteMatch = trimmed.match(/^TOOL:file:(write|replace):(\{[\s\S]+)/);
-            if (fileWriteMatch) {
-                try {
-                    const params = JSON.parse(fileWriteMatch[2].trim());
-                    const op     = fileWriteMatch[1];
-                    const fp     = params.filePath || params.path || '?';
-                    const label  = op === 'write' ? '✏️  write' : '✏️  replace';
-                    process.stdout.write(`  \x1b[33m${label}\x1b[0m  \x1b[1m${fp}\x1b[0m\n`);
-                } catch { /* non-fatal */ }
-            }
-
-            const toolResult = await this.tools.executeLLMToolCall(trimmed);
-            if (!toolResult) return seg.content;
-
-            let resultStr = typeof toolResult === 'string'
-                ? toolResult
-                : JSON.stringify(toolResult);
-
-            // Context budget guard — cap at 8KB; artifact-ize larger results
-            const CONTEXT_CAP  = 8_000;
-            const isArtifactOp = trimmed.startsWith('TOOL:artifacts:');
-
-            if (resultStr.length > CONTEXT_CAP) {
-                if (isArtifactOp) {
-                    resultStr = resultStr.slice(0, CONTEXT_CAP)
-                        + `\n\n[...TRUNCATED — ${Math.round(resultStr.length / 1000)}KB total. `
-                        + `Ask specific questions about sections rather than reading everything at once.]`;
-                } else {
-                    const name    = trimmed.split(':').slice(1, 3).join('.') || 'tool_output';
-                    const pointer = this.artifacts.store(name, resultStr, 'tool_result');
-                    resultStr = pointer;
-                }
-            }
-
-            // ── Format result for readability ──────────────────────────────
-            // Raw JSON is hard for the model to parse. Format by tool type:
-            // - file:read   → show content directly with a header
-            // - shell:run   → show stdout/stderr directly
-            // - everything  → clean JSON fallback
-            try {
-                const parsed = typeof toolResult === 'object' ? toolResult : JSON.parse(resultStr);
-                const toolMatch = trimmed.match(/^TOOL:([^:]+):([^:]+):/);
-                const tName = toolMatch?.[1], tAction = toolMatch?.[2];
-
-                if (tName === 'file' && tAction === 'read' && parsed.success && parsed.content != null) {
-                    const lineInfo = parsed.startLine != null ? ` (lines ${parsed.startLine}–${parsed.endLine})` : ` (${parsed.totalLines} lines)`;
-                    resultStr = `[file:read → ${parsed.path || ''}${lineInfo}]\n${parsed.content}\n[end file:read]`;
-                } else if (tName === 'shell' && tAction === 'run' && parsed.stdout != null) {
-                    const out = (parsed.stdout || '').trim();
-                    const err = (parsed.stderr || '').trim();
-                    resultStr = `[shell exit ${parsed.exitCode ?? 0}]${out ? '\n' + out : ''}${err ? '\n[stderr]\n' + err : ''}`;
-                } else if (tName === 'file' && (tAction === 'write' || tAction === 'replace')) {
-                    resultStr = parsed.success
-                        ? `[${tAction} ✓ ${parsed.path || ''}]`
-                        : `[${tAction} ✗ ${parsed.error || 'failed'}${parsed.hint ? ' — hint: ' + parsed.hint : ''}]`;
-                } else if (tName === 'file' && tAction === 'grep' && Array.isArray(parsed.matches)) {
-                    resultStr = parsed.matches.length === 0
-                        ? '[grep: no matches]'
-                        : `[grep: ${parsed.matches.length} match(es)]\n` + parsed.matches.map(m => `${m.file}:${m.line}: ${m.text}`).join('\n');
-                }
-            } catch { /* keep resultStr as-is on parse failure */ }
-
-            return `[Tool result: ${resultStr}]`;
-        };
-
-        // ── Build result array ─────────────────────────────────────────────
-        const result = [];
-
-        if (allReadOnly) {
-            // Kick all reads off in parallel, maintain original ordering in results
-            const toolResults = await Promise.all(toolSegs.map(execSeg));
-            let toolIdx = 0;
-            for (const seg of segments) {
-                result.push(seg.type === 'tool' ? toolResults[toolIdx++] : seg.content);
-            }
-        } else {
-            // Sequential — writes and mixed batches
-            for (const seg of segments) {
-                result.push(seg.type === 'tool' ? await execSeg(seg) : seg.content);
-            }
-        }
-
-        return result.join('\n');
-    }
-
-    // ─── Build state context for system prompt ────────────────────────────
     _buildStateContext() {
-        const drive     = this.drive.getStatus();
-        const curiosity = this.curiosity.getStatus();
-        const memory    = this.memory.getStats();
-        const goals     = this.goals?.getStatus();
-        const outcomes  = this.outcomes?.getStats();
-
-        let state = `\n\n## Your current state
-Tension: ${(drive.tension * 100).toFixed(0)}% | Satisfaction: ${(drive.satisfaction * 100).toFixed(0)}% | Goals completed: ${drive.goalsCompleted}
-Curiosity queue: ${curiosity.queueDepth} | Topics explored: ${curiosity.topicsExplored}
-Memory: ${memory.totalMemories} stored facts | ${memory.conversationTurns} conversation turns`;
-
-        if (goals) {
-            state += `\nActive goals: ${goals.active} | Completed: ${goals.completed}`;
-        }
-        if (outcomes && outcomes.total > 0) {
-            const rate = outcomes.total > 0 ? ((outcomes.success / outcomes.total) * 100).toFixed(0) : 'n/a';
-            state += ` | Action success rate: ${rate}%`;
-        }
-
-        // Project context
+        const drive = this.drive.getStatus();
+        let ctx = `\n\n## System State\nTension: ${Math.round(drive.tension*100)}% | Satisfaction: ${Math.round(drive.satisfaction*100)}%`;
+        // Fix 5: inject project context (package.json + README, detected at boot)
         if (this._projectContext) {
-            state += `\n\n## Current project\n${this._projectContext}`;
+            ctx += this._projectContext;
         }
-
-        // Running background processes
-        const procs = getRunningProcesses();
-        if (procs.length > 0) {
-            state += `\n\n## Background processes running\n`;
-            for (const p of procs) {
-                state += `  [${p.name}] pid ${p.pid}  ${p.command}\n`;
+        if (this.pinnedFiles.size > 0) {
+            ctx += '\n\n## Pinned Files';
+            for (const relPath of this.pinnedFiles) {
+                try {
+                    const content = fs.readFileSync(relPath, 'utf8');
+                    ctx += `\n\n### ${relPath}\n\`\`\`\n${content.slice(0, 3000)}\n\`\`\``;
+                } catch { }
             }
-            state += `Use TOOL:shell:stop:{"name":"<name>"} to kill, TOOL:shell:ps:{} to check status.`;
         }
-
-        if (this._sessionBriefing) {
-            const { hoursAgo, goals: sg, insights: si, conversation: sc } = this._sessionBriefing;
-            state += `\n\n## Previous session (${hoursAgo}h ago)`;
-            if (sg?.length > 0) {
-                state += `\nIn-progress goals: ${sg.map(g => `"${g.title}"`).join(', ')}`;
-            }
-            if (si?.[0]) {
-                state += `\nLast insight: ${si[0].result?.slice(0, 150)}`;
-            }
-            // Show the last few exchanges so MAX knows exactly what was being discussed
-            if (sc?.length > 0) {
-                state += `\n\nLast conversation:\n`;
-                state += sc.slice(-4).map(m =>
-                    `${m.role === 'user' ? 'Barry' : 'MAX'}: ${m.content.slice(0, 200)}`
-                ).join('\n');
-            }
-            state += `\n\nYou are continuing this conversation. Acknowledge you remember where you left off — don't restart cold.`;
-        }
-
-        state += `\n\n## Agentic behavior
-
-INVESTIGATION requests ("why isn't X working", "figure out Y", "what's going on with Z"):
-→ Use TOOL:goals:add to queue a goal. The AgentLoop will investigate and report back.
-Example: TOOL:goals:add:{"title":"Investigate SOMA agentic gaps","description":"Read SOMA codebase, identify gaps","type":"research","priority":0.9}
-
-EXECUTION requests ("move this code", "edit this file", "fix X in file Y", "make this change"):
-→ DO IT NOW with tools. Do not narrate each micro-step and wait for approval.
-→ Read the file, make the change, verify it, then report COMPLETION in one response.
-→ Never say "let me read X" and stop — if you need to read X, read it in the SAME response and keep going.
-→ Only check back with the user when the task is DONE or you are genuinely blocked.
-→ Always end with a clear completion signal: "Done. [what changed]. What do you want to do next?"
-Example: "Done. Moved SomaAgenticExecutor init to line 233 in extended.js. It's now in PHASE A before the heap fills. What do you want to do next?"
-
-SHELL requests ("run the tests", "start the server", "install X", "build it", "what's in this dir"):
-→ Use TOOL:shell:run for commands that finish (tests, installs, builds, scripts)
-→ Use TOOL:shell:start for long-running processes (servers, watchers, dev processes) — these run in the background and print output live
-→ Use TOOL:shell:stop to kill a named background process
-→ Use TOOL:shell:ps to see what's running
-→ Commands print live to the terminal — the user sees output as it runs
-→ You can run git, npm, python, node, any installed tool directly
-→ IMPORTANT: This is Windows. Use PowerShell/cmd syntax ONLY. Never use Unix commands.
-  ✗ WRONG: ls, find, grep, xargs, head, tail, cat, which, rm, cp, mv
-  ✓ CORRECT: dir, Get-ChildItem, Select-String, Where-Object, Get-Content, node, npm, git, powershell -Command "..."
-  ✓ Check if program exists: where git   (NOT which git)
-  ✓ List files: TOOL:shell:run:{"command":"dir /B"}
-  ✓ Find text:  TOOL:shell:run:{"command":"powershell -Command \"Get-ChildItem -Recurse | Select-String 'pattern'\""}
-  ✓ Read file:  Use TOOL:file:read instead of shell for reading files
-
-PLANNING (complex multi-step actions):
-→ For ANY action involving 3+ steps, multiple files, or significant changes:
-  1. First output a PLAN: block listing the steps (concise, numbered)
-  2. Then execute the steps with tools
-→ Format:
-  PLAN:
-  1. Read X to understand current structure
-  2. Edit Y to add the new field
-  3. Run tests to verify
-→ The plan is shown to the user BEFORE tools run so they can interrupt if needed
-→ Simple one-step actions (read one file, run one command) do NOT need a plan
-
-GROUNDING — NEVER FABRICATE:
-→ If a tool fails or returns an error, report the exact error. Do NOT invent what the output "should" look like.
-→ If you cannot read a file, say "I couldn't read X". Never generate fake file contents.
-→ If a command fails, say "command failed with: <error>". Never generate fake command output.
-→ When uncertain about the state of the system, use a tool to check — do not guess.
-→ "SOMA 1T", "SOMA has X running", etc. — never claim SOMA/system state without tool verification.`;
-
-
-        return state;
+        return ctx;
     }
 
-    // ─── Pre-compaction memory flush ──────────────────────────────────────
-    // Called when context is 80% full. Silently extracts key facts into
-    // permanent memory so they survive the upcoming context truncation.
-    async _flushMemories() {
-        if (!this.brain._ready) return;
-        const recent = this._context.slice(-8)
-            .map(m => `${m.role === 'user' ? 'USER' : 'MAX'}: ${m.content.slice(0, 300)}`)
-            .join('\n\n');
-
-        try {
-            const result = await this.brain.think(
-                `From this conversation excerpt, extract 3-5 specific facts worth remembering long-term.
-Focus on: decisions made, things learned, user preferences revealed, problems solved.
-Return ONLY a JSON array of strings: ["fact1", "fact2", ...]
-
-CONVERSATION:
-${recent}`,
-                { temperature: 0.2, maxTokens: 400, tier: 'fast' }
-            );
-
-            const facts = result.text;
-            const match = facts.match(/\[[\s\S]*?\]/);
-            if (!match) return;
-
-            const extracted = JSON.parse(match[0]);
-            for (const fact of extracted.slice(0, 5)) {
-                if (typeof fact === 'string' && fact.length > 10) {
-                    await this.memory.remember(fact, { source: 'compaction_flush' }, {
-                        type: 'core_memory',
-                        importance: 0.8
-                    });
-                }
-            }
-            console.log(`[MAX] 💾 Compaction flush: saved ${extracted.length} facts before context truncation`);
-        } catch { /* non-fatal */ }
-    }
-
-    // ─── Confidence calibration ───────────────────────────────────────────
-    // Fast heuristic + optional LLM check. Returns { uncertain, reason }.
-    // Never throws — worst case returns { uncertain: false } so responses aren't blocked.
-    _checkConfidence(query) {
-        if (query.length < 20) return { uncertain: false };
-
-        // Heuristic-only — no LLM call. Patterns that signal genuinely time-sensitive
-        // or factual queries where MAX's training data may be stale or wrong.
-        // Deliberately narrow so casual chat ("now", "current task") doesn't trigger.
-        const uncertainPatterns = [
-            /\b(what is the (current|latest|live) (price|rate|value|score|standing))\b/i,
-            /\b(stock price|crypto price|btc price|eth price)\b/i,
-            /\b(today'?s? (weather|news|score|game))\b/i,
-            /\b(what happened (today|yesterday|this week))\b/i,
-            /\b(who (won|is winning|leads|is ahead))\b/i,
-            /\bbreaking news\b/i,
-        ];
-
-        const matched = uncertainPatterns.find(p => p.test(query));
-        if (!matched) return { uncertain: false };
-
-        return { uncertain: true, reason: 'real-time factual query — data may be stale' };
-    }
-
-    // ─── Rolling context compression ──────────────────────────────────────
-    // Fire-and-forget: compresses oldest turns into a summary when context grows.
-    // Keeps MAX's working memory fresh without silently dropping old context.
     _maybeCompressContext() {
-        if (this._context.length <= this._contextLimit || this._compressing) return;
-        this._compressing = true;
-        this._compressContext()
-            .catch(() => {})
-            .finally(() => { this._compressing = false; });
+        if (this._context.length <= this._contextLimit) return;
+        this._context = this._context.slice(-this._contextLimit);
     }
 
-    async _compressContext() {
-        if (!this.brain._ready) return;
-
-        const keepRecent = Math.ceil(this._contextLimit * 0.6);  // keep newest 60%
-        const toCompress = this._context.slice(0, -keepRecent);
-        const toKeep     = this._context.slice(-keepRecent);
-
-        if (toCompress.length < 4) return;  // not worth it
-
-        const excerpt = toCompress
-            .map(m => `${m.role === 'user' ? 'USER' : 'MAX'}: ${m.content.slice(0, 400)}`)
-            .join('\n\n')
-            .slice(0, 4000);
-
-        const result = await this.brain.think(
-            `Compress this conversation history into 2-3 sentences capturing all key decisions, facts, and context:\n\n${excerpt}`,
-            { temperature: 0.1, maxTokens: 200, tier: 'fast' }
-        );
-
-        this._context = [
-            { role: 'user', content: `[Conversation history (compressed): ${result.text}]` },
-            ...toKeep
-        ];
-        console.log(`[MAX] 🗜️  Compressed ${toCompress.length} old context turns → summary`);
-    }
-
-    clearContext() {
-        this._context = [];
-        console.log('[MAX] Context cleared.');
+    async _processChokoRelay() {
+        const relayPath = path.join(__dirname, '..', '.max', 'choko_relay.json');
+        if (!fs.existsSync(relayPath)) return;
+        let treats;
+        try { treats = JSON.parse(fs.readFileSync(relayPath, 'utf8')); } catch { return; }
+        const unread = treats.filter(t => !t._processedByMAX);
+        if (unread.length === 0) return;
+        for (const treat of unread) {
+            treat._processedByMAX = true;
+            this.heartbeat?.emit('insight', { source: 'Choko 🍫', label: treat.title, result: treat.detail });
+            if (this.goals && /fix|bug|broken|fail|error|issue|improve|add|implement|missing/i.test(treat.title + treat.detail)) {
+                this.goals.addGoal({ title: `[Choko] ${treat.title}`, description: treat.detail, type: 'fix', priority: 0.7, source: 'choko_relay' });
+            }
+            await this.kb.remember(`Choko reported: ${treat.title} — ${treat.detail}`).catch(() => {});
+        }
+        fs.writeFileSync(relayPath, JSON.stringify(treats, null, 2));
     }
 
     getStatus() {
@@ -1358,25 +1055,14 @@ ${recent}`,
             ready:      this._ready,
             brain:      this.brain.getStatus(),
             drive:      this.drive.getStatus(),
-            curiosity:  this.curiosity.getStatus(),
-            persona:    this.persona.getStatus(),
             memory:     this.memory.getStats(),
-            profile:    this.profile.getStats(),
-            swarm:      this.swarm?.getStatus(),
-            heartbeat:  this.heartbeat?.getStatus(),
-            scheduler:  this.scheduler?.getStatus(),
-            goals:        this.goals?.getStatus(),
-            agentLoop:    this.agentLoop?.getStatus(),
-            outcomes:     this.outcomes?.getStats(),
-            reasoning:    this.reasoning?.getStats(),
-            toolCreator:   this.toolCreator?.getStatus(),
-            selfInspector: this.selfInspector?.getStatus(),
-            reflection:    this.reflection?.getStatus(),
-            kb:            this.kb?.getStatus(),
-            roadmap:       this.roadmap?.getStatus(),
-            skills:        this.skills?.getStatus(),
-            soma:          this.soma?.getStatus(),
-            notifier:      this.notifier?.getStatus()
+            goals:      this.goals?.getStatus(),
+            agents:     this.agentManager?.getStatus(),
+            hydra:      this.hydra.getStatus(),
+            mcp:        this.mcp?.getStatus(),
+            research:   this.research?.getStatus(),
+            skills:     this.skills?.getStatus(),
+            debugLoop:  this.debugLoop?.getStatus()
         };
     }
 }

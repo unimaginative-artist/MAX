@@ -16,14 +16,18 @@ node launcher.mjs --mode api ← API mode only (no REPL)
 - `OLLAMA_MODEL_SMART` — smart tier local model (e.g. `qwen3:8b`)
 - `MAX_AUTO_APPROVE` — `read` | `write` | `all` (default: `write`)
 - `MAX_PORT` — dashboard port (default: 3100)
+- `MAX_DAILY_BUDGET` — hard API spend cap in USD (default: `10.00`)
+- `MAX_SECURITY_COUNCIL` — adversarial code review before file writes (default: `false`)
 
-**SOMA bridge:** MAX connects to SOMA at `http://127.0.0.1:3001` automatically on boot. If SOMA is offline, MAX falls back to local brain gracefully.
+**Deployment models:**
+- **MAX standalone** (default): MAX ships and runs independently. No SOMA needed. `SOMA_URL` is commented out. This is the production product.
+- **SOMA + MAX bundled**: When SOMA ships, she includes MAX as her execution engine. Set `SOMA_URL=http://localhost:3001` to connect. MAX will use SOMA's QuadBrain when available and fall back to its own brain otherwise.
 
 ---
 
 ## Architecture Overview
 
-MAX is the **execution engine** of the SOMA Cognitive Operating System. It runs as a standalone agent but is designed to be dispatched by SOMA's arbiter layer for complex engineering work.
+MAX is a **standalone autonomous engineering agent** — a complete product in its own right. It also ships as SOMA's execution engine when SOMA is deployed, but has no dependency on SOMA and runs fully independently by default.
 
 ### Core Systems (in boot order)
 ```

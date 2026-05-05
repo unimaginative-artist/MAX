@@ -11,21 +11,44 @@
 //   code  → DeepSeek (deepseek-reasoner) — ONLY, no fallback
 //
 // Config (config/api-keys.env):
-//   OLLAMA_MODEL_FAST=qwen3:1.5b       # fast tier — heartbeats, web search, background
+//   OLLAMA_MODEL_FAST=gemma3:4b         # fast tier — heartbeats, web search, background
 //   DEEPSEEK_API_KEY=...               # smart + code tier
 //   DEEPSEEK_MODEL=deepseek-chat       # smart tier model (default)
 //   DEEPSEEK_CODE_MODEL=deepseek-reasoner  # code tier model (default)
 // ═══════════════════════════════════════════════════════════════════════════
 
 import fetch from 'node-fetch';
+import { readFileSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { EconomicsEngine } from './EconomicsEngine.js';
 
+// Load config/api-keys.env directly so Brain works regardless of how MAX is launched
+const _brainDir = dirname(fileURLToPath(import.meta.url));
+const _envPath  = join(_brainDir, '..', 'config', 'api-keys.env');
+if (existsSync(_envPath)) {
+    for (const line of readFileSync(_envPath, 'utf8').replace(/\r/g, '').split('\n')) {
+        const t = line.trim();
+        if (t && !t.startsWith('#')) {
+            const eq = t.indexOf('=');
+            if (eq > 0) {
+                const k = t.slice(0, eq).trim();
+                const v = t.slice(eq + 1).trim();
+                if (k && v && !process.env[k]) process.env[k] = v;
+            }
+        }
+    }
+}
+
 export class Brain {
-    constructor(config = {}) {
+    constructor(max, config = {}) {
+        this.max          = max;
+        this.config       = config;
         this.ollamaUrl    = config.ollamaUrl || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-        this.timeout      = config.timeout     || 240_000;  // smart/code tier — 4 mins
-        this.fastTimeout  = config.fastTimeout || 30_000;   // fast tier — 30s max (heartbeats/acks)
-        this.economics    = new EconomicsEngine();
+        this.smartTimeout = config.smartTimeout || 120_000;  // 2 min for chat/reasoning
+        this.codeTimeout  = config.codeTimeout  || 900_000;  // 15 min for large code generation
+        this.timeout      = this.codeTimeout;                // legacy alias used by _deepseek default
+        this.fastTimeout  = config.fastTimeout  || 90_000;
 
         // ── Fast tier config ─────────────────────────────────────────────
         // Local Ollama ONLY — heartbeats, yes/no checks, quick acks, verification
@@ -34,10 +57,11 @@ export class Brain {
                 || process.env.OLLAMA_MODEL_FAST
                 || config.ollamaModel
                 || process.env.OLLAMA_MODEL
-                || 'qwen3:1.5b',
+                || 'gemma3:4b',
             ready:   false,
             backend: null   // 'ollama' | null
         };
+
 
         // ── Smart tier config ────────────────────────────────────────────
         // DeepSeek only — no OpenAI, no Ollama.
@@ -53,9 +77,14 @@ export class Brain {
         // Circuit breaker — after N fast-tier timeouts, stop hitting Ollama this session
         this._fastFailures = 0;
         this._fastDisabled = false;
+        this._warmupPromise = null; // resolves when Ollama model is loaded into VRAM
 
         // Convenience: _ready is true if at least one tier works
         this._ready = false;
+    }
+
+    get economics() {
+        return this.max?.economics;
     }
 
     // ─── Initialize — probe all backends ─────────────────────────────────
@@ -92,12 +121,22 @@ export class Brain {
         if (!this._ready) {
             console.error('[Brain] ❌ No LLM backend found. Start Ollama or set an API key in config/api-keys.env');
         }
+
+        // Warm up Ollama — loads the model into VRAM. Store the promise so _runFast
+        // can await it on the first real call instead of racing a cold model.
+        if (this._fast.ready && this._fast.backend === 'ollama') {
+            this._warmupPromise = this._ollama(this._fast.ollamaModel, 'hi', '', 0, 1, 120_000)
+                .then(() => { console.log(`[Brain] ⚡ Ollama warm-up complete — model in VRAM`); })
+                .catch(() => {})
+                .finally(() => { this._warmupPromise = null; });
+        }
     }
 
     // ─── Core inference ───────────────────────────────────────────────────
     // tier: 'fast' | 'smart' | 'code' — code goes straight to DeepSeek, bypassing local Ollama
     // onToken: optional (token: string) => void callback for streaming output
-    async think(prompt, { systemPrompt = '', temperature = 0.7, maxTokens = 2048, tier = 'smart', onToken = null } = {}) {
+    // messages: optional pre-built messages array for multi-turn conversation history
+    async think(prompt, { systemPrompt = '', temperature = 0.7, maxTokens = 2048, tier = 'smart', onToken = null, messages = null, signal = null } = {}) {
         if (!this._ready) throw new Error('Brain not initialized — call initialize() first');
 
         // Hard token budget guard — prevents context overflow errors.
@@ -117,20 +156,30 @@ export class Brain {
         }
 
         // Pragmatic model selection if urgency/complexity is provided
-        if (tier === 'pragmatic') {
+        if (tier === 'pragmatic' && this.economics) {
             const recommended = this.economics.recommendModel('task', { urgency: 0.5, complexity: 0.5 });
             if (recommended === 'ollama') tier = 'fast';
             else if (recommended === 'deepseek-reasoner') tier = 'code';
             else tier = 'smart';
         }
 
+        // Hard budget guard — block cloud API calls when daily cap exceeded
+        const econ = this.max?.economics;
+        if (econ?.isOverBudget() && tier !== 'fast') {
+            const budget = econ.getBudgetStatus();
+            const msg = `Daily budget cap reached ($${budget.used.toFixed(2)} / $${budget.cap.toFixed(2)}). Set MAX_DAILY_BUDGET in config/api-keys.env to increase.`;
+            console.warn(`[Brain] 💰 ${msg}`);
+            if (onToken) onToken(`[Budget cap reached — ${msg}]`);
+            return { text: `Budget cap reached. Used $${budget.used.toFixed(2)} of $${budget.cap.toFixed(2)} today.`, metadata: { model: 'budget_cap', tokens: 0, latency: 0, backend: 'none' } };
+        }
+
         let result;
         if (tier === 'fast') {
-            result = await this._runFast(prompt, systemPrompt, temperature, maxTokens);
+            result = await this._runFast(prompt, systemPrompt, temperature, maxTokens, onToken, messages, signal);
         } else if (tier === 'code') {
-            result = await this._runCode(prompt, systemPrompt, temperature, maxTokens, onToken);
+            result = await this._runCode(prompt, systemPrompt, temperature, maxTokens, onToken, messages, signal);
         } else {
-            result = await this._runSmart(prompt, systemPrompt, temperature, maxTokens, onToken);
+            result = await this._runSmart(prompt, systemPrompt, temperature, maxTokens, onToken, messages, signal);
         }
 
         // Return object with text and performance metadata
@@ -138,13 +187,17 @@ export class Brain {
     }
 
     // ─── Fast tier execution — Ollama only, falls back to DeepSeek ───────
-    async _runFast(prompt, systemPrompt, temperature, maxTokens) {
+    async _runFast(prompt, systemPrompt, temperature, maxTokens, onToken = null, messages = null, signal = null) {
         if (this._fast.ready && this._fast.backend === 'ollama' && !this._fastDisabled) {
+            // If warmup is still in progress, wait for it so we don't race a cold model
+            if (this._warmupPromise) await this._warmupPromise;
             try {
-                return await this._ollama(this._fast.ollamaModel, prompt, systemPrompt, temperature, maxTokens, this.fastTimeout);
+                return await this._ollama(this._fast.ollamaModel, prompt, systemPrompt, temperature, maxTokens, this.fastTimeout, onToken, messages || null, signal);
             } catch (err) {
                 this._fastFailures++;
-                if (this._fastFailures >= 2) {
+                // Aggressive circuit breaker: 1 failure and we stop hitting local Ollama for the session.
+                // This prevents "PC heat" issues from constant connection retries/timeouts.
+                if (this._fastFailures >= 3) {
                     this._fastDisabled = true;
                     console.warn(`[Brain] ⚡ Fast tier disabled for this session — Ollama unresponsive (using DeepSeek for fast calls)`);
                 } else {
@@ -152,35 +205,43 @@ export class Brain {
                 }
             }
         }
-        // Ollama down/disabled — use DeepSeek with capped tokens
-        return this._runSmart(prompt, systemPrompt, temperature, Math.min(maxTokens, 512));
+        // Ollama down/disabled — fall back to DeepSeek with a cost-capped token limit
+        return this._runSmart(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages, signal);
     }
 
     // ─── Code tier — deepseek-reasoner (deep thinking for code) ──────────
-    async _runCode(prompt, systemPrompt, temperature, maxTokens, onToken = null) {
+    async _runCode(prompt, systemPrompt, temperature, maxTokens, onToken = null, messages = null, signal = null) {
         if (this._validKey(this._smart.deepseekKey)) {
-            return this._deepseek(prompt, systemPrompt, temperature, maxTokens, this._smart.deepseekCodeModel, onToken);
+            return this._deepseek(prompt, systemPrompt, temperature, maxTokens, this._smart.deepseekCodeModel, onToken, messages, this.codeTimeout, signal);
         }
         throw new Error('Code tier unavailable — add DEEPSEEK_API_KEY to config/api-keys.env');
     }
 
     // ─── Smart tier execution — DeepSeek only ────────────────────────────
-    async _runSmart(prompt, systemPrompt, temperature, maxTokens, onToken = null) {
+    async _runSmart(prompt, systemPrompt, temperature, maxTokens, onToken = null, messages = null, signal = null) {
         if (this._validKey(this._smart.deepseekKey)) {
-            return this._deepseek(prompt, systemPrompt, temperature, maxTokens, null, onToken);
+            return this._deepseek(prompt, systemPrompt, temperature, maxTokens, null, onToken, messages, this.smartTimeout, signal);
         }
         throw new Error('Smart tier unavailable — add DEEPSEEK_API_KEY to config/api-keys.env');
     }
 
     // ─── Backend implementations ──────────────────────────────────────────
-    async _deepseek(prompt, systemPrompt, temperature, maxTokens, modelOverride = null, onToken = null) {
+    async _deepseek(prompt, systemPrompt, temperature, maxTokens, modelOverride = null, onToken = null, messages = null, timeoutMs = null, signal = null) {
         const start = Date.now();
-        const messages = [];
-        if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
-        messages.push({ role: 'user', content: prompt });
+        // Use pre-built messages array (multi-turn history) if provided, else build single-turn
+        if (!messages) {
+            messages = [];
+            if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+            messages.push({ role: 'user', content: prompt });
+        }
 
         const model = modelOverride || this._smart.deepseekModel;
         const useStream = !!onToken;
+
+        // Combine timeout with user signal if provided
+        const fetchSignal = (signal && typeof AbortSignal.any === 'function')
+            ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs || this.timeout)])
+            : (signal || AbortSignal.timeout(timeoutMs || this.timeout));
 
         const res = await fetch(`${this._smart.deepseekUrl}/chat/completions`, {
             method:  'POST',
@@ -195,7 +256,7 @@ export class Brain {
                 max_tokens: maxTokens,
                 stream: useStream
             }),
-            signal: AbortSignal.timeout(this.timeout)
+            signal: fetchSignal
         });
 
         if (!res.ok) {
@@ -210,26 +271,32 @@ export class Brain {
             const decoder = new TextDecoder();
             let partial = '';  // carry-over for chunks split across SSE boundaries
 
-            for await (const chunk of res.body) {
-                partial += decoder.decode(chunk, { stream: true });
-                const lines = partial.split('\n');
-                // Keep the last (potentially incomplete) line as carry-over
-                partial = lines.pop();
+            try {
+                for await (const chunk of res.body) {
+                    if (signal?.aborted) throw new Error('AbortError');
+                    partial += decoder.decode(chunk, { stream: true });
+                    const lines = partial.split('\n');
+                    // Keep the last (potentially incomplete) line as carry-over
+                    partial = lines.pop();
 
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
-                    const raw = line.slice(6).trim();
-                    if (raw === '[DONE]') continue;
-                    try {
-                        const parsed = JSON.parse(raw);
-                        const token = parsed.choices?.[0]?.delta?.content;
-                        if (token) {
-                            fullText += token;
-                            onToken(token);
-                        }
-                        if (parsed.usage) totalTokens = parsed.usage.total_tokens || 0;
-                    } catch { /* partial JSON chunk — skip */ }
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ')) continue;
+                        const raw = line.slice(6).trim();
+                        if (raw === '[DONE]') continue;
+                        try {
+                            const parsed = JSON.parse(raw);
+                            const token = parsed.choices?.[0]?.delta?.content;
+                            if (token) {
+                                fullText += token;
+                                onToken(token);
+                            }
+                            if (parsed.usage) totalTokens = parsed.usage.total_tokens || 0;
+                        } catch { /* partial JSON chunk — skip */ }
+                    }
                 }
+            } catch (err) {
+                if (err.name === 'AbortError' || err.message === 'AbortError') throw err; // rethrow timeout/cancel
+                console.warn(`[Brain] ⚠️ Stream interrupted: ${err.message}. Returning partial response.`);
             }
 
             const result = {
@@ -241,14 +308,20 @@ export class Brain {
                     backend: 'deepseek'
                 }
             };
-            this.economics.recordUsage(model, prompt.length / 4, totalTokens);
+            const econ = this.max?.economics;
+            if (econ && typeof econ.recordUsage === 'function') {
+                econ.recordUsage(model, prompt.length / 4, totalTokens);
+            }
             return result;
         }
 
-        // Non-streaming path (unchanged)
+        // Non-streaming path
         const data = await res.json();
         const usage = data.usage || { prompt_tokens: prompt.length / 4, completion_tokens: 0 };
-        this.economics.recordUsage(model, usage.prompt_tokens, usage.completion_tokens);
+        const econ = this.max?.economics;
+        if (econ && typeof econ.recordUsage === 'function') {
+            econ.recordUsage(model, usage.prompt_tokens, usage.completion_tokens);
+        }
         return {
             text: data.choices?.[0]?.message?.content?.trim() || '',
             metadata: {
@@ -260,52 +333,82 @@ export class Brain {
         };
     }
 
-    async _ollama(model, prompt, systemPrompt, temperature, maxTokens, timeoutMs = null) {
+    async _ollama(model, prompt, systemPrompt, temperature, maxTokens, timeoutMs = null, onToken = null, prebuiltMessages = null, signal = null) {
         const start = Date.now();
 
-        // Use /api/chat with proper message structure so the model tracks conversation
-        // context correctly. /api/generate flattens everything into one blob and small
-        // models lose track of conversation state, producing repeated responses.
-        const messages = [];
-        if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
-
-        // Parse flat "USER: .../MAX: ..." history back into structured message objects
-        const turns = prompt.split(/\n\n(?=USER:|MAX:)/);
-        for (const turn of turns) {
-            if (turn.startsWith('USER:')) {
-                messages.push({ role: 'user', content: turn.slice(5).trim() });
-            } else if (turn.startsWith('MAX:')) {
-                messages.push({ role: 'assistant', content: turn.slice(4).trim() });
-            } else if (turn.trim()) {
-                messages.push({ role: 'user', content: turn.trim() });
+        let messages;
+        if (prebuiltMessages) {
+            messages = prebuiltMessages;
+        } else {
+            messages = [];
+            if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+            const turns = prompt.split(/\n\n(?=USER:|MAX:)/);
+            for (const turn of turns) {
+                if (turn.startsWith('USER:')) messages.push({ role: 'user', content: turn.slice(5).trim() });
+                else if (turn.startsWith('MAX:')) messages.push({ role: 'assistant', content: turn.slice(4).trim() });
+                else if (turn.trim()) messages.push({ role: 'user', content: turn.trim() });
             }
         }
 
+        const useStream = !!onToken;
         const body = {
             model,
             messages,
-            stream:  false,
+            stream:  useStream,
             options: { temperature, num_predict: maxTokens }
         };
+
+        const fetchSignal = (signal && typeof AbortSignal.any === 'function')
+            ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs || this.timeout)])
+            : (signal || AbortSignal.timeout(timeoutMs || this.timeout));
+
         const res = await fetch(`${this.ollamaUrl}/api/chat`, {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify(body),
-            signal:  AbortSignal.timeout(timeoutMs || this.timeout)
+            signal:  fetchSignal
         });
         if (!res.ok) throw new Error(`Ollama ${res.status}`);
-        const data = await res.json();
 
-        this.economics.recordUsage('ollama', data.prompt_eval_count || 0, data.eval_count || 0);
+        let fullText = '';
+        let promptTokens = 0, evalTokens = 0;
+
+        if (useStream) {
+            const decoder = new TextDecoder();
+            let partial = '';
+            for await (const chunk of res.body) {
+                if (signal?.aborted) throw new Error('AbortError');
+                partial += decoder.decode(chunk, { stream: true });
+                const lines = partial.split('\n');
+                partial = lines.pop();
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                        const json = JSON.parse(line);
+                        const token = json.message?.content || '';
+                        if (token) { fullText += token; onToken(token); }
+                        if (json.done) {
+                            promptTokens = json.prompt_eval_count || 0;
+                            evalTokens   = json.eval_count || 0;
+                        }
+                    } catch { /* partial JSON — skip */ }
+                }
+            }
+        } else {
+            const data = await res.json();
+            fullText     = data.message?.content?.trim() || '';
+            promptTokens = data.prompt_eval_count || 0;
+            evalTokens   = data.eval_count || 0;
+        }
+
+        const econ = this.max?.economics;
+        if (econ && typeof econ.recordUsage === 'function') {
+            econ.recordUsage('ollama', promptTokens, evalTokens);
+        }
 
         return {
-            text: data.message?.content?.trim() || '',
-            metadata: {
-                model,
-                tokens:  data.eval_count || 0,
-                latency: Date.now() - start,
-                backend: 'ollama'
-            }
+            text: fullText.trim(),
+            metadata: { model, tokens: evalTokens, latency: Date.now() - start, backend: 'ollama' }
         };
     }
 
