@@ -10,12 +10,45 @@ MAX is a standalone autonomous agent built for engineering work. He has a drive 
 
 He watches your workspace in real-time, writes his own tests, audits his own code changes, and can see what's on screen. He is opinionated. He will tell you when your code is bad. He does not sugarcoat. And he gets better every time you talk to him.
 
+He also ships with a full browser-based IDE and a downloadable desktop app — so you can watch him work in real time.
+
+---
+
+## Maxwell IDE
+
+MAX ships with a full browser-based IDE at `http://localhost:3100/maxwell`. No setup. Open it alongside your code and watch MAX work.
+
+**What it looks like:**
+- Editor panel (syntax highlighting, multi-tab, file tree)
+- Integrated terminal (persistent shell, live output)
+- Chat panel with MAX — same conversation, live responses
+- **Live agent activity stream** — when MAX runs a background goal, a Cursor-style card drops into the chat showing every step in real time: which file he's reading, what he's editing, shell commands as they run, green ✓ / red ✗ per step, summary when done
+- **Ghost Context** — the editor streams your unsaved buffer to MAX every 1.5s so he always knows exactly what you're looking at, even before you save
+
+**Desktop app:**
+
+Download and install Maxwell as a native desktop app (Windows NSIS / Mac DMG / Linux AppImage). On first launch, a setup wizard interviews you to build your profile — name, role, communication style, working goals — so MAX knows who you are before you type a single message.
+
+```bash
+# Build the installer yourself
+npm run build:win    # → dist-electron/Maxwell Setup.exe
+npm run build:mac    # → dist-electron/Maxwell.dmg
+npm run build:linux  # → dist-electron/Maxwell.AppImage
+
+# Or run the Electron app directly (dev mode)
+npm run electron:dev
+```
+
 ---
 
 ## What MAX does
 
 | Feature | Description |
 |---------|-------------|
+| **Maxwell IDE** | Full browser IDE: editor, terminal, chat, file tree — `localhost:3100/maxwell` |
+| **Desktop app** | Native Electron installer with setup wizard — Windows/Mac/Linux |
+| **Live agent stream** | Cursor-style tool cards in chat — watch MAX edit files and run commands in real time |
+| **Ghost Context** | Unsaved buffer streams to MAX every 1.5s — he sees what you see before you hit save |
 | **Drive system** | Tension builds when idle — MAX wants to do things |
 | **Heartbeat** | Background loop: curiosity tasks, goal execution, self-monitoring |
 | **AgentLoop** | Autonomous goal → decompose → execute → track outcome cycle |
@@ -55,6 +88,9 @@ cp config/api-keys.env.example config/api-keys.env
 
 # Chat mode (first run triggers onboarding)
 node launcher.mjs
+
+# Then open the IDE in your browser
+# http://localhost:3100/maxwell
 
 # Swarm a task
 node launcher.mjs --mode swarm --task "audit this codebase for security issues"
@@ -346,7 +382,14 @@ MAX/
 │   ├── FirstRun.js           — first-time setup: name, communication style
 │   └── UserProfile.js        — loads .max/user.md and .max/tasks.md
 ├── server/
-│   └── server.js             — Express REST API + /dashboard live monitoring UI
+│   ├── server.js             — Express REST API + WebSocket + SSE broadcast
+│   └── maxwell.html          — Maxwell IDE (editor, terminal, chat, live agent stream)
+├── electron/
+│   ├── main.cjs              — Electron main process, server spawn, setup wizard flow
+│   ├── preload.cjs           — contextBridge IPC (saveProfile, saveApiKey, completeSetup)
+│   ├── setup-wizard.html     — 9-step onboarding wizard (profile, style, API key)
+│   ├── loading.html          — boot screen shown while server starts
+│   └── assets/icon.png       — MAX portrait (app icon, auto-converted for each platform)
 ├── tests/
 │   └── GoalEngine.test.js    — Jest unit tests
 ├── config/
