@@ -4215,7 +4215,7 @@ function MuseAmbientField({ intensity=0.5, warmth=0.5 }) {
   );
 }
 
-function MuseWaveform({ width=800, height=48, state='listening', color=MUSE.ember }) {
+function MuseWaveform({ width=800, height=48, state='listening', color=MUSE.ember, amplitude=null }) {
   const [t, setT] = React.useState(0);
   React.useEffect(()=>{
     let raf;
@@ -4223,7 +4223,10 @@ function MuseWaveform({ width=800, height=48, state='listening', color=MUSE.embe
     raf=requestAnimationFrame(tick);
     return ()=>cancelAnimationFrame(raf);
   },[state]);
-  const amp = state==='speaking'?14:state==='thinking'?6:3;
+  // Real mic amplitude (0–1) drives wave height; fall back to state presets when mic is off
+  const amp = amplitude !== null
+    ? Math.max(1.5, amplitude * 44)
+    : (state==='speaking'?14:state==='thinking'?6:3);
   const freq = 0.012;
   const pts=[];
   for(let x=0;x<=width;x+=6){
@@ -4332,14 +4335,17 @@ function MuseRoomField({ messages, concepts, waveform='listening', ambient={inte
   return (
     <div style={{width:'100%',height:'100%',position:'relative',overflow:'hidden',background:MUSE.void,color:MUSE.text,fontFamily:"'Inter',system-ui,sans-serif",isolation:'isolate'}}>
       <MuseAmbientField intensity={ambient.intensity} warmth={ambient.warmth}/>
-      {/* floating concept residue — purely decorative, behind everything */}
+      {/* floating concept residue — clickable, pre-fills input with concept */}
       {residue.map((r,i)=>(
-        <div key={i} style={{position:'absolute',left:`${r.x*100}%`,top:`${r.y*100}%`,
+        <div key={i} onClick={()=>{ setDraft(r.text); inputRef.current?.focus(); }}
+          style={{position:'absolute',left:`${r.x*100}%`,top:`${r.y*100}%`,
           transform:'translate(-50%,-50%)',color:MUSE.textMute,opacity:r.dim,
           fontSize:11,letterSpacing:'.06em',fontStyle:'italic',maxWidth:140,textAlign:'center',
-          pointerEvents:'none',zIndex:0,userSelect:'none',
+          cursor:'pointer',zIndex:1,userSelect:'none',transition:'opacity .2s, color .2s',
           animation:`museDrift ${12+i*3}s ease-in-out infinite`,
-          '--mdx':`${(i%2?1:-1)*5}px`,'--mdy':`${(i%3-1)*4}px`}}>
+          '--mdx':`${(i%2?1:-1)*5}px`,'--mdy':`${(i%3-1)*4}px`}}
+          onMouseEnter={e=>{e.currentTarget.style.opacity='1';e.currentTarget.style.color=MUSE.ember;}}
+          onMouseLeave={e=>{e.currentTarget.style.opacity=String(r.dim);e.currentTarget.style.color=MUSE.textMute;}}>
           <span style={{color:MUSE.ember,opacity:.4,marginRight:4,fontStyle:'normal'}}>·</span>
           {r.text}
         </div>
@@ -4418,9 +4424,114 @@ function MuseRoomField({ messages, concepts, waveform='listening', ambient={inte
 // ── CONSTELLATION room ───────────────────────────────────────────
 // Deterministic jitter from a string — same concept always lands in the same spot
 function strHash(s){ return s.split('').reduce((h,c)=>(Math.imul(31,h)+c.charCodeAt(0))|0,0); }
-function conceptJitter(s, scale=0.04){ const h=strHash(s); return { dx:((h&0xff)/255-.5)*scale, dy:(((h>>8)&0xff)/255-.5)*scale }; }
+
+// ── Real mic input ─────────────────────────────────────────────────────────────
+function useMic() {
+  const [amplitude, setAmplitude] = React.useState(null); // null = not active
+  const [active, setActive] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const r = React.useRef({ ctx:null, analyser:null, source:null, stream:null, raf:null });
+
+  const start = React.useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 64;
+      analyser.smoothingTimeConstant = 0.75;
+      source.connect(analyser);
+      r.current = { ctx, analyser, source, stream, raf:null };
+      setActive(true); setError(null);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      const loop = () => {
+        analyser.getByteFrequencyData(data);
+        setAmplitude(data.reduce((a,b)=>a+b,0) / data.length / 128);
+        r.current.raf = requestAnimationFrame(loop);
+      };
+      r.current.raf = requestAnimationFrame(loop);
+    } catch(e) { setError(e.message || 'mic denied'); }
+  }, []);
+
+  const stop = React.useCallback(() => {
+    const c = r.current;
+    if (c.raf) cancelAnimationFrame(c.raf);
+    if (c.source) try { c.source.disconnect(); } catch {}
+    if (c.stream) c.stream.getTracks().forEach(t => t.stop());
+    if (c.ctx) c.ctx.close().catch(()=>{});
+    r.current = { ctx:null, analyser:null, source:null, stream:null, raf:null };
+    setActive(false); setAmplitude(null);
+  }, []);
+
+  React.useEffect(() => () => stop(), []);
+  return { amplitude, active, error, start, stop };
+}
+
+// ── Semantic concept layout — force-directed from co-occurrence ────────────────
+function buildSemanticLayout(concepts, messages) {
+  const n = Math.min(concepts.length, 12);
+  if (!n) return [];
+  const cs = concepts.slice(0, n);
+
+  // Count how many messages each pair of concepts co-appears in
+  const cooc = Array.from({length:n}, ()=>new Array(n).fill(0));
+  for (const m of messages) {
+    const txt = (typeof m.content==='string' ? m.content : (m.text||m.content?.[0]?.text||'')).toLowerCase();
+    const present = cs.map(c => txt.includes(c.toLowerCase()));
+    for (let i=0; i<n; i++) for (let j=i+1; j<n; j++) {
+      if (present[i] && present[j]) { cooc[i][j]++; cooc[j][i]++; }
+    }
+  }
+  const importance = cs.map((_,i) => cooc[i].reduce((a,b)=>a+b,0));
+  const maxImp = Math.max(...importance, 1);
+
+  // Initial positions: radial by importance rank
+  const cx=0.50, cy=0.42, margin=0.11;
+  const pos = cs.map((_,i) => {
+    const imp = importance[i]/maxImp;
+    const rad = 0.04 + (1-imp)*0.30;
+    const ang = (i/n)*Math.PI*2;
+    return { x: cx+Math.cos(ang)*rad*1.5, y: cy+Math.sin(ang)*rad };
+  });
+
+  // 60 iterations of spring forces
+  const maxCooc = Math.max(...cooc.flat(), 1);
+  for (let iter=0; iter<60; iter++) {
+    const f = pos.map(()=>({fx:0,fy:0}));
+    for (let i=0; i<n; i++) {
+      for (let j=i+1; j<n; j++) {
+        const dx=pos[j].x-pos[i].x, dy=pos[j].y-pos[i].y;
+        const dist=Math.sqrt(dx*dx+dy*dy)||0.001;
+        const rep=0.0022/(dist*dist);
+        f[i].fx-=dx/dist*rep; f[i].fy-=dy/dist*rep;
+        f[j].fx+=dx/dist*rep; f[j].fy+=dy/dist*rep;
+        const str=cooc[i][j]/maxCooc;
+        if (str>0) {
+          const att=str*0.032*(dist-0.10);
+          f[i].fx+=dx/dist*att; f[i].fy+=dy/dist*att;
+          f[j].fx-=dx/dist*att; f[j].fy-=dy/dist*att;
+        }
+      }
+      const grav=0.011*(1+importance[i]/maxImp);
+      f[i].fx+=(cx-pos[i].x)*grav; f[i].fy+=(cy-pos[i].y)*grav;
+    }
+    for (let i=0; i<n; i++) {
+      pos[i].x=Math.max(margin,Math.min(1-margin, pos[i].x+f[i].fx*0.9));
+      pos[i].y=Math.max(margin,Math.min(0.72,     pos[i].y+f[i].fy*0.9));
+    }
+  }
+
+  return cs.map((c,i)=>({
+    id:c, label:c,
+    tier: importance[i]>=maxImp*0.7?0:importance[i]>=maxImp*0.3?1:importance[i]>0?2:3,
+    cooc: cooc[i],
+    importance: importance[i],
+    x: pos[i].x, y: pos[i].y,
+  }));
+}
 
 function MuseRoomConstellation({ messages, concepts, waveform='listening', ambient={intensity:.4,warmth:.35}, arc='opening', isThinking=false, onSwitch, onExit, onSend }) {
+  const mic = useMic();
   const [tick,setTick]=React.useState(0);
   const [draft,setDraft]=React.useState('');
   const inputRef=React.useRef(null);
@@ -4432,38 +4543,31 @@ function MuseRoomConstellation({ messages, concepts, waveform='listening', ambie
   const submit=()=>{ const t=draft.trim(); if(!t) return; setDraft(''); if(onSend) onSend(t); };
   const onKey=(e)=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submit();} };
 
-  // Use full viewport — the overlay is position:fixed inset:0
   const w=window.innerWidth, h=window.innerHeight;
+  const cx=0.50, cy=0.40;
 
-  // Build nodes — radial layout + per-concept deterministic jitter
-  const margin = 0.10;
-  const cx = 0.50, cy = 0.40;
-  const rawNodes = concepts.slice(0,12).map((c,i)=>{
-    const tier   = i<2?0:i<5?1:i<8?2:3;
-    const radii  = [0, .20, .33, .44];
-    const angle  = (i/Math.max(concepts.length,1))*Math.PI*2 + tier*0.4;
-    const r      = radii[tier];
-    const aspect = Math.min(w/h, 1.6);
-    const { dx, dy } = conceptJitter(c, 0.05); // seeded per-concept offset
-    const nx = cx + Math.cos(angle)*r*aspect + dx;
-    const ny = cy + Math.sin(angle)*r + dy;
-    return { id:c, label:c, tier,
-      x: Math.max(margin, Math.min(1-margin, nx)),
-      y: Math.max(margin, Math.min(.72, ny)),
-    };
-  });
-  const nodes = rawNodes.length>0 ? rawNodes : [{id:'listening',label:'listening…',x:cx,y:cy,tier:0,pulse:true}];
+  // Semantic layout — positions derived from co-occurrence, recomputes when conversation changes
+  const nodes = React.useMemo(()=>{
+    const built = buildSemanticLayout(concepts, messages);
+    return built.length > 0 ? built : [{id:'listening',label:'listening…',x:cx,y:cy,tier:0,cooc:[],importance:0,pulse:true}];
+  }, [concepts, messages]);
 
-  // MAX traveling light — moves between focal tier nodes
-  const focal=nodes.filter(n=>n.tier<=1);
-  const tFrac=(tick/280)%Math.max(focal.length,1);
-  const i0=Math.floor(tFrac);
-  const frac=tFrac-i0;
-  const ease=frac<.5?2*frac*frac:1-Math.pow(-2*frac+2,2)/2;
-  const na=focal[i0%focal.length]||{x:cx,y:cy};
-  const nb=focal[(i0+1)%focal.length]||na;
-  const mxX=(na.x+(nb.x-na.x)*ease)*w;
-  const mxY=(na.y+(nb.y-na.y)*ease)*h;
+  // MAX light target — the concept most recently mentioned by the user
+  const lightTarget = React.useMemo(()=>{
+    const lastUser = [...messages].reverse().find(m=>m.role==='user');
+    if (!lastUser) return nodes[0];
+    const txt=(typeof lastUser.content==='string'?lastUser.content:(lastUser.text||'')).toLowerCase();
+    return nodes.find(n=>txt.includes(n.id.toLowerCase())) || nodes[0];
+  }, [messages, nodes]);
+
+  // Smoothly orbit the target node — light tracks what Barry is talking about
+  const lightPos = React.useRef({ x:cx*w, y:cy*h });
+  const tx=(lightTarget?.x||cx)*w, ty=(lightTarget?.y||cy)*h;
+  const orbitAng=(tick/90)*Math.PI*2;
+  const orbitR=22;
+  const ox=tx+Math.cos(orbitAng)*orbitR, oy=ty+Math.sin(orbitAng)*orbitR*0.6;
+  lightPos.current={ x:lightPos.current.x*0.94+ox*0.06, y:lightPos.current.y*0.94+oy*0.06 };
+  const mxX=lightPos.current.x, mxY=lightPos.current.y;
 
   const tierStyle=(t)=>[
     {fs:17,fw:500,op:1.0,r:7, color:MUSE.text,    font:"'Fraunces',Georgia,serif",   italic:true },
@@ -4494,19 +4598,24 @@ function MuseRoomConstellation({ messages, concepts, waveform='listening', ambie
         <MuseRoomSwitcher current="constellation" onSwitch={onSwitch}/>
       </div>
 
-      {/* concept graph — SVG edges */}
+      {/* concept graph — SVG edges drawn only between co-occurring concepts */}
       <svg width="100%" height="100%" viewBox={`0 0 ${w} ${h}`}
         style={{position:'absolute',inset:0,zIndex:2,pointerEvents:'none'}}>
-        {nodes.map((a,ai)=>nodes.slice(ai+1).filter(b=>Math.abs(a.tier-b.tier)<=1).map((b,bi)=>{
-          const isPrimary=a.tier===0&&b.tier===0;
-          const isEmerging=a.tier<=1&&b.tier<=1&&!isPrimary;
-          const stroke=isPrimary?MUSE.ember:isEmerging?MUSE.violet:MUSE.textMute;
-          const op=isPrimary?.55:isEmerging?.35:.18;
-          return <line key={`${ai}-${bi}`}
+        {nodes.map((a,ai)=>nodes.slice(ai+1).map((b,_bi)=>{
+          const bj=ai+1+_bi;
+          const strength=a.cooc?.(bj)||0;
+          if (strength===0) return null;
+          const maxStr=Math.max(...nodes.map((_,i)=>nodes.map((_2,j)=>nodes[i]?.cooc?.[j]||0)).flat(),1);
+          const norm=strength/maxStr;
+          const isPrimary=norm>0.6;
+          const isMid=norm>0.25&&!isPrimary;
+          const stroke=isPrimary?MUSE.ember:isMid?MUSE.violet:MUSE.textMute;
+          const op=isPrimary?.6:isMid?.35:.18;
+          return <line key={`${ai}-${bj}`}
             x1={a.x*w} y1={a.y*h} x2={b.x*w} y2={b.y*h}
-            stroke={stroke} strokeOpacity={op} strokeWidth={isPrimary?1:.7}
-            strokeDasharray={isPrimary?undefined:isEmerging?"4 5":"2 7"}/>;
-        }))}
+            stroke={stroke} strokeOpacity={op} strokeWidth={isPrimary?1.2:.7}
+            strokeDasharray={isPrimary?undefined:isMid?"4 5":"2 8"}/>;
+        }).filter(Boolean))}
         {nodes.map(n=>{
           const ts=tierStyle(n.tier);
           return (
@@ -4565,7 +4674,7 @@ function MuseRoomConstellation({ messages, concepts, waveform='listening', ambie
 
       {/* arc indicator — subtle bottom-center */}
       <div style={{position:'absolute',bottom:76,left:0,right:0,display:'flex',justifyContent:'center',zIndex:4}}>
-        <MuseWaveform width={Math.min(w-200,800)} height={32} state={waveform} color={MUSE.violet}/>
+        <MuseWaveform width={Math.min(w-200,800)} height={32} state={waveform} color={MUSE.violet} amplitude={mic.active ? mic.amplitude : null}/>
       </div>
 
       {/* input bar */}
@@ -4591,6 +4700,20 @@ function MuseRoomConstellation({ messages, concepts, waveform='listening', ambie
             onMouseEnter={e=>{e.currentTarget.style.background=`${MUSE.ember}20`;}}
             onMouseLeave={e=>{e.currentTarget.style.background='transparent';}}>⏎</button>
         )}
+        <button onClick={mic.active ? mic.stop : mic.start}
+          title={mic.error || (mic.active ? 'mute mic' : 'enable mic')}
+          style={{background:mic.active?`${MUSE.ember}18`:'transparent',
+            border:`1px solid ${mic.active?MUSE.ember:MUSE.textMute}44`,
+            borderRadius:14,padding:'4px 8px',display:'flex',alignItems:'center',gap:5,
+            color:mic.active?MUSE.ember:MUSE.textMute,cursor:'pointer',
+            fontSize:11,transition:'all .2s',flexShrink:0,
+            opacity:mic.error?.35:mic.active?1:.5}}>
+          {mic.active ? '⏺' : '🎙'}
+          {mic.active && mic.amplitude!==null && (
+            <span style={{display:'inline-block',width:Math.max(2,mic.amplitude*16),height:2,
+              background:MUSE.ember,borderRadius:1,transition:'width .06s'}}/>
+          )}
+        </button>
         <span style={{fontSize:10,letterSpacing:'.2em',color:MUSE.textMute,opacity:.4,fontFamily:"'JetBrains Mono',monospace",flexShrink:0}}>
           {nodes.length} concepts · {arc}
         </span>
@@ -4600,7 +4723,7 @@ function MuseRoomConstellation({ messages, concepts, waveform='listening', ambie
 }
 
 // ── STUDIO room ──────────────────────────────────────────────────
-function MuseRoomStudio({ messages, concepts, notices, waveform='listening', ambient={intensity:.45,warmth:.45}, onSwitch, onExit, onSend }) {
+function MuseRoomStudio({ messages, concepts, notices, waveform='listening', ambient={intensity:.45,warmth:.45}, isThinking=false, onSwitch, onExit, onSend }) {
   const [draft, setDraft] = React.useState('');
   const inputRef  = React.useRef(null);
   const scrollRef = React.useRef(null);
@@ -4824,7 +4947,7 @@ function MuseOverlay({ messages, insights, museState={}, room, onSwitchRoom, onE
     isThinking,
     onSwitch: onSwitchRoom,
     onExit,
-    onSend: isThinking ? null : onSend, // disable input while MAX is responding
+    onSend: isThinking ? null : onSend,
   };
 
   return (
@@ -5030,6 +5153,10 @@ function App() {
         }
         if (msg.type === 'agent_say') {
           setMessages(m => [...m, { id: nextMsgId(), role: 'max', persona: 'companion', text: msg.text, modelTier: 'fast', route: 'local' }]);
+        }
+        if (msg.type === 'choko_message' && msg.text) {
+          const toast = `🍫 ${msg.title || 'Scout report'}: ${msg.text}`.slice(0, 220);
+          setTimeout(()=>{ setChokoTyping(true); setTimeout(()=>{ setChokoTyping(false); playChokoPop(); setChokoMsg(toast); setTimeout(()=>setChokoMsg(null), 9000); }, 900); }, 400);
         }
         if (msg.type === 'agent_activity') {
           setMessages(m => {
@@ -5390,6 +5517,12 @@ function App() {
               }
               if(d.type==='goal'&&d.action==='removed') setGoals(g=>g.filter(x=>x.id!==d.id));
 
+              // Heartbeat lifecycle — shows real idle/working state in task bar
+              if(d.type==='heartbeat_status'){
+                if(d.state==='task') setAgentTask(t=>t||{task:d.task,steps:[],status:'running'});
+                else if(d.state==='idle' && !currentActivityGoalRef.current) setAgentTask(null);
+              }
+
               // ── Agent task tracker + live chat activity stream ──
               if(d.type==='agent_busy'){
                 clearTimeout(agentTaskTimer.current);
@@ -5482,17 +5615,14 @@ function App() {
                   answered: false,
                 }]);
               }
-              // max.say() — attach completion summary to activity message instead of separate bubble
+              // max.say() — always surface as a real chat bubble so Barry sees it
               if(d.type==='agent_say' && d.text){
-                const summary=d.text+(d.details?`\n\n_${d.details}_`:'');
-                const gid=currentActivityGoalRef.current;
-                setMessages(m=>{
-                  if(gid && m.some(msg=>msg.goalId===gid)){
-                    return m.map(msg=>msg.goalId===gid?{...msg,summary}:msg);
-                  }
-                  // No active activity message — fall back to a plain bubble
-                  return [...m,{id:nextMsgId(),role:'max',persona:'companion',text:summary,modelTier:'fast',streaming:false}];
-                });
+                setMessages(m=>[...m,{id:nextMsgId(),role:'max',persona:'agent',text:d.text,modelTier:'fast',streaming:false}]);
+              }
+              // Choko relay — real scout report from the Choko agent
+              if(d.type==='choko_message' && d.text){
+                const toast=`🍫 ${d.title||'Scout report'}: ${d.text}`.slice(0,220);
+                setTimeout(()=>{ setChokoTyping(true); setTimeout(()=>{ setChokoTyping(false); playChokoPop(); setChokoMsg(toast); setTimeout(()=>setChokoMsg(null),9000); },900); },400);
               }
             }catch{}
           };

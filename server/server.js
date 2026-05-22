@@ -379,6 +379,14 @@ export async function createServer(max, port = 3100) {
         broadcast({ type: 'agent_say', text: msg.text, details: msg.details, ts: msg.timestamp });
     });
 
+    max.heartbeat?.on('choko_relay', data => {
+        broadcast({ type: 'choko_message', text: data.detail, title: data.title, priority: data.priority });
+    });
+
+    max.heartbeat?.on('started', () => broadcast({ type: 'heartbeat_status', state: 'running' }));
+    max.heartbeat?.on('idle',    () => broadcast({ type: 'heartbeat_status', state: 'idle'    }));
+    max.heartbeat?.on('task',  task => broadcast({ type: 'heartbeat_status', state: 'task', task: task?.label || task?.title || 'background task' }));
+
     // Agent lane status — UI shows what MAX is working on in the background
     max.agentLoop?.on('goalStart', ({ goal }) => {
         activeAgentActivity = goal.id || makeActivityId('goal');
@@ -403,7 +411,7 @@ export async function createServer(max, port = 3100) {
             summary: success ? 'Completed.' : 'Stopped or blocked.'
         });
         activeAgentActivity = null;
-        broadcast({ type: 'agent_free', task: goal.title, goalId: goal.id, success });
+        broadcast({ type: 'agent_free', task: goal.title, goalId: goal.id, success, source: goal.source });
     });
     // Step-level progress events for the task tracker
     max.agentLoop?.on('stepStart', data => {

@@ -876,6 +876,7 @@ Actions:
         });
         this.scheduler.addJob({ id: 'variant_tests', label: 'Evolution: run variant tests', every: '3h', type: 'custom', handler: () => this.skillMutator.runNextTest() });
         this.scheduler.addJob({ id: 'choko_relay', label: 'Choko: pick up field reports', every: '15m', type: 'custom', handler: () => this._processChokoRelay().catch(err => console.warn('[MAX] Choko relay error:', err.message)) });
+        this.scheduler.addJob({ id: 'choko_scout', label: 'Choko: dispatch scout mission', every: '4h', type: 'custom', handler: () => this._dispatchChokoMission().catch(() => {}) });
         this.scheduler.addJob({ id: 'soma_curiosity_sync', label: 'SOMA: sync curiosity goals', every: '30m', type: 'custom', handler: () => { if (this.soma?.available) this.soma.syncCuriosityGoals(this.goals).catch(() => {}); } });
         this.scheduler.addJob({ id: 'pr_review_loop', label: 'PR: poll open PRs for review comments', every: '30m', type: 'custom', handler: () => this._pollPRReviews().catch(() => {}) });
         this.scheduler.addJob({ id: 'longitudinal_snapshot', label: 'Identity: weekly self-snapshot', every: '24h', type: 'custom', handler: () => this.longitudinal.takeSnapshot().catch(() => {}) });
@@ -889,6 +890,9 @@ Actions:
             });
             console.log(`[MAX] 🧪 CI Watcher armed: ${this.ci.testCommand}`);
         }
+
+        // Boot Choko after scheduler is running so she has a job queue to fill
+        setTimeout(() => this._bootChoko().catch(err => console.warn('[MAX] Choko boot failed:', err.message)), 3000);
     }
 
     _startBackgroundLoops() {
@@ -1406,6 +1410,49 @@ Actions:
         this._context = this._context.slice(-this._contextLimit);
     }
 
+    async _bootChoko() {
+        const userName = this.profile?.getName() || 'Barry';
+        const choko = await this.agentManager.boot('Choko', { userName });
+
+        // First mission: get vitals on the whole codebase, relay anything worth MAX's attention
+        choko.goals.addGoal({
+            title: 'Initial scout: codebase health + dust bunnies',
+            description: `You are scouting the MAX codebase for the first time this session.
+1. Run TOOL:scout:health:{"dir":"core"} to get vitals.
+2. Run TOOL:scout:sparkle:{"target":"core"} to find issues.
+3. Run TOOL:scout:sparkle:{"target":"tools"} to scan tools.
+4. Pick the 2-3 most important findings (real bugs, silent failures, missing wiring).
+5. For each one call TOOL:scout:relay:{"title":"short title","detail":"file:line — what is wrong and why it matters"}.
+Be specific. Skip cosmetic issues. Focus on things that could break MAX or waste Barry's time.`,
+            type: 'scout',
+            priority: 0.75,
+            source: 'auto'
+        });
+
+        // Kick her loop immediately so she starts working
+        setImmediate(() => choko.agentLoop?.runCycle().catch(() => {}));
+        console.log('[MAX] 🍫 Choko is online — scouting codebase');
+    }
+
+    async _dispatchChokoMission() {
+        const choko = this.agentManager.get('Choko');
+        if (!choko) return; // not booted yet
+        const targets = ['core', 'tools', 'server', 'swarm'];
+        const target = targets[Math.floor(Date.now() / (4 * 3600 * 1000)) % targets.length];
+        choko.goals.addGoal({
+            title: `Scout: audit ${target}/`,
+            description: `Sparkle audit the ${target}/ directory.
+1. Run TOOL:scout:sparkle:{"target":"${target}"}.
+2. Find the top 2 most actionable issues (bugs, silent failures, unhandled errors).
+3. Call TOOL:scout:relay:{"title":"...","detail":"file:line — exact issue and impact"} for each.
+Skip TODOs and style issues — focus on things that can actually break.`,
+            type: 'scout',
+            priority: 0.6,
+            source: 'auto'
+        });
+        setImmediate(() => choko.agentLoop?.runCycle().catch(() => {}));
+    }
+
     async _processChokoRelay() {
         const relayPath = path.join(__dirname, '..', '.max', 'choko_relay.json');
         if (!fs.existsSync(relayPath)) return;
@@ -1415,7 +1462,18 @@ Actions:
         if (unread.length === 0) return;
         for (const treat of unread) {
             treat._processedByMAX = true;
+
+            // Surface in insight stream
             this.heartbeat?.emit('insight', { source: 'Choko 🍫', label: treat.title, result: treat.detail });
+
+            // Broadcast to Maxwell UI as a real Choko toast message
+            this.heartbeat?.emit('choko_relay', {
+                title:  treat.title,
+                detail: treat.detail,
+                priority: treat.priority || 'medium',
+            });
+
+            // If Choko flagged something actionable, queue a MAX goal
             if (this.goals && /fix|bug|broken|fail|error|issue|improve|add|implement|missing/i.test(treat.title + treat.detail)) {
                 this.goals.addGoal({ title: `[Choko] ${treat.title}`, description: treat.detail, type: 'fix', priority: 0.7, source: 'choko_relay' });
             }
