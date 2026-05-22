@@ -6,11 +6,30 @@ config/api-keys.env
 *.env
 !config/api-keys.env.example
 
-# Runtime data
+# Runtime data — never commit
 .max/
+.soma/
+.arbiter-state/
+SOMA/
+data/
+hippocampus/
+Poseidon-Protocol/
+
+# Databases
+*.db
+*.db-shm
+*.db-wal
+soma-memory.db
+soma-vectors.json
+polymer-storage.db
 
 # Generated tools (created at runtime by ToolCreator)
 tools/generated/
+
+# Game assets (large binary files)
+game_assets/
+server/assets/*.png
+server/assets/*.jpg
 
 # Logs
 *.log

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8'>
+    <title>The Quiet Shelf | Atmospheric v0.9</title>
+    <script src='https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js'></script>
+    <style>
+        body { margin: 0; background: #050308; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+        canvas { border: 2px solid #2d1b4e; image-rendering: pixelated; box-shadow: 0 0 40px rgba(155, 109, 255, 0.2); }
+        #ui { position: absolute; bottom: 30px; color: #fff; font-family: 'Georgia', serif; letter-spacing: 5px; pointer-events: none; text-shadow: 0 0 10px #9b6dff; opacity: 0.8; }
+    </style>
+</head>
+<body>
+<div id="ui">THE QUIET SHELF</div>
+<script>
+/**
+ * THE QUIET SHELF - PROTOTYPE v0.9
+ * Atmospheric Projection: Navigation inside the actual high-fidelity painting.
+ */
+
+const config = {
+    type: Phaser.AUTO,
+    width: 768,
+    height: 1024,
+    pixelArt: true,
+    physics: { default: 'arcade', arcade: { debug: false } },
+    scene: { preload, create, update }
+};
+
+const game = new Phaser.Game(config);
+
+function preload() {
+    this.load.image('painting', '/assets/archive_bg.png');
+    this.load.image('hero', '/assets/hero_atlas.png');
+}
+
+function create() {
+    const { width, height } = this.sys.game.config;
+    const centerX = width / 2;
+    const centerY = height / 2;
+
+    // 1. THE VISUAL FOUNDATION (The actual high-res art)
+    this.add.image(centerX, centerY, 'painting');
+
+    // 2. THE DARKNESS (Atmospheric Masking)
+    // We create a "Shadow" layer that we will punch holes into
+    this.shadowTexture = this.add.renderTexture(0, 0, width, height);
+    this.shadowTexture.setDepth(1000);
+    this.shadowTexture.setAlpha(0.85);
+
+    // 3. THE LIGHT (Procedural masks)
+    this.lantern = this.make.graphics({ add: false });
+    this.lantern.fillStyle(0xffffff, 1);
+    this.lantern.fillCircle(0, 0, 150);
+
+    this.wellGlow = this.make.graphics({ add: false });
+    this.wellGlow.fillStyle(0xffffff, 1);
+    this.wellGlow.fillCircle(0, 0, 120);
+
+    // 4. PHYSICS (Mapping the world in the painting)
+    this.walls = this.physics.add.staticGroup();
+    // Inner Archive Well
+    const well = this.walls.create(centerX, centerY + 30, null);
+    well.setSize(160, 160).setVisible(false);
+
+    // Circular Shelves
+    for (let i = 0; i < 8; i++) {
+        const angle = (i / 8) * Math.PI * 2;
+        const x = centerX + Math.cos(angle) * 300;
+        const y = centerY + Math.sin(angle) * 300;
+        const s = this.walls.create(x, y, null);
+        s.setSize(120, 120).setVisible(false);
+    }
+
+    // 5. THE PLAYER (Your character)
+    this.player = this.physics.add.sprite(centerX, height - 100, 'hero');
+    this.player.setOrigin(0.5, 1);
+    this.player.setScale(0.8);
+    this.player.setCollideWorldBounds(true);
+    this.player.setDepth(10);
+    this.player.setTint(0x4a2c7a); // Start dark
+
+    // 6. INPUT
+    this.cursors = this.input.keyboard.createCursorKeys();
+    this.physics.add.collider(this.player, this.walls, () => {
+        this.cameras.main.shake(100, 0.005); // Collisions have weight
+    });
+}
+
+function update() {
+    const speed = 200;
+    this.player.setVelocity(0);
+
+    if (this.cursors.left.isDown)  this.player.setVelocityX(-speed);
+    if (this.cursors.right.isDown) this.player.setVelocityX(speed);
+    if (this.cursors.up.isDown)    this.player.setVelocityY(-speed);
+    if (this.cursors.down.isDown)  this.player.setVelocityY(speed);
+
+    // DYNAMIC LIGHTING PASS
+    const { width, height } = this.sys.game.config;
+    this.shadowTexture.clear();
+    this.shadowTexture.fill(0x050308, 1); // Pitch black
+
+    // Punch out the central well (pulsing)
+    const pulse = 1 + Math.sin(this.time.now / 400) * 0.15;
+    this.shadowTexture.erase(this.wellGlow, width/2, height/2 - 20, pulse);
+
+    // Punch out the player's lantern
+    this.shadowTexture.erase(this.lantern, this.player.x, this.player.y - 30);
+
+    // Player tinting (purple glow near well)
+    const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, width/2, height/2);
+    if (dist < 350) {
+        this.player.setTint(0x9b6dff);
+    } else {
+        this.player.setTint(0x444444);
+    }
+}
+</script>
+</body>
+</html>

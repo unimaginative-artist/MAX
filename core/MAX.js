@@ -23,7 +23,11 @@ import { EvolutionArbiter }   from './EvolutionArbiter.js';
 import { SelfCodeInspector }  from './SelfCodeInspector.js';
 import { ReflectionEngine }   from './ReflectionEngine.js';
 import { PoseidonResearch }    from './PoseidonResearch.js';
+import { DeepUserModel }      from './DeepUserModel.js';
+import { LongitudinalSelf }   from './LongitudinalSelf.js';
+import { DatasetCurator }     from './DatasetCurator.js';
 import { PersonaEngine }      from '../personas/PersonaEngine.js';
+import { MuseEngine }         from './MuseEngine.js';
 import { ToolRegistry }       from '../tools/ToolRegistry.js';
 import { FileTools }          from '../tools/FileTools.js';
 import { ShellTool, getRunningProcesses } from '../tools/ShellTool.js';
@@ -69,9 +73,35 @@ import { AgentManager }       from './AgentManager.js';
 import { SwarmSync }          from './SwarmSync.js';
 import { CIWatcher }          from './CIWatcher.js';
 import { BrowserTool }        from '../tools/BrowserTool.js';
-import fs                     from 'fs';
+import { GameWorldTool }      from '../tools/GameWorldTool.js';
+import { GameCodeTool }       from '../tools/GameCodeTool.js';
+import { GameAssetFetcherTool } from '../tools/GameAssetFetcher.js';
+import { SocialArbiter }         from './SocialArbiter.js';
+import { SkillEvolutionArbiter }  from './SkillEvolutionArbiter.js';
+import { SkillMutatorArbiter }    from './SkillMutatorArbiter.js';
+import { ContextPagerArbiter }    from './ContextPagerArbiter.js';
+import { WorkspaceEditArbiter } from './WorkspaceEditArbiter.js';
+import { SemanticIndex }       from './SemanticIndex.js';
+import { GroundingArbiter }     from './GroundingArbiter.js';
+import { LSPArbiter }           from './LSPArbiter.js';
+import { AutonomyPolicy }       from './AutonomyPolicy.js';
+import { SecurityExpertisePack } from './SecurityExpertisePack.js';
+import { stripLeakedPromptContext, stripStageDirections } from './TextSanitizer.js';
+import fs                         from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const SECURITY_ENGINEERING_DIRECTIVE = `
+
+## Secure Engineering Baseline
+Security is part of the definition of done for every site, app, API, tool, and integration.
+- Threat-model the change before implementation: identify trust boundaries, attacker-controlled input, auth/authorization checks, data exposure, dependency risk, and abuse paths.
+- Default to least privilege, explicit validation, safe output encoding, parameterized database access, secure cookie/session settings, CSRF protection where relevant, and secret-free source code.
+- Never hardcode credentials, tokens, private keys, webhook secrets, or production URLs with embedded auth.
+- Treat frontend work as security-sensitive too: avoid unsafe HTML injection, sanitize rendered user content, use safe link/file handling, and do not expose secrets in client bundles.
+- When changing auth, payments, uploads, shell execution, file access, networking, crypto, personal data, admin features, or cross-origin behavior, include security verification in the final validation.
+- If a user asks for a risky shortcut, explain the risk and choose the safer implementation path unless they explicitly accept the tradeoff.
+`;
 
 // Serializes chat turns so they process one at a time without blocking agent work
 class ChatQueue {
@@ -113,6 +143,7 @@ export class MAX {
         this.drive     = new DriveSystem(config.drive);
         this.curiosity = new CuriosityEngine(config.curiosity);
         this.persona   = new PersonaEngine();
+        this.muse      = new MuseEngine();
         this.memory    = new MaxMemory(config.memory);
         this.kb        = new KnowledgeBase({ dbPath: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.max', 'knowledge.db') });
         this.profile   = new UserProfile();
@@ -164,10 +195,25 @@ export class MAX {
         this.mcp             = new MCPRegistry(this);
         this.selfImprovement = new SelfImprovementEngine(this);
         this.security        = new SecurityCouncil(this);
+        this.securityPack    = new SecurityExpertisePack();
+        this.autonomy        = new AutonomyPolicy(config.autonomy);
+        this.social          = new SocialArbiter(this);
+        this.skillEvolution  = new SkillEvolutionArbiter(this);
+        this.skillMutator    = new SkillMutatorArbiter(this);
+        this.contextPager    = new ContextPagerArbiter(this);
+        this.bridge          = null; // Deprecated: server/server.js owns the active IDE WebSocket/SSE bridge.
+        this.workspaceEdits  = new WorkspaceEditArbiter(this);
+        this.semanticIndex   = new SemanticIndex(this);
+        this.grounding       = new GroundingArbiter(this);
+        this.lsp             = new LSPArbiter(this);
+        this.userModel       = new DeepUserModel(this);
+        this.longitudinal    = new LongitudinalSelf(this);
+        this.dataset         = new DatasetCurator(this);
 
         // State flags
         this.isThinking       = false;
         this._currentAbortController = null;
+        this._lastError       = null; // { message, ts } — last caught error, exposed via /health
         this._ghostBuffers = new Map(); // unsaved editor content streamed from Maxwell IDE
 
         // Conversation context window
@@ -180,6 +226,8 @@ export class MAX {
 
         this._promptCache     = { key: null, prompt: null };
         this._responseCache   = new Map();  // cacheKey → { response, persona, drive, telemetry, ts }
+        this._backgroundTimer = null;
+        this._backgroundStarted = false;
 
         // ─── Phase 5: Explicit Context (Cursor-style) ───
         this.pinnedFiles      = new Set();
@@ -199,6 +247,42 @@ export class MAX {
         }
     }
 
+    abortAgent() {
+        return this.agentLoop?.interrupt?.() || false;
+    }
+
+    hasIdeClients() {
+        return (this._ideClients?.size || 0) > 0;
+    }
+
+    _installAutonomyPolicy() {
+        if (this._autonomyPolicyInstalled || !this.tools?.execute) return;
+        this._autonomyPolicyInstalled = true;
+        const originalExecute = this.tools.execute.bind(this.tools);
+        this.tools.execute = async (toolName, action, params = {}) => {
+            const decision = this.autonomy?.can(toolName, action, params, {
+                mode: this.config.mode || this.config.runtimeMode || 'chat'
+            });
+            if (decision && !decision.allowed) {
+                console.warn(`[AutonomyPolicy] Blocked ${toolName}.${action}: ${decision.reason}`);
+                return {
+                    success: false,
+                    blocked: true,
+                    policy: {
+                        risk: decision.risk,
+                        reason: decision.reason,
+                        level: this.autonomy.level
+                    },
+                    error: `[AutonomyPolicy] ${decision.reason}`
+                };
+            }
+            if (decision?.warning) {
+                console.warn(`[AutonomyPolicy] High-risk ${toolName}.${action}: ${decision.reason}`);
+            }
+            return originalExecute(toolName, action, params);
+        };
+    }
+
     async initialize() {
         console.log('\n' + '━'.repeat(60));
         console.log('  MAX — autonomous engineering agent');
@@ -209,6 +293,7 @@ export class MAX {
         console.log('[MAX] 💾 Initializing memory tiers...');
         await this.memory.initialize();
         await this.kb.initialize();
+        this.semanticIndex.initialize(); // non-blocking — scans after 10s delay
 
         // User profile — load from .max/user.md and .max/tasks.md
         console.log('[MAX] 👤 Loading user profile...');
@@ -216,6 +301,11 @@ export class MAX {
         if (this.profile.hasProfile) {
             console.log(`[MAX] 👤 Profile loaded: ${this.profile.name}`);
         }
+
+        // Longitudinal systems — load from disk (non-blocking)
+        this.userModel.load();
+        this.longitudinal.load();
+        this.dataset.load();
 
         // Brain (both lanes)
         console.log('[MAX] 🧠 Initializing brain backends...');
@@ -243,22 +333,54 @@ export class MAX {
         this.tools.register(EmailTool);
         this.tools.register(KnowledgeTool);
         this.tools.register(BrowserTool);
+        this.tools.register(GameWorldTool);
+        this.tools.register(GameCodeTool);
+        this.tools.register(GameAssetFetcherTool);
+        this._installAutonomyPolicy();
 
-        // Wire SecurityCouncil into file:write and file:replace
+        // Seal the SkillMutator primitive registry now that all tools are registered
+        this.skillMutator.initializeRegistry();
+
+        // Wire SecurityCouncil and WorkspaceEdits into file tools
         const fileTool = this.tools.get('file');
         if (fileTool) {
             const _self = this;
             const _origWrite   = fileTool.actions.write.bind(fileTool.actions);
             const _origReplace = fileTool.actions.replace.bind(fileTool.actions);
+            const _origPatch   = fileTool.actions.patch.bind(fileTool.actions);
+
             fileTool.actions.write = async (params) => {
+                // Security check first
                 const review = await _self.security.review(params.content || '', { filePath: params.filePath, goal: 'file write' });
                 if (!review.safe) return { success: false, error: `[SecurityCouncil] Write blocked (${review.severity}): ${review.issues[0]?.issue}` };
+                
+                // If IDE is connected, propose instead of write
+                if (!params.__applyProposal && params.__source !== 'ui' && _self.hasIdeClients()) {
+                    return _self.workspaceEdits.propose('write', params);
+                }
                 return _origWrite(params);
             };
+
             fileTool.actions.replace = async (params) => {
                 const review = await _self.security.review(params.newText || '', { filePath: params.filePath, goal: 'file replace' });
                 if (!review.safe) return { success: false, error: `[SecurityCouncil] Replace blocked (${review.severity}): ${review.issues[0]?.issue}` };
+                
+                if (!params.__applyProposal && params.__source !== 'ui' && _self.hasIdeClients()) {
+                    return _self.workspaceEdits.propose('replace', params);
+                }
                 return _origReplace(params);
+            };
+
+            fileTool.actions.patch = async (params) => {
+                const reviewTarget = _self._buildPatchSecurityReviewTarget(params);
+                const review = await _self.security.review(reviewTarget, { filePath: params.filePath, goal: 'file patch' });
+                if (!review.safe) return { success: false, error: `[SecurityCouncil] Patch blocked (${review.severity}): ${review.issues[0]?.issue}` };
+
+                // If IDE is connected, propose instead of patch
+                if (!params.__applyProposal && params.__source !== 'ui' && _self.hasIdeClients()) {
+                    return _self.workspaceEdits.propose('patch', params);
+                }
+                return _origPatch(params);
             };
         }
 
@@ -275,6 +397,8 @@ export class MAX {
 
         // Evolution and self-coding
         this.evolution = new EvolutionArbiter(this.brain, this.memory, this.outcomes);
+        this.evolution.swarm = this.swarm; // Link swarm for adversarial reviews
+        this.evolution.max   = this;       // Link MAX so UserProxy can read user profile
         this.toolCreator = new ToolCreator(this.brain, this.tools, path.join(__dirname, '..', 'tools', 'generated'));
         this.selfInspector = new SelfCodeInspector(this.brain, this.memory);
         this.reflection = new ReflectionEngine(this.brain, this.goals, this.outcomes, this.kb, this);
@@ -289,117 +413,9 @@ export class MAX {
         this.heartbeat = new Heartbeat(this);
         this.scheduler = new Scheduler(this);
 
-        // Background jobs
-        console.log('[MAX] 📅 Scheduling background tasks...');
-        
-        // Memory pruning — every hour
-        this.scheduler.addJob({ id: 'memory_prune', label: 'Prune weak memories', every: '1h', handler: () => this.memory._cleanup() });
-
-        // Context reflection — every 30 mins
-        this.scheduler.addJob({ id: 'reflection', label: 'System self-reflection', every: '30m', handler: () => this.reflection.forceReflect() });
-
-        // Roadmap sync — every 4h
-        this.scheduler.addJob({
-            id:      'roadmap_sync',
-            label:   'Sync development roadmap',
-            every:   '4h',
-            type:    'custom',
-            handler: () => this.roadmap.sync().catch(err =>
-                console.warn('[MAX] Roadmap sync failed:', err.message)
-            )
-        });
-
-        // Poseidon research — daily AI research cycle → gap analysis → engineering tasks
-        this.scheduler.addJob({
-            id:      'poseidon_research',
-            label:   'Poseidon: crawl AI research, update capability map, generate tasks',
-            every:   '24h',
-            type:    'custom',
-            handler: () => this.poseidon?.runCycle().catch(err =>
-                console.warn('[MAX] Poseidon research cycle failed:', err.message)
-            )
-        });
-
-        // Hephaestus Loop — autonomous swarm optimization
-        this.scheduler.addJob({
-            id:      'hephaestus_optimize',
-            label:   'Hydra Swarm: Autonomous Code Optimization',
-            every:   '12h',
-            type:    'custom',
-            handler: () => this.hydra.autoOptimize().catch(err =>
-                console.warn('[MAX] Hephaestus optimization failed:', err.message)
-            )
-        });
-
-        // Universal Ingestion — SOTA research harvester
-        this.scheduler.addJob({
-            id:      'universal_ingestion',
-            label:   'Ingestion: global 1% SOTA research harvester',
-            every:   '12h',
-            handler: () => this.ingestion.pulse()
-        });
-
-        // Sentinel Loop — background project health scan
-        this.scheduler.addJob({
-            id:      'sentinel_scan',
-            label:   'Sentinel: background project health scan',
-            every:   '15m',
-            type:    'custom',
-            handler: () => this.agentLoop?._loops?.watch?.run({ title: 'Sentinel Scan' }, this, this.agentLoop)
-        });
-
-        // Diagnostics System — background architectural audit
-        this.scheduler.addJob({
-            id:      'diagnostics_audit',
-            label:   'Diagnostics: system-wide architectural audit',
-            every:   '1h',
-            type:    'custom',
-            handler: () => this.diagnostics.runAll()
-        });
-
-        // Choko Relay — poll for Treats from Choko every 15m
-        this.scheduler.addJob({
-            id:      'choko_relay',
-            label:   'Choko: pick up field reports',
-            every:   '15m',
-            type:    'custom',
-            handler: () => this._processChokoRelay().catch(err =>
-                console.warn('[MAX] Choko relay error:', err.message)
-            )
-        });
-
-        // CI Watcher + DebugLoop — run tests every 30m, auto-fix via DebugLoop on failure
-        if (this.ci.testCommand) {
-            this.scheduler.addJob({
-                id:      'ci_watch',
-                label:   'CI: Run test suite, auto-fix on failure',
-                every:   '30m',
-                type:    'custom',
-                handler: () => this.ci.runChecks().catch(err =>
-                    console.warn('[MAX] CI check error:', err.message)
-                )
-            });
-            // Hook DebugLoop into CI failures — instead of just queuing a goal,
-            // run the full autonomous fix→verify cycle
-            this.ci.on('fail', ({ output }) => {
-                if (!this.debugLoop._active) {
-                    console.log('[MAX] 🔁 CI failure detected — triggering DebugLoop');
-                    this.debugLoop.run(this.ci.testCommand, { label: 'CI' }).catch(() => {});
-                }
-            });
-            console.log(`[MAX] 🧪 CI Watcher armed: ${this.ci.testCommand} (DebugLoop wired)`);
-        }
-
-        // ─── Truly non-blocking background tasks ───
-        
-        // Cold-boot discovery
-        console.log('[MAX] 🔍 Running initial workspace discovery...');
-        this.indexer.startIndexing().catch(() => {});
-        this.graph.rebuild().catch(() => {});
-
-        // Discord/Email auto-connect
-        autoConnectDiscord(this).catch(() => {});
-        autoConnectEmail(this).catch(() => {});
+        // Background jobs and integrations are registered just before the
+        // scheduler starts (in _scheduleBackgroundLoops), not here.
+        // This keeps initialize() fast — the server comes online sooner.
 
         // Fix 5: detect project context from package.json + README
         try {
@@ -628,6 +644,134 @@ Actions:
             }
         });
 
+        // ── Paging tool — dynamic context management ────────────────────
+        this.tools.register({
+            name:        'paging',
+            description: `Manage dynamic project context (virtual memory).
+Actions:
+  pin    → pin a specific file or hunk to always stay in context: TOOL:paging:pin:{"path":"core/MAX.js"}
+  clear  → clear all pinned context: TOOL:paging:clear:{}
+  status → see context pager stats: TOOL:paging:status:{}`,
+            actions: {
+                pin:    async ({ path: p }) => {
+                    const content = fs.readFileSync(path.resolve(process.cwd(), p), 'utf8');
+                    this.contextPager.pinHunk(p, content.slice(0, 3000));
+                    return { success: true, message: `Pinned ${p} to context.` };
+                },
+                clear:  async () => {
+                    this.contextPager.clearPins();
+                    return { success: true, message: 'All pins cleared.' };
+                },
+                status: async () => ({ success: true, ...this.contextPager.getStatus() })
+            }
+        });
+
+        // ── Grounding tool — autonomous truth-seeking ──────────────────
+        this.tools.register({
+            name:        'grounding',
+            description: `Manually trigger the Autonomous Grounding Loop to verify a claim.
+Actions:
+  verify → verify a factual claim via research: TOOL:grounding:verify:{"claim":"The latest SOTA for latent world models is Dreamer-V3"}
+  status → see grounding loop stats: TOOL:grounding:status:{}`,
+            actions: {
+                verify: async ({ claim }) => {
+                    const result = await this.grounding.ground(claim);
+                    return { success: !!result, result };
+                },
+                status: async () => ({ success: true, ...this.grounding.getStatus() })
+            }
+        });
+
+        // ── Evolution tool — genetic program synthesis ──────────────────
+        this.tools.register({
+            name:        'evolution',
+            description: `Manage genetic procedural optimization (Skill Mutation).
+Actions:
+  dream  → manually trigger an evolutionary dream epoch: TOOL:evolution:dream:{}
+  status → see mutation metrics and compositions: TOOL:evolution:status:{}`,
+            actions: {
+                dream:  async () => {
+                    console.log('[MAX] 🧬 Manual Evolutionary Epoch triggered...');
+                    const variants = [];
+                    for (const skill of this.skills._skills) {
+                        const v = this.skillMutator.spawnVariant(skill);
+                        if (v) variants.push(v);
+                    }
+                    return { success: true, variantsCreated: variants.length, message: `Epoch complete. ${variants.length} mutations generated.` };
+                },
+                status: async () => ({ success: true, ...this.skillMutator.getStatus() })
+            }
+        });
+
+        // ── Swarm tool — distributed parallel orchestration ─────────────
+        this.tools.register({
+            name:        'swarm',
+            description: `Execute complex tasks across a parallel swarm of agents.
+Actions:
+  run       → execute a multi-agent task: TOOL:swarm:run:{"name":"Task Name","subtasks":[{"id":"worker1","prompt":"..."},{"id":"worker2","prompt":"..."}]}
+  decompose → break a goal into parallel subtasks: TOOL:swarm:decompose:{"task":"...","numWorkers":3}
+  status    → see active swarm jobs: TOOL:swarm:status:{}`,
+            actions: {
+                run:       async (task) => this.swarm.run(task),
+                decompose: async ({ task, numWorkers = 4 }) => {
+                    const subtasks = await this.swarm.decompose(task, numWorkers);
+                    return { success: true, subtasks };
+                },
+                status:    async () => ({ success: true, ...this.swarm.activeJobs.size > 0 ? { active: Array.from(this.swarm.activeJobs.values()) } : { message: 'Idle' } })
+            }
+        });
+
+        // ── Graph tool — architectural intelligence ─────────────────────
+        this.tools.register({
+            name:        'graph',
+            description: `Analyze project architecture and change impact.
+Actions:
+  impact → calculate the blast radius of a change: TOOL:graph:impact:{"path":"core/MAX.js"}
+  risks  → see cycles and risky hubs: TOOL:graph:risks:{}
+  rebuild → force a graph rebuild: TOOL:graph:rebuild:{}`,
+            actions: {
+                impact:  async ({ path }) => ({ success: true, impact: this.graph.getImpact(path) }),
+                risks:   async () => ({ success: true, ...this.graph.getSummary().risks }),
+                rebuild: async () => { await this.graph.rebuild(); return { success: true, summary: this.graph.getSummary() }; }
+            }
+        });
+
+        // ── Skills tool — manage procedural memory ──────────────────────
+        this.tools.register({
+            name:        'skills',
+            description: `Manage MAX's procedural memory (skills).
+Actions:
+  list    → see all learned skills: TOOL:skills:list:{}
+  recall  → find a relevant skill for a goal: TOOL:skills:recall:{"goal":"... "}
+  status  → see skill library stats: TOOL:skills:status:{}`,
+            actions: {
+                list:   async () => ({ success: true, skills: this.skills._skills.map(s => ({ name: s.name, summary: s.summary, used: s.usedCount })) }),
+                recall: async ({ goal }) => {
+                    const skill = await this.skills.recall(goal);
+                    return { success: !!skill, skill };
+                },
+                status: async () => ({ success: true, ...this.skills.getStatus() })
+            }
+        });
+
+        // ── Social tool — Honcho-style user profiling ────────────────────
+        this.tools.register({
+            name:        'social',
+            description: `Manage social memory and user profiling (Honcho-style).
+Actions:
+  scan    → manually trigger a scan of recent conversation to update profile: TOOL:social:scan:{}
+  status  → see SocialArbiter status: TOOL:social:status:{}
+  profile → see the current user profile summary: TOOL:social:profile:{}`,
+            actions: {
+                scan:    async () => {
+                    await this.social.scan();
+                    return { success: true, message: 'Scan complete. Profile and tasks updated based on recent chat.' };
+                },
+                status:  async () => ({ success: true, ...this.social.getStatus() }),
+                profile: async () => ({ success: true, profile: this.profile.getStats() })
+            }
+        });
+
         // ── Hydra tool — multi-MAX swarm orchestration ──────────────────
         this.tools.register({
             name: 'hydra',
@@ -648,6 +792,8 @@ Actions:
         });
 
         // ── Boot status table ─────────────────────────────────────────────
+        // Ensure SOMA probe has run before we print its status
+        await this.soma.initialize().catch(() => {});
         const bs           = this.brain.getStatus();
         const brainDetail  = [bs.fast.ready ? `fast:${bs.fast.backend}` : null, bs.smart.ready ? `smart:${bs.smart.backend}` : null].filter(Boolean).join(' | ') || 'none';
         const economicsOk  = !this.economics?.isOverBudget();
@@ -659,6 +805,7 @@ Actions:
             ['Brain (agent)',    bs.fast.ready || bs.smart.ready, brainDetail],
             ['SOMA',            null,  this.soma?.available ? 'online — QuadBrain active' : 'offline — using local brain'],
             ['Security Council', null, this.security?.enabled ? 'enabled' : 'disabled'],
+            ['Autonomy',         true, `${this.autonomy.level}${this.autonomy.externalSend ? ' + external send' : ''}`],
             ['Daily budget',    economicsOk,  economicsOk ? `${budgetPct}% used` : 'OVER CAP — raise MAX_DAILY_BUDGET'],
             ['Knowledge base',  true,  'ready'],
             ['Skill library',   true,  'ready'],
@@ -672,6 +819,138 @@ Actions:
         }
         console.log('━'.repeat(60) + '\n');
 
+        this._scheduleBackgroundLoops();
+    }
+
+    _scheduleBackgroundLoops() {
+        const configured = Number(process.env.MAX_BACKGROUND_START_DELAY_MS);
+        const mode = this.config.mode || this.config.runtimeMode || 'chat';
+        if (mode === 'api' && process.env.MAX_API_BACKGROUND !== 'true') {
+            console.log('[MAX] API mode — background loops disabled by default (set MAX_API_BACKGROUND=true to enable)');
+            return;
+        }
+
+        // Register all scheduled jobs now (deferred from initialize() for fast boot)
+        this._registerScheduledJobs();
+
+        const defaultDelay = mode === 'api' ? 30_000 : 3_000;
+        const delayMs = Number.isFinite(configured) && configured >= 0 ? configured : defaultDelay;
+
+        if (delayMs === 0) {
+            this._startBackgroundLoops();
+            return;
+        }
+
+        console.log(`[MAX] Background loops delayed ${Math.round(delayMs / 1000)}s so the API can come online first`);
+        this._backgroundTimer = setTimeout(() => this._startBackgroundLoops(), delayMs);
+        this._backgroundTimer.unref?.();
+    }
+
+    _registerScheduledJobs() {
+        if (this._jobsRegistered) return;
+        this._jobsRegistered = true;
+        console.log('[MAX] 📅 Registering background jobs...');
+
+        this.scheduler.addJob({ id: 'memory_prune', label: 'Prune weak memories', every: '1h', handler: () => this.memory._cleanup() });
+        this.scheduler.addJob({ id: 'reflection', label: 'System self-reflection', every: '30m', handler: () => this.reflection.forceReflect() });
+        this.scheduler.addJob({ id: 'roadmap_sync', label: 'Sync development roadmap', every: '4h', type: 'custom', handler: () => this.roadmap.sync().catch(err => console.warn('[MAX] Roadmap sync failed:', err.message)) });
+        this.scheduler.addJob({ id: 'poseidon_research', label: 'Poseidon: AI research cycle', every: '24h', type: 'custom', handler: () => this.poseidon?.runCycle().catch(err => console.warn('[MAX] Poseidon cycle failed:', err.message)) });
+        this.scheduler.addJob({ id: 'hephaestus_optimize', label: 'Hydra Swarm: Code Optimization', every: '12h', type: 'custom', handler: () => this.hydra.autoOptimize().catch(err => console.warn('[MAX] Hephaestus failed:', err.message)) });
+        this.scheduler.addJob({ id: 'universal_ingestion', label: 'Ingestion: SOTA research harvester', every: '12h', handler: () => this.ingestion.pulse() });
+        this.scheduler.addJob({ id: 'sentinel_scan', label: 'Sentinel: project health scan', every: '15m', type: 'custom', handler: () => this.agentLoop?._loops?.watch?.run({ title: 'Sentinel Scan' }, this, this.agentLoop) });
+        this.scheduler.addJob({ id: 'diagnostics_audit', label: 'Diagnostics: architectural audit', every: '1h', type: 'custom', handler: () => this.diagnostics.runAll() });
+        this.scheduler.addJob({ id: 'social_scan', label: 'Social: user profiling', every: '10m', type: 'custom', handler: () => this.social.scan() });
+        this.scheduler.addJob({ id: 'skill_evolution', label: 'Evolution: codify winning paths', every: '6h', type: 'custom', handler: () => this.skillEvolution.analyzeWinningPaths() });
+        this.scheduler.addJob({
+            id: 'skill_mutation', label: 'Evolution: mutate tool chains', every: '12h', type: 'custom',
+            handler: async () => {
+                if (!this.skills?._skills?.length) return;
+                const outcomes = this.outcomes?.query({ limit: 20, success: true }) ?? [];
+                for (const skill of this.skills._skills) {
+                    const variant = this.skillMutator.spawnVariant(skill);
+                    if (!variant) continue;
+                    const ctx = outcomes.find(o => o.context?.title?.toLowerCase().includes(skill.name.toLowerCase()))?.context ?? null;
+                    this.skillMutator.queueForTest(variant, ctx);
+                }
+            }
+        });
+        this.scheduler.addJob({ id: 'variant_tests', label: 'Evolution: run variant tests', every: '3h', type: 'custom', handler: () => this.skillMutator.runNextTest() });
+        this.scheduler.addJob({ id: 'choko_relay', label: 'Choko: pick up field reports', every: '15m', type: 'custom', handler: () => this._processChokoRelay().catch(err => console.warn('[MAX] Choko relay error:', err.message)) });
+        this.scheduler.addJob({ id: 'soma_curiosity_sync', label: 'SOMA: sync curiosity goals', every: '30m', type: 'custom', handler: () => { if (this.soma?.available) this.soma.syncCuriosityGoals(this.goals).catch(() => {}); } });
+        this.scheduler.addJob({ id: 'pr_review_loop', label: 'PR: poll open PRs for review comments', every: '30m', type: 'custom', handler: () => this._pollPRReviews().catch(() => {}) });
+        this.scheduler.addJob({ id: 'longitudinal_snapshot', label: 'Identity: weekly self-snapshot', every: '24h', type: 'custom', handler: () => this.longitudinal.takeSnapshot().catch(() => {}) });
+        this.scheduler.addJob({ id: 'user_model_session', label: 'User model: ingest session patterns', every: '1h', type: 'custom', handler: () => this.userModel.ingestSession(this._context.slice(-40)).catch(() => {}) });
+        this.scheduler.addJob({ id: 'dataset_synthetic', label: 'Dataset: generate synthetic examples', every: '24h', type: 'custom', handler: async () => { const top = Object.entries(this.userModel.model?.topics||{}).sort((a,b)=>b[1]-a[1])[0]?.[0]; if (top) await this.dataset.generateSynthetic(top, 3).catch(() => {}); } });
+
+        if (this.ci.testCommand) {
+            this.scheduler.addJob({ id: 'ci_watch', label: 'CI: Run test suite', every: '30m', type: 'custom', handler: () => this.ci.runChecks().catch(err => console.warn('[MAX] CI check error:', err.message)) });
+            this.ci.on('fail', () => {
+                if (!this.debugLoop._active) this.debugLoop.run(this.ci.testCommand, { label: 'CI' }).catch(() => {});
+            });
+            console.log(`[MAX] 🧪 CI Watcher armed: ${this.ci.testCommand}`);
+        }
+    }
+
+    _startBackgroundLoops() {
+        if (this._backgroundStarted) return;
+        this._backgroundStarted = true;
+        this._backgroundTimer = null;
+
+        // Wire MuseEngine — activates/deactivates with companion persona
+        this.persona.on('persona_changed', ({ id }) => {
+            if (id === 'companion') {
+                this.muse.activate(this.heartbeat);
+            } else {
+                this.muse.deactivate();
+            }
+        });
+
+        // Muse insight generation — fast LLM call every 4 turns in companion mode
+        this.muse.on('needs_insight', async ({ messages }) => {
+            this.muse.markInsightPending();
+            try {
+                const ctx = messages.slice(-8)
+                    .map(m => {
+                        const txt = typeof m.content === 'string' ? m.content : (m.text || m.content?.[0]?.text || '');
+                        return `${m.role === 'user' ? 'User' : 'MAX'}: ${txt.slice(0, 300)}`;
+                    })
+                    .join('\n');
+                const result = await this.brain.think(
+                    `Conversation:\n${ctx}\n\nIn one specific sentence: what's the most interesting pattern, tension, or unexpected connection you notice here? Be concrete, not generic.`,
+                    {
+                        tier: 'fast',
+                        maxTokens: 100,
+                        systemPrompt: 'You notice patterns in conversations. Give one specific, concrete observation. No stage directions. No preamble.',
+                    }
+                );
+                if (result?.text) this.muse.publishInsight(result.text);
+            } catch (err) {
+                console.error('[MuseEngine] insight generation failed:', err.message);
+                this.muse.markInsightPending(); // reset so next turn can retry
+            }
+        });
+
+        // ── SOMA signal bridge handlers ───────────────────────────────────
+        // Forward SOMA's real-time signals into MAX's event/goal system
+        if (this.soma) {
+            // SOMA muse insights → companion mode if active
+            this.soma.subscribe('muse_insight', (data) => {
+                if (this.muse?.isActive() && data.body) this.muse.publishInsight(data.body);
+            });
+            // SOMA curiosity signals → inject as capped-priority goals
+            this.soma.subscribe('curiosity', (data) => {
+                if (data.title) {
+                    this.goals?.addGoal({
+                        title:       `[SOMA] ${data.title}`.slice(0, 120),
+                        description: (data.body || '').slice(0, 400),
+                        type:        'research',
+                        source:      'soma_signal',
+                        priority:    Math.min(0.55, data.priority || 0.4),
+                    });
+                }
+            });
+        }
+
         // Start heartbeat (drives AgentLoop + curiosity cycles)
         this.heartbeat.start();
 
@@ -683,11 +962,26 @@ Actions:
         this.oracle.start();
         this.sovereign.start();
 
-        // Eager start — run AgentLoop once immediately if goals exist
+        // Fire-and-forget: workspace discovery and external integrations
+        const apiMode = (this.config.mode || this.config.runtimeMode) === 'api';
+        if (!apiMode || process.env.MAX_API_DISCOVERY === 'true') {
+            this.indexer.startIndexing().catch(() => {});
+            this.graph.rebuild().catch(() => {});
+        }
+        autoConnectDiscord(this).catch(() => {});
+        autoConnectEmail(this).catch(() => {});
+
+        // Eager start — run AgentLoop once if goals exist, after the UI has had time to connect.
+        const mode = this.config.mode || this.config.runtimeMode || 'chat';
+        const eagerStartDisabled = process.env.MAX_EAGER_START === 'false'
+            || this.config.eagerStart === false
+            || (mode === 'api' && process.env.MAX_EAGER_START !== 'true');
         const activeGoals = this.goals.listActive();
-        if (activeGoals.length > 0) {
+        if (!eagerStartDisabled && activeGoals.length > 0) {
             console.log('[MAX] ⚡ Eager start — running first AgentLoop cycle now');
-            this.agentLoop.runCycle().catch(() => {});
+            this.agentLoop.runCycle().catch((err) => {
+                console.warn('[MAX] Eager AgentLoop failed:', err.message);
+            });
         }
     }
 
@@ -785,12 +1079,18 @@ Actions:
         const signal = this._currentAbortController.signal;
 
         try {
-            // Fix 3: auto-select persona based on message content + drive state
-            const selectedPersona = this.persona.selectForTask(userMessage, this.drive.getStatus());
+            // While MuseEngine is active (companion mode), lock persona — don't let
+            // keyword matching pull MAX out of companion mid-conversation.
+            const selectedPersona = this.muse?.isActive()
+                ? this.persona.current
+                : this.persona.selectForTask(userMessage, this.drive.getStatus());
             const tier = options.tier || 'smart';
 
             // Store user message in context immediately so next turn sees it in history
             this._context.push({ role: 'user', content: userMessage });
+
+            // Deep user model — ingest every message for pattern tracking
+            this.userModel?.ingestMessage?.(userMessage, Date.now());
 
             // ── Response cache — skip LLM for recently-seen identical questions ─
             const cacheKey = userMessage.trim().toLowerCase().slice(0, 200);
@@ -840,10 +1140,15 @@ Actions:
             const onToken = options.onToken ?? null;
 
             // Fix 2+4: inject tool manifest + reflection patches so MAX knows its tools and learns from history
+            const stateContext = await this._buildStateContext(userMessage);
+            const securityPackContext = this.securityPack?.getContextForTask(userMessage) || '';
             const systemPrompt = this.persona.getBasePrompt() + '\n\n' + selectedPersona.systemPrompt
+                + SECURITY_ENGINEERING_DIRECTIVE
+                + securityPackContext
                 + this.tools.buildManifest()
                 + (this.reflection?.getSelfModelContext() || '')
-                + this._buildStateContext() + memoryContext + kbContext + driveSystemNote;
+                + (this.social?.getSocialDirective() || '')
+                + stateContext + memoryContext + kbContext + driveSystemNote;
 
             // Fix 6: use full context window (was -9,-1 = 8 msgs; now -21,-1 = 20 msgs), and raise per-msg limit
             const historyMsgs = this._context.slice(-21, -1).map(m => ({
@@ -868,7 +1173,7 @@ Actions:
             });
 
             let response = result.text;
-            response = response.replace(/^(\**MAX:\**\s*|MAX:\s*|Assistant:\s*)/i, '').trim();
+            response = stripLeakedPromptContext(response.replace(/^(\**MAX:\**\s*|MAX:\s*|Assistant:\s*)/i, '').trim());
 
             // ── Fix 1: Inline tool execution loop ────────────────────────────
             // Execute any TOOL: calls MAX emitted, feed results back, get a real answer.
@@ -878,7 +1183,13 @@ Actions:
                 for (let _toolRound = 0; _toolRound < 3; _toolRound++) {
                     const toolLines = response.split('\n')
                         .map(l => l.trim())
-                        .filter(l => /^TOOL:[a-zA-Z_]+:[a-zA-Z_]+/.test(l))
+                        .filter(l => {
+                            if (l.startsWith('TOOL_BLOCKED')) {
+                                console.log(`[MAX] 🛡️ Skipping blocked tool: ${l}`);
+                                return false;
+                            }
+                            return /^TOOL:[a-zA-Z_]+:[a-zA-Z_]+/.test(l);
+                        })
                         .filter(l => !SKIP_INLINE.has(l.split(':')[1]));
                     if (toolLines.length === 0) break;
 
@@ -908,14 +1219,23 @@ Actions:
                             { role: 'user',      content: continueMsg }
                         ]
                     });
-                    const followUpText = followUp.text.replace(/^(\**MAX:\**\s*|MAX:\s*|Assistant:\s*)/i, '').trim();
+                    const followUpText = stripLeakedPromptContext(followUp.text.replace(/^(\**MAX:\**\s*|MAX:\s*|Assistant:\s*)/i, '').trim());
                     response = response + '\n\n' + followUpText;
                 }
             }
 
             // ── Step 2: Cognitive Filter ──
             const filtered = await this.cognitive.process(response);
-            if (filtered.needsVerification && !signal.aborted) {
+            
+            // ── Step 3: Autonomous Grounding Loop (The Truth-Seeker) ──────────
+            if (filtered.state === 'UNCERTAIN' && !signal.aborted) {
+                const revised = await this.grounding.ground(response, filtered.verificationTask);
+                if (revised) {
+                    response = revised;
+                    console.log(`[MAX] ✅ Belief Revision complete. Uncertainty resolved.`);
+                }
+            } else if (filtered.needsVerification && !signal.aborted) {
+                // Legacy verification fallback
                 console.log(`[MAX] 🧐 Uncertain claim — verifying...`);
                 try {
                     const vResult = await this.tools.execute(
@@ -927,12 +1247,23 @@ Actions:
                     result = await this.brain.think(userMessage + evidencePrompt, {
                         systemPrompt, temperature: 0.3, maxTokens: maxTok, signal
                     });
-                    response = result.text;
+                    response = stripLeakedPromptContext(result.text);
                 } catch { /* skip */ }
+            }
+
+            response = stripLeakedPromptContext(response);
+            if (selectedPersona.id === 'companion') {
+                response = stripStageDirections(response);
             }
 
             this._context.push({ role: 'assistant', content: response });
             this._maybeCompressContext();
+
+            // Feed MuseEngine after each turn in companion mode
+            if (this.muse?.isActive()) {
+                const museState = this.muse.ingest(this._context);
+                this.emit('muse_state', museState);
+            }
 
             this.memory.addConversation('user', userMessage, selectedPersona.id, { provenance: 'STATED' });
             this.memory.addConversation('assistant', response, selectedPersona.id, { provenance: 'GENERATED' });
@@ -952,6 +1283,11 @@ Actions:
             if (userMessage.trim().length > 30) this._queueFollowUpCuriosity(userMessage);
             this._analyzeIntent(userMessage, response).catch(() => {});
 
+            // Dataset curation — quietly evaluate and save high-quality turns
+            if (userMessage.trim().length > 20 && response.length > 50) {
+                this.dataset?.evaluate?.(userMessage, response).catch(() => {});
+            }
+
             return finalResult;
 
         } catch (err) {
@@ -959,6 +1295,7 @@ Actions:
                 console.log('[MAX] 🛑 Chat execution aborted.');
                 return { response: '[Aborted by user]', persona: ' companion', aborted: true };
             }
+            this._lastError = { message: err.message, ts: Date.now() };
             throw err;
         } finally {
             this.isThinking = false;
@@ -1008,23 +1345,60 @@ Actions:
         }
     }
 
-    _buildStateContext() {
+    async _buildStateContext(userQuery = '') {
         const drive = this.drive.getStatus();
-        let ctx = `\n\n## System State\nTension: ${Math.round(drive.tension*100)}% | Satisfaction: ${Math.round(drive.satisfaction*100)}%`;
-        // Fix 5: inject project context (package.json + README, detected at boot)
+        const personaId = this.persona?.current?.id;
+        // Don't inject internal state metrics in companion mode — MAX echoes them literally
+        let ctx = personaId === 'companion' ? '' :
+            `\n\n## System State\nTension: ${Math.round(drive.tension*100)}% | Satisfaction: ${Math.round(drive.satisfaction*100)}%`;
+
+        // Dynamic Context Paging (Virtual Memory)
+        if (this.contextPager) {
+            const paged = await this.contextPager.getPagedContext(userQuery);
+            if (paged) ctx += paged;
+        }
+
+        // Project context (package.json + README, detected at boot)
         if (this._projectContext) {
             ctx += this._projectContext;
         }
-        if (this.pinnedFiles.size > 0) {
-            ctx += '\n\n## Pinned Files';
-            for (const relPath of this.pinnedFiles) {
-                try {
-                    const content = fs.readFileSync(relPath, 'utf8');
-                    ctx += `\n\n### ${relPath}\n\`\`\`\n${content.slice(0, 3000)}\n\`\`\``;
-                } catch { }
-            }
+
+        // Semantic workspace context — inject top-5 relevant code chunks
+        if (userQuery && this.semanticIndex?._ready) {
+            const codeCtx = await this.semanticIndex.search(userQuery, 5);
+            if (codeCtx) ctx += codeCtx;
         }
+
+        // Deep user model — who Barry is, his patterns, MAX's predictions
+        const userCtx = this.userModel?.getContext?.();
+        if (userCtx) ctx += userCtx;
+
+        // Longitudinal self — who MAX is, how he's changed
+        const selfCtx = this.longitudinal?.getContext?.();
+        if (selfCtx) ctx += selfCtx;
+
         return ctx;
+    }
+
+    _buildPatchSecurityReviewTarget(params = {}) {
+        if (Array.isArray(params.hunks)) {
+            return params.hunks.map((h, i) => [
+                `PATCH HUNK ${i + 1}`,
+                `anchor: ${h.anchor || ''}`,
+                `position: ${h.position || 'after'}`,
+                `content:\n${h.content || ''}`
+            ].join('\n')).join('\n\n');
+        }
+
+        if (Array.isArray(params.blocks)) {
+            return params.blocks.map((b, i) => [
+                `PATCH BLOCK ${i + 1}`,
+                `find:\n${b.find || ''}`,
+                `replace:\n${b.replace || ''}`
+            ].join('\n')).join('\n\n');
+        }
+
+        return JSON.stringify(params);
     }
 
     _maybeCompressContext() {
@@ -1050,6 +1424,44 @@ Actions:
         fs.writeFileSync(relayPath, JSON.stringify(treats, null, 2));
     }
 
+    async _pollPRReviews() {
+        const { execSync } = await import('child_process');
+        let prJson;
+        try {
+            prJson = execSync('gh pr list --json number,title,url,reviewDecision --state open', { encoding: 'utf8', timeout: 15000 });
+        } catch { return; }
+        let prs;
+        try { prs = JSON.parse(prJson); } catch { return; }
+        if (!prs?.length) return;
+
+        for (const pr of prs) {
+            let comments;
+            try {
+                const raw = execSync(`gh pr view ${pr.number} --json comments`, { encoding: 'utf8', timeout: 15000 });
+                comments = JSON.parse(raw)?.comments ?? [];
+            } catch { continue; }
+
+            const unaddressed = comments.filter(c => {
+                const body = c.body || '';
+                return /\?|please|fix|change|update|consider|should|must|need/i.test(body) && c.author?.login !== 'Barry';
+            });
+            if (!unaddressed.length) continue;
+
+            const alreadyQueued = this.goals?.listActive()?.some(g => g.title?.includes(`PR #${pr.number}`));
+            if (alreadyQueued) continue;
+
+            const summary = unaddressed.slice(0, 3).map(c => `- ${c.body.slice(0, 120)}`).join('\n');
+            this.goals?.addGoal({
+                title: `Address PR #${pr.number} review comments: ${pr.title}`,
+                description: `PR: ${pr.url}\n\nUnaddressed reviewer comments:\n${summary}`,
+                type: 'fix',
+                priority: 0.75,
+                source: 'pr_review_loop',
+            });
+            this.heartbeat?.emit('insight', { source: 'PR Review', label: `PR #${pr.number} needs response`, result: `${unaddressed.length} unaddressed comment(s) on "${pr.title}"` });
+        }
+    }
+
     getStatus() {
         return {
             ready:      this._ready,
@@ -1062,7 +1474,70 @@ Actions:
             mcp:        this.mcp?.getStatus(),
             research:   this.research?.getStatus(),
             skills:     this.skills?.getStatus(),
-            debugLoop:  this.debugLoop?.getStatus()
+            debugLoop:  this.debugLoop?.getStatus(),
+            paging:     this.contextPager?.getStatus(),
+            grounding:  this.grounding?.getStatus(),
+            securityPack: this.securityPack?.getStatus(),
+            workspace:  this.workspaceEdits?.getStatus(),
+            lsp:        this.lsp?.getStatus(),
+            autonomy:   this.autonomy?.getStatus(),
+            agentLoop:  this.agentLoop ? {
+                cyclesRun:    this.agentLoop.stats?.cyclesRun ?? 0,
+                stepsExecuted: this.agentLoop.stats?.stepsExecuted ?? 0,
+                busy:         this.agentLoop._busy,
+                pendingCycle: this.agentLoop._pendingCycle ?? false
+            } : null,
+            skillMutator: this.skillMutator?.getStatus()
+        };
+    }
+
+    getQuickStatus() {
+        const memoryStats = {
+            totalMemories:     this.memory?._hot?.size || 0,
+            conversationTurns: null,
+            vectorCount:       this.memory?._vectors?.size || 0,
+            embeddingReady:    !!this.memory?.embedder?._ready,
+            hotSize:           this.memory?._hot?.size || 0,
+            metrics:           this.memory?.metrics || {}
+        };
+
+        return {
+            ready:      this._ready,
+            brain:      this.brain.getStatus(),
+            drive:      this.drive.getStatus(),
+            memory:     memoryStats,
+            goals:      this.goals ? {
+                active:    this.goals._active?.size || 0,
+                completed: this.goals._completed?.length || 0,
+                failed:    this.goals._failed?.length || 0,
+                ...this.goals.stats
+            } : null,
+            agents:     { activeCount: this.agentManager?.agents?.size || 0 },
+            hydra:      { headCount: this.hydra?.heads?.size || 0 },
+            mcp:        this.mcp?.getStatus?.(),
+            research:   this.research?.getStatus?.(),
+            skills:     this.skills?.getStatus?.(),
+            paging:     this.contextPager?.getStatus?.(),
+            grounding:  this.grounding?.getStatus?.(),
+            securityPack: this.securityPack?.getStatus?.(),
+            workspace:  this.workspaceEdits?.getStatus?.(),
+            lsp:        this.lsp?.getStatus?.(),
+            debugLoop:  this.debugLoop?.getStatus?.(),
+            autonomy:   this.autonomy?.getStatus?.(),
+            agentLoop:  this.agentLoop ? {
+                cyclesRun:     this.agentLoop.stats?.cyclesRun ?? 0,
+                stepsExecuted: this.agentLoop.stats?.stepsExecuted ?? 0,
+                busy:          this.agentLoop._busy,
+                pendingCycle:  this.agentLoop._pendingCycle ?? false
+            } : null,
+            skillMutator: this.skillMutator?.getStatus?.(),
+            background: {
+                started: this._backgroundStarted,
+                delayed: !!this._backgroundTimer
+            },
+            userModel:    this.userModel?.getStatus?.(),
+            longitudinal: this.longitudinal?.getStatus?.(),
+            dataset:      this.dataset?.getStatus?.(),
         };
     }
 }

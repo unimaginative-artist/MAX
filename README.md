@@ -445,6 +445,47 @@ All runtime data lives in `.max/` (gitignored):
 
 ---
 
+## Security & Access Control
+
+MAX is currently a **single-user personal tool**. One API key protects all routes. This is intentional — he's being developed and refined before going wider.
+
+### What's already in place (solo use)
+| Layer | Status |
+|---|---|
+| API key auth on every route | ✅ Auto-generated, stored in `.max/api-key.txt` |
+| WebSocket auth | ✅ Key checked on connect |
+| Path traversal protection | ✅ All file routes locked to workspace root |
+| Per-session usage tracking | ✅ Request + token counts (billing foundation) |
+| CORS lockdown | ✅ Localhost-only origins |
+| User profile | ✅ `.max/user.md` (name, style, goals) |
+
+### What to build when ready to monetize
+
+When MAX goes multi-user (hosting for others or selling API access), build these in order:
+
+1. **JWT login + registration** — email/password or OAuth (Google). Sessions expire, refresh tokens rotate.
+2. **Per-user workspaces** — each user gets an isolated `.max/<userId>/` directory. No cross-user data access.
+3. **Audit log** — append-only table: `who | action | tool | params_hash | timestamp | ip`. Required for compliance and debugging.
+4. **Role system** — `admin` (full access), `user` (chat + goals), `readonly` (view only). Enforced at middleware level.
+5. **Per-user API keys** — replace the single shared key with per-account keys. Rate limits per key.
+6. **Billing hooks** — `_sessions` tracking is already wired. Connect it to Stripe webhooks to gate usage past a free tier.
+
+The server architecture won't need to change — `server.js` is already structured to add this cleanly. The auth middleware at line ~80 is the single insertion point.
+
+---
+
+## Roadmap
+
+### Phase 5 — Monetization (not started)
+- [ ] Multi-user login (JWT + OAuth)
+- [ ] Per-user workspace isolation
+- [ ] Audit log (append-only, tamper-evident)
+- [ ] Role-based access control (admin / user / readonly)
+- [ ] Stripe billing integration (free tier + usage-based)
+- [ ] Hosted deployment (Docker + reverse proxy config)
+
+---
+
 ## License
 
 MIT — Built by Barry.

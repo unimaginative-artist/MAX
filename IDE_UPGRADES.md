@@ -1,0 +1,83 @@
+# MAX IDE Integration: Architectural Roadmap
+
+This document tracks the necessary architectural upgrades to prepare MAX as a superior backend for a custom IDE UI. These upgrades should be implemented once the IDE UI scaffolding is complete.
+
+## 1. Transport Layer: Bidirectional Streaming
+*   **Current:** Standard JSON-RPC over `stdio` (MCP).
+*   **Upgrade:** Implement a WebSocket/Socket.io server.
+*   **Goal:** Enable real-time telemetry, streaming token responses, and visual goal updates without polling.
+
+## 2. Context Sync: In-Memory Buffer Tracking
+*   **Current:** Direct `fs` disk reads.
+*   **Upgrade:** Create an `ActiveWorkspaceBuffer` manager.
+*   **Goal:** Allow MAX to "see" unsaved changes by listening to `textDocument/didChange` events from the IDE, similar to an LSP.
+
+## 3. Execution Engine: Instant Interruptibility
+*   **Current:** Pause at step boundaries via file state.
+*   **Upgrade:** Integrate `AbortController` throughout `AgentLoop.js` and `Brain.js`.
+*   **Goal:** Instantly kill LLM generations or tool executions if the user starts typing or cancels an action, preventing race conditions.
+
+## 4. Action Layer: Virtual Workspace Edits
+*   **Current:** Destructive direct-to-disk writes.
+*   **Upgrade:** Implement a `WorkspaceEdit` output mode.
+*   **Goal:** Emit diff payloads to the IDE for UI rendering/approval instead of forcing file mutations.
+
+## 5. Concurrency: The Sidecar Model
+*   **Current:** Single-threaded execution loop (mostly).
+*   **Upgrade:** Detach `Brain` responses from `AgentLoop` cycles.
+*   **Goal:** Allow MAX to answer chat questions instantly even while a long-running autonomous task (like a build or scan) is active in the background.
+
+## 7. Hydra Tree Architecture (Agent Teams)
+*   **Current:** Single-threaded sequential task execution.
+*   **Upgrade:** Implement `git worktree` based parallel sandboxing.
+*   **Goal:** Allow MAX to spawn "Heads" that work on separate sub-tasks in parallel, verify them in isolation, and merge them back atomically.
+*   **IDE Feature:** A visual Swarm Map (DAG) showing the relationships and status of all active child agents.
+
+## 8. Real-Time Telemetry & Observability
+*   **Upgrade:** Structured logging specifically for the IDE's "Output" and "Debug" consoles.
+*   **Goal:** Provide granular insights into MAX's reasoning steps directly in the UI.
+
+---
+
+## Beyond Cursor & Warp — Next-Tier Upgrades
+
+### 9. Persistent Project Memory (AST-Level Codebase Index)
+*   **Current:** Cursor forgets everything between sessions. MAX has KnowledgeBase but no auto-index.
+*   **Upgrade:** On boot, walk the codebase with `@typescript/compiler-api` or `tree-sitter` — extract every function, class, export, and call site into a semantic graph in the KB. Incremental updates via Sentinel file-watch events.
+*   **Goal:** MAX genuinely knows the project without you explaining it every time. "Which functions call `authMiddleware`?" answers in <100ms from memory, not a grep.
+
+### 10. Goal-Driven Autonomous Work — Verified Completion
+*   **Current:** AgentLoop executes steps but doesn't verify outcomes end-to-end.
+*   **Upgrade:** After each multi-file change, auto-run the relevant test suite (`npm test --testPathPattern=<changed files>`). If tests fail, MAX enters a self-correction loop (up to 3 attempts) before surfacing the failure. Git stash checkpoint is already in place as the safety net.
+*   **Goal:** Give MAX a task, walk away, come back to a green test suite — or an honest failure report. This is what Devin charges $500/month for.
+
+### 11. Real-Time Pair Presence (Ambient AI Co-pilot)
+*   **Current:** IDE shows what MAX produces but not what it's *thinking about*.
+*   **Upgrade:** Broadcast MAX's current working context as a live stream to the IDE: which files it's reading, what plan step it's on, what it just changed. Render this as a subtle "activity ribbon" alongside the file tree.
+*   **Goal:** Ambient pair programming — you always know what MAX is doing without asking. Multi-user: teammates can watch the same stream.
+
+### 12. Deployment-Aware End-to-End Loop
+*   **Current:** MAX edits code and stops. Deployment is manual.
+*   **Upgrade:** Wire MAX to the deploy pipeline (git push → webhook → staging health check). After a confirmed fix, MAX can optionally: commit → push → wait for CI → hit the staging URL → confirm the fix is live → report back.
+*   **Goal:** "Fix the auth bug" → MAX returns with a staging URL showing it working. No human in the loop for the last mile.
+
+### 13. Blast Radius Preview for Dangerous Operations
+*   **Current:** Database migrations, env var changes, and auth rewrites are applied directly.
+*   **Upgrade:** Before applying any operation touching >3 files or config/env/schema files, MAX renders a visual impact map in the IDE: files touched, functions changed, API surface delta, estimated test coverage of affected code.
+*   **Goal:** Like a PR review, but generated by MAX itself *before* you approve. Catches foot-gun operations before they land.
+
+### 15. Muse Mode — Persona-Reactive UI
+*   **Foundation:** `PersonaEngine.selectForTask()` already auto-switches MAX's persona dynamically based on message content and drive state. The backend is done. The UI doesn't know about it yet.
+*   **Upgrade (two parts):**
+    1. **Broadcast persona changes** — when MAX switches persona, emit a `persona_changed` WebSocket event with the new persona ID to all connected IDE clients.
+    2. **UI responds** — Maxwell IDE listens for `persona_changed` and morphs the layout:
+        - **Grinder/Architect/Paranoid** → full IDE: file tree, editor, terminal, split panes. High density. Execution mode.
+        - **Companion/Muse** → stripped back: file tree hidden, terminal collapsed, editor replaced with a large open canvas. Warmer color temperature. Slower feel. Space for thinking out loud.
+*   **The product insight:** MAX isn't a dev tool with a chat mode. It's a personal intelligence that also builds software. When a user is asking questions and exploring ideas (like right now), MAX should feel like a muse — not a code machine. The UI shift is the signal that MAX *knows* what mode you're in.
+*   **Retention mechanic:** Because each user's MAX learns them specifically — their KB, their patterns, their history — Muse mode becomes the thing you open when you don't know what to build yet. That's something Cursor and Warp can never be.
+*   **Note:** Road not yet paved — requires designing the Muse UI from scratch. Barry is figuring this out. Don't rush it.
+
+### 14. Self-Improvement Closed Loop
+*   **Current:** ReflectionEngine scores turns and generates insights. SkillEvolution mutates skills. Neither feeds back into MAX's own source code.
+*   **Upgrade:** When ReflectionEngine detects a repeated failure pattern (same error class 3+ times), it generates a `SelfEditor` proposal targeting the specific module. You approve once in the IDE. MAX patches itself, runs its own test suite, and records the outcome.
+*   **Goal:** Every time you correct MAX, it gets permanently smarter for your specific workflow — not just for this session. That's not a feature Cursor can ship because they're a plugin, not an agent.

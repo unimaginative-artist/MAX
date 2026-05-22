@@ -36,11 +36,11 @@ export class ToolRegistry {
      */
     async execute(toolName, action, params = {}) {
         const tool = this._tools.get(toolName);
-        if (!tool) {
-            throw new Error(`Unknown tool: ${toolName}. Available: ${[...this._tools.keys()].join(', ')}`);
-        }
 
         try {
+            if (!tool) {
+                throw new Error(`Unknown tool: ${toolName}. Available: ${[...this._tools.keys()].join(', ')}`);
+            }
             // Handle Object-based tools (actions map)
             if (tool.actions && typeof tool.actions[action] === 'function') {
                 return await tool.actions[action](params);

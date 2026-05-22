@@ -26,15 +26,24 @@ import { DreamLoop }      from './loops/DreamLoop.js';
 import { VisionLoop }     from './loops/VisionLoop.js';
 
 // Actions that require human approval before running
-const REQUIRES_APPROVAL = ['shell', 'git.commit', 'git.push', 'file.delete', 'file.write', 'file.replace', 'file.patch'];
+const REQUIRES_APPROVAL = ['shell', 'git.commit', 'git.push', 'file.delete', 'file.write', 'file.replace', 'file.patch', 'self_evolution.commit'];
 
-// Wrap any promise with a hard timeout â€” prevents tool hangs from freezing the loop
-function withTimeout(promise, ms, label = 'operation') {
+// Wrap any promise with a hard timeout / abort signal so hangs do not freeze the loop.
+function withTimeout(promise, ms, label = 'operation', signal = null) {
+    if (signal?.aborted) return Promise.reject(new Error(`${label} aborted`));
     let timer;
+    let abortHandler;
     const timeout = new Promise((_, reject) => {
         timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
     });
-    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+    const abort = signal ? new Promise((_, reject) => {
+        abortHandler = () => reject(new Error(`${label} aborted`));
+        signal.addEventListener('abort', abortHandler, { once: true });
+    }) : null;
+    return Promise.race(abort ? [promise, timeout, abort] : [promise, timeout]).finally(() => {
+        clearTimeout(timer);
+        if (signal && abortHandler) signal.removeEventListener('abort', abortHandler);
+    });
 }
 
 export class AgentLoop extends EventEmitter {
@@ -51,12 +60,14 @@ export class AgentLoop extends EventEmitter {
             ...config
         };
 
-        this._running         = false;
-        this._busy            = false;
-        this._pendingApproval = null;   // { resolve, reject, description }
-        this._interrupted     = false;  // set by interrupt() to pause at next wave boundary
-        this._interruptFile   = path.join(process.cwd(), '.max', 'interrupt_state.json');
-        this._toolFailures    = new Map(); // toolName -> count (Level 4 Meta-Correction)
+        this._running               = false;
+        this._busy                  = false;
+        this._pendingApproval       = null;   // { resolve, reject, description }
+        this._interrupted           = false;
+        this._abortController       = null;
+        this._interruptFile         = path.join(process.cwd(), '.max', 'interrupt_state.json');
+        this._toolFailures          = new Map();
+        this._pendingClarifications = new Map(); // goalId → { resolve, timer }
 
         // â”€â”€ Loop dispatch infrastructure â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         this._selector = new LoopSelector();
@@ -84,8 +95,13 @@ export class AgentLoop extends EventEmitter {
 
     // â”€â”€â”€ Run one agent cycle (called by Heartbeat) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     async runCycle() {
-        if (this._busy) return null;
+        if (this._busy) {
+            this._pendingCycle = true;
+            return null;
+        }
         this._busy = true;
+        this._pendingCycle = false;
+        this._abortController = new AbortController();
         this.stats.cyclesRun++;
 
         try {
@@ -98,6 +114,11 @@ export class AgentLoop extends EventEmitter {
             return null;
         } finally {
             this._busy = false;
+            this._abortController = null;
+            if (this._pendingCycle) {
+                this._pendingCycle = false;
+                setImmediate(() => this.runCycle());
+            }
         }
     }
 
@@ -133,7 +154,25 @@ export class AgentLoop extends EventEmitter {
             return null;
         }
 
-        // ── 1.5 Route to specialized loop if applicable ───────────────────
+        // ── 1.5 Clarification gate — ask before diving in ─────────────────
+        if (goal.source === 'user' && !goal._clarified) {
+            goal._clarified = true;
+            const questions = await this._getClarifyingQuestions(goal);
+            if (questions?.length) {
+                this.emit('clarificationNeeded', {
+                    goalId: goal.id, goalTitle: goal.title, questions, timeoutMs: 300_000
+                });
+                const answers = await this._waitForClarification(goal.id, 300_000);
+                if (answers) {
+                    goal.description = (goal.description || '') + '\n\nClarifications from user:\n' + answers;
+                    console.log(`  [AgentLoop] 💬 Clarification received — proceeding with context`);
+                } else {
+                    console.log(`  [AgentLoop] ⏱️  Clarification timeout — proceeding with assumptions`);
+                }
+            }
+        }
+
+        // ── 1.6 Route to specialized loop if applicable ───────────────────
         const { loop, confidence, rationale } = this._selector.classify(goal);
 
         if (loop !== 'default') {
@@ -215,6 +254,7 @@ export class AgentLoop extends EventEmitter {
 
         // â”€â”€ 3. Execute steps â€” with Pivot Loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // On step failure, re-decompose with error context and retry.
+        const checkpoint  = await this._gitCheckpoint(goal);
         const stepResults = [];
         let   goalSuccess = false;
         let   goalSummary = '';
@@ -473,6 +513,9 @@ export class AgentLoop extends EventEmitter {
             console.log(`  [AgentLoop] ðŸ”„ New plan: ${goal.steps.length} steps`);
         }
 
+        // Restore user's stashed work if the goal failed
+        if (!goalSuccess && checkpoint) await this._gitRestore(checkpoint);
+
         // â”€â”€ 4. Record outcome â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         this.max.outcomes?.record({
             agent:   'AgentLoop',
@@ -550,6 +593,10 @@ export class AgentLoop extends EventEmitter {
 
     // ─── Execute a single step ─────────────────────────────────────────────
     async _executeStep(step, goal, stepResultMap = new Map()) {
+        const signal = this._abortController?.signal;
+        if (signal?.aborted) {
+            return { step: step.step, success: false, error: 'Aborted', summary: '' };
+        }
         const stepAction = step.action;
         const fullToolName = step.tool || 'brain';
 
@@ -600,11 +647,13 @@ export class AgentLoop extends EventEmitter {
                             systemPrompt: `You are MAX completing an autonomous task step. Be concrete and brief.`,
                             temperature:  isCoding ? 0.2 : 0.4,
                             maxTokens:    isCoding ? 2048 : 512,
-                            tier:         isCoding ? 'code' : 'fast'   // non-coding steps use local LLM
+                            tier:         isCoding ? 'code' : 'fast',   // non-coding steps use local LLM
+                            signal
                         }
                     ),
                     timeoutMs,
-                    'brain step'
+                    'brain step',
+                    signal
                 );
                 result = resObj.text;
             } else {
@@ -619,6 +668,7 @@ export class AgentLoop extends EventEmitter {
                         content:  step.content,
                         query:    action,       // web fallback
                         cwd:      process.cwd(),
+                        signal,
                         ...(step.params || {})  // planner-specified params win
                     };
 
@@ -644,7 +694,8 @@ export class AgentLoop extends EventEmitter {
                     let toolResult = await withTimeout(
                         this.max.tools.execute(toolName, action, toolParams),
                         timeoutMs,
-                        `${toolName}.${action}`
+                        `${toolName}.${action}`,
+                        signal
                     );
 
                     // ── Step retry for file:replace "not found" ──
@@ -662,9 +713,10 @@ export class AgentLoop extends EventEmitter {
                             try {
                                 const checkCmd = `node --check ${toolParams.filePath}`;
                                 const checkResult = await withTimeout(
-                                    this.max.tools.execute('shell', 'run', { command: checkCmd }),
+                                    this.max.tools.execute('shell', 'run', { command: checkCmd, signal }),
                                     10000,
-                                    'shadow validation'
+                                    'shadow validation',
+                                    signal
                                 );
                                 
                                 // node --check sometimes returns 0 even on syntax error in certain environments.
@@ -700,9 +752,10 @@ export class AgentLoop extends EventEmitter {
                                         console.log(`  [AgentLoop] 🧪 Found matching test file: ${testFile}. Running validation...`);
                                         const testCmd = `npm test ${testFile} -- --passWithNoTests`;
                                         const testResult = await withTimeout(
-                                            this.max.tools.execute('shell', 'run', { command: testCmd }),
+                                            this.max.tools.execute('shell', 'run', { command: testCmd, signal }),
                                             30000,
-                                            'unit test'
+                                            'unit test',
+                                            signal
                                         );
                                         
                                         if (testResult?.success === false) {
@@ -725,7 +778,7 @@ export class AgentLoop extends EventEmitter {
                     // Propagate tool failures as thrown errors so search-and-retry
                     // kicks in rather than silently reporting success on a broken step.
                     if (toolResult?.success === false) {
-                        throw new Error(toolResult.error || `${tName}.${tAction} returned failure`);
+                        throw new Error(toolResult.error || `${toolName}.${action} returned failure`);
                     }
 
                     result = JSON.stringify(toolResult).slice(0, 500);
@@ -734,10 +787,11 @@ export class AgentLoop extends EventEmitter {
                     const resObj = await withTimeout(
                         this.max.agentBrain.think(
                             `Complete this step: ${action}`,
-                            { temperature: 0.4, maxTokens: 512, tier: 'fast' }
+                            { temperature: 0.4, maxTokens: 512, tier: 'fast', signal }
                         ),
                         timeoutMs,
-                        'brain fallback'
+                        'brain fallback',
+                        signal
                     );
                     result = resObj.text;
                 }
@@ -759,10 +813,11 @@ export class AgentLoop extends EventEmitter {
                         const verifyResult = await withTimeout(
                             this.max.agentBrain.think(
                                 `Does this output satisfy the success criterion?\n\nCRITERION: ${step.success}\nOUTPUT: ${summary}\n\nReply with only YES or NO.`,
-                                { temperature: 0.0, maxTokens: 10, tier: 'fast' }
+                                { temperature: 0.0, maxTokens: 10, tier: 'fast', signal }
                             ),
                             15_000,
-                            'verify'
+                            'verify',
+                            signal
                         );
                         const verdict = verifyResult.text.trim().toUpperCase();
                         if (verdict.startsWith('NO')) {
@@ -783,6 +838,10 @@ export class AgentLoop extends EventEmitter {
         } catch (err) {
             // â”€â”€ Search-and-Retry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             // Before giving up, search the web for a solution and retry once.
+            if (signal?.aborted || err.message.includes('aborted')) {
+                this.emit('stepDone', { step: step.step, success: false, summary: 'Aborted', tool: toolName, toolAction: action, params: step.params || {} });
+                return { step: step.step, success: false, error: 'Aborted', summary: '' };
+            }
             console.log(`  [AgentLoop] ðŸ” Searching for a solution to: ${err.message.slice(0, 80)}`);
             const searchContext = await this._searchForSolution(step, goal, err.message);
 
@@ -791,10 +850,11 @@ export class AgentLoop extends EventEmitter {
                     const retryObj = await withTimeout(
                         this.max.agentBrain.think(
                             `Complete this step. A previous attempt failed.\n\nGOAL: ${goal.title}\nSTEP: ${action}\nERROR: ${err.message}\n\nSEARCH RESULTS:\n${searchContext}\n\nUse the search results to find the correct approach.`,
-                            { systemPrompt: 'You are MAX completing an autonomous task step. Be concrete and brief.', temperature: 0.3, maxTokens: 512, tier: 'fast' }
+                            { systemPrompt: 'You are MAX completing an autonomous task step. Be concrete and brief.', temperature: 0.3, maxTokens: 512, tier: 'fast', signal }
                         ),
                         this.config.stepTimeoutMs,
-                        'search retry'
+                        'search retry',
+                        signal
                     );
                     const retrySummary = retryObj.text.slice(0, 200);
                     console.log(`  [AgentLoop] âœ… Search retry succeeded`);
@@ -991,7 +1051,12 @@ Synthesize into 3-5 actionable bullet points for how to succeed on this goal.`,
     interrupt() {
         if (!this._busy) return false;
         this._interrupted = true;
-        console.log('[AgentLoop] â¸ï¸  Interrupt requested â€” will pause at next step boundary');
+        if (this._pendingApproval) {
+            this._pendingApproval.resolve(false);
+            this._pendingApproval = null;
+        }
+        this._abortController?.abort();
+        console.log('[AgentLoop] â¸ï¸  Interrupt requested â€” aborting active step and saving progress');
         return true;
     }
 
@@ -1219,20 +1284,109 @@ Root cause guide:
     // Only commits if there are staged changes in the working tree and
     // autoApproveLevel is not 'read' (respects the user's permission config).
     async _autoCommit(goalTitle) {
-        if (this.config.autoApproveLevel === 'read') return;  // user wants to control commits
+        if (this.config.autoApproveLevel === 'read') return;
 
         try {
             const cwd    = process.cwd();
             const status = await this.max.tools.execute('git', 'status', { cwd });
-            if (!status?.success || !status.output) return;  // no changes or not a git repo
+            if (!status?.success || !status.output) return;
 
             await this.max.tools.execute('git', 'add', { cwd, files: '.' });
             const message = `AgentLoop: ${goalTitle.slice(0, 72)}`;
             const commit  = await this.max.tools.execute('git', 'commit', { cwd, message });
             if (commit?.success) {
-                console.log(`  [AgentLoop] ðŸ“¦ Committed: "${message}"`);
+                console.log(`  [AgentLoop] 📦 Committed: “${message}”`);
+                this._autoPR(goalTitle, cwd).catch(() => {});
             }
-        } catch { /* non-fatal â€” git not available or nothing to commit */ }
+        } catch { /* non-fatal */ }
+    }
+
+    async _getClarifyingQuestions(goal) {
+        try {
+            const prompt = `A user asked an AI agent to do the following:\n\nGoal: ${goal.title}\nDescription: ${goal.description || ''}\n\nBefore starting, decide: is this clear enough to proceed, or are there 1-2 specific questions that would significantly improve the outcome?\n\nRespond with ONLY one of:\n- The word CLEAR (if no questions needed)\n- A JSON array of 1-2 short question strings, e.g. ["Which file?", "Should tests be updated?"]`;
+            const res = await this.max.brain.think(prompt, { tier: 'fast', maxTokens: 120, systemPrompt: 'You decide if a task is clear or needs clarification. Respond only with CLEAR or a JSON array.' });
+            const text = (res?.text || res?.response || '').trim();
+            if (!text || text === 'CLEAR' || text.startsWith('CLEAR')) return null;
+            const match = text.match(/\[[\s\S]*\]/);
+            if (!match) return null;
+            const questions = JSON.parse(match[0]);
+            return Array.isArray(questions) && questions.length ? questions.slice(0, 2) : null;
+        } catch { return null; }
+    }
+
+    _waitForClarification(goalId, timeoutMs) {
+        return new Promise(resolve => {
+            const timer = setTimeout(() => {
+                this._pendingClarifications.delete(goalId);
+                resolve(null);
+            }, timeoutMs);
+            this._pendingClarifications.set(goalId, { resolve, timer });
+        });
+    }
+
+    answerClarification(goalId, answers) {
+        const pending = this._pendingClarifications.get(goalId);
+        if (!pending) return false;
+        clearTimeout(pending.timer);
+        this._pendingClarifications.delete(goalId);
+        pending.resolve(answers);
+        return true;
+    }
+
+    async _autoPR(goalTitle, cwd) {
+        try {
+            const { execSync } = await import('child_process');
+            const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd, encoding: 'utf8' }).trim();
+            if (!branch.startsWith('max/')) return;
+
+            execSync('git push -u origin HEAD --quiet', { cwd, stdio: 'pipe' });
+
+            const desc = await this.max.brain.think(
+                `A background AI agent just completed: “${goalTitle}”\n\nWrite a 2-3 sentence GitHub PR description explaining what was done and why, in plain language. No headers or bullet points.`,
+                { tier: 'fast', maxTokens: 150, systemPrompt: 'Write concise, plain-language PR descriptions.' }
+            );
+            const body  = (desc?.text?.trim() || goalTitle).replace(/"/g, "'");
+            const title = goalTitle.slice(0, 70).replace(/"/g, "'");
+
+            const prOut = execSync(
+                `gh pr create --title “${title}” --body “${body}” --base main 2>&1`,
+                { cwd, encoding: 'utf8', stdio: 'pipe' }
+            ).trim();
+
+            const prUrl = prOut.match(/https:\/\/github\.com[^\s]+/)?.[0];
+            if (prUrl) {
+                console.log(`  [AgentLoop] 📬 PR opened: ${prUrl}`);
+                this.emit('insight', { source: 'agent', label: `📬 PR: ${goalTitle.slice(0, 50)}`, result: prUrl });
+            }
+        } catch { /* gh not installed or not authed — silent */ }
+    }
+
+    // --- Git Checkpoint: stash user work before autonomous writes, restore on failure ---
+    async _gitCheckpoint(goal) {
+        const writingGoal = ['fix', 'build', 'task', 'refactor'].includes(goal.type);
+        if (!writingGoal) return null;
+        try {
+            const { execSync } = await import('child_process');
+            const dirty = execSync('git status --porcelain', { cwd: process.cwd(), encoding: 'utf8' }).trim();
+            if (!dirty) return { stashed: false };
+            const label = `MAX-pre-${goal.id?.slice(0, 8) || Date.now()}`;
+            execSync(`git stash push --include-untracked -m “${label}”`, { cwd: process.cwd() });
+            console.log(`  [AgentLoop] Git checkpoint: stashed user work as “${label}”`);
+            return { stashed: true, label };
+        } catch { return null; }
+    }
+
+    async _gitRestore(checkpoint) {
+        if (!checkpoint?.stashed) return;
+        try {
+            const { execSync } = await import('child_process');
+            execSync('git checkout -- .', { cwd: process.cwd() });
+            execSync('git clean -fd', { cwd: process.cwd() });
+            execSync('git stash pop', { cwd: process.cwd() });
+            console.log(`  [AgentLoop] Git checkpoint restored -- user's work recovered`);
+        } catch (err) {
+            console.warn(`  [AgentLoop] Checkpoint restore failed: ${err.message}`);
+        }
     }
 
     // â”€â”€â”€ Level 4 Meta-Correction: Autonomous Tool Healing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1386,12 +1540,19 @@ Root cause guide:
     async requestApproval(tool, action, params, goal = null) {
         this.stats.approvalsPending++;
 
+        // ── Enrich with Swarm Context if this is an evolution commit ────
+        let auditReport = null;
+        if (tool === 'self_evolution' && action === 'commit' && this.max.evolution?.lastReport) {
+            auditReport = this.max.evolution.lastReport;
+        }
+
         return new Promise(resolve => {
             this._pendingApproval = {
                 resolve,
                 tool,
                 action,
                 params,
+                auditReport,
                 goal: goal?.title || 'autonomous task'
             };
 
@@ -1400,6 +1561,7 @@ Root cause guide:
                 tool,
                 action,
                 params,
+                auditReport,
                 goal
             });
         });

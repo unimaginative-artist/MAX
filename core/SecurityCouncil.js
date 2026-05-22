@@ -5,7 +5,8 @@
 // before it touches disk. Catches: injection, hardcoded secrets, path
 // traversal, CVE patterns, compliance violations (SOC2/HIPAA/GDPR).
 //
-// Revenue Stream C foundation. Enable with: MAX_SECURITY_COUNCIL=true
+// Revenue Stream C foundation. Enabled by default. Set MAX_SECURITY_COUNCIL=false
+// only for local emergency debugging.
 //
 // Severity levels:
 //   critical — block the write entirely, report to user
@@ -73,10 +74,10 @@ export class SecurityCouncil extends EventEmitter {
     constructor(max, config = {}) {
         super();
         this.max     = max;
-        this.enabled = config.enabled ?? (process.env.MAX_SECURITY_COUNCIL === 'true');
+        this.enabled = config.enabled ?? (process.env.MAX_SECURITY_COUNCIL !== 'false');
         this.config  = {
             blockOnCritical: config.blockOnCritical ?? true,
-            blockOnHigh:     config.blockOnHigh     ?? false,
+            blockOnHigh:     config.blockOnHigh     ?? true,
             llmReview:       config.llmReview       ?? true,   // LLM adversarial pass
             ...config
         };

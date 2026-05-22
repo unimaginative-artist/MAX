@@ -107,11 +107,14 @@ export class VirtualShell extends EventEmitter {
         }
     }
 
-    async run(command, timeoutMs = 120000) {
+    async run(command, timeoutMs = 120000, signal = null, isInteractive = false) {
         if (!this.ready) this.start();
+        if (signal?.aborted) {
+            return { success: false, code: -1, stdout: '', stderr: '', error: 'Aborted' };
+        }
 
         return new Promise((resolve, reject) => {
-            this._queue.push({ command, timeoutMs, resolve, reject });
+            this._queue.push({ command, timeoutMs, signal, resolve, reject, isInteractive });
             if (!this._currentResolver) {
                 this._processQueue();
             }
@@ -121,11 +124,38 @@ export class VirtualShell extends EventEmitter {
     async _processQueue() {
         if (this._queue.length === 0 || this._currentResolver) return;
 
-        const { command, timeoutMs, resolve } = this._queue.shift();
+        const { command, timeoutMs, signal, resolve, isInteractive } = this._queue.shift();
+        if (signal?.aborted) {
+            resolve({ success: false, code: -1, stdout: '', stderr: '', error: 'Aborted' });
+            this._processQueue();
+            return;
+        }
+
+        let timeoutId = null;
+        let abortHandler = null;
+        const cleanup = () => {
+            if (timeoutId) clearTimeout(timeoutId);
+            if (signal && abortHandler) signal.removeEventListener('abort', abortHandler);
+        };
+        const finish = (result) => {
+            cleanup();
+            resolve(result);
+        };
+
         this._currentResolver = resolve;
         this._currentCommand = command;
         this._stdoutBuf = '';
         this._stderrBuf = '';
+
+        if (isInteractive) {
+            console.log(`[VirtualShell] 🎮 Entering interactive mode for: ${command}`);
+            this.proc.stdin.write(`${command}\r\n`);
+            this.emit('interactive_start', { command });
+            this._currentResolver = null;
+            resolve({ success: true, code: 0, stdout: 'Interactive session started.', stderr: '' });
+            this._processQueue();
+            return;
+        }
 
         // Wrap the command to echo the exit code and the strict delimiter
         const wrappedCmd = this.isWin
@@ -134,24 +164,44 @@ export class VirtualShell extends EventEmitter {
 
         this.proc.stdin.write(wrappedCmd);
 
-        if (timeoutMs) {
-            setTimeout(() => {
-                if (this._currentResolver === resolve) {
+        this._currentResolver = finish;
+
+        if (signal) {
+            abortHandler = () => {
+                if (this._currentResolver === finish) {
                     this._currentResolver = null;
-                    
-                    // To recover from timeout, we have to kill the shell and restart it
+                    this.proc.kill();
+                    this.proc = null;
+                    this.start();
+                    finish({
+                        success: false,
+                        code: -1,
+                        stdout: this._stdoutBuf,
+                        stderr: this._stderrBuf,
+                        error: 'Aborted'
+                    });
+                    this._processQueue();
+                }
+            };
+            signal.addEventListener('abort', abortHandler, { once: true });
+        }
+
+        if (timeoutMs) {
+            timeoutId = setTimeout(() => {
+                if (this._currentResolver === finish) {
+                    this._currentResolver = null;
                     this.proc.kill();
                     this.proc = null;
                     this.start();
 
-                    resolve({
+                    finish({
                         success: false,
                         code: -1,
                         stdout: this._stdoutBuf,
                         stderr: this._stderrBuf,
                         error: `Timed out after ${timeoutMs}ms`
                     });
-                    
+
                     this._processQueue();
                 }
             }, timeoutMs);

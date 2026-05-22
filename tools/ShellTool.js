@@ -121,12 +121,17 @@ export function getProcessLog(name) {
 let _logBroadcast = null;
 export function setProcessLogBroadcast(fn) { _logBroadcast = fn; }
 
+// Error explain hook — called when any shell command exits non-zero
+// server.js wires this to brain.think() + WebSocket broadcast
+let _errorExplainHandler = null;
+export function setErrorExplainHandler(fn) { _errorExplainHandler = fn; }
+
 export const ShellTool = {
     name: 'shell',
     description: 'Run shell commands with a stateful Virtual Shell. Keeps working directory and environment variables persistent. Can start/stop background daemons.',
 
     actions: {
-        async run({ command, timeoutMs = 120_000 }) {
+        async run({ command, timeoutMs = 120_000, signal = null }) {
             const blocked = isBlocked(command);
             if (blocked) return { success: false, error: blocked };
 
@@ -134,10 +139,19 @@ export const ShellTool = {
             const start = Date.now();
 
             try {
-                const res = await vShell.run(command, timeoutMs);
+                const res = await vShell.run(command, timeoutMs, signal);
                 const ms = Date.now() - start;
                 printShellFooter(res.code, ms);
-                
+
+                if (!res.success && _errorExplainHandler) {
+                    _errorExplainHandler({
+                        command,
+                        code: res.code,
+                        stdout: res.stdout.slice(0, 1000),
+                        stderr: res.stderr.slice(0, 1000),
+                    }).catch(() => {});
+                }
+
                 return {
                     success: res.success,
                     command,

@@ -5,15 +5,15 @@
       "command": "npx",
       "args": ["@playwright/mcp@latest", "--headless"],
       "description": "Browser automation — navigate pages, click elements, fill forms, screenshot, extract text from live sites",
-      "enabled": false,
+      "enabled": true,
       "install": "npm install -g @playwright/mcp && npx playwright install chromium"
     },
     {
       "name": "filesystem",
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/Users/barry/Desktop"],
-      "description": "Extended filesystem access — read, write, search files across the Desktop",
-      "enabled": false,
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/Users/barry/Desktop/MAX", "C:/Users/barry/Desktop"],
+      "description": "Extended filesystem access — read, write, search, move files across the MAX workspace and Desktop",
+      "enabled": true,
       "install": "npx -y @modelcontextprotocol/server-filesystem"
     },
     {
@@ -30,7 +30,7 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-memory"],
       "description": "Persistent knowledge graph — store and retrieve entities, relations, and observations across sessions",
-      "enabled": false,
+      "enabled": true,
       "install": "npx -y @modelcontextprotocol/server-memory"
     }
   ]

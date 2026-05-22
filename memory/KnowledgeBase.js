@@ -392,7 +392,7 @@ export class KnowledgeBase {
         if (!chunks.length) return '';
 
         let used = 0;
-        const parts = ['\n\n## Knowledge Base â€” retrieved context'];
+        const parts = ['\n\n## Knowledge Base — retrieved context'];
 
         for (const chunk of chunks) {
             const source  = chunk.source_name || 'unknown';
