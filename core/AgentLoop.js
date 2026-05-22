@@ -574,12 +574,13 @@ export class AgentLoop extends EventEmitter {
         });
 
         // â”€â”€ 7. Proactive background messaging â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        this.max.say(
-            goalSuccess 
-                ? `I've successfully completed the background task: "${goal.title}".` 
-                : `I've hit a roadblock with the background task: "${goal.title}".`,
-            goalSuccess ? "Success" : "Blocked"
-        );
+        // Notify Barry only for goals he explicitly requested
+        if (goal.source === 'user' || goal.source === 'clarification') {
+            const msgText = goalSuccess
+                ? `Done: **${goal.title}**\n\n${goalSummary || 'No additional details.'}`
+                : `Hit a wall on: **${goal.title}**\n\n${goalSummary || 'Could not complete.'}`;
+            this.max.say(msgText, goal.source);
+        }
 
         // Store in memory
         this.max.memory?.remember(insightResult, { goal: goal.title, source: 'agent_loop' }, {

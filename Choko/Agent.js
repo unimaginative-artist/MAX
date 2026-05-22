@@ -232,6 +232,21 @@ ${this.profile.buildContextBlock()}`;
         }
     }
 
+    // AgentLoop calls this.max.say() on goal completion — Choko relays via her relay tool
+    say(text, source = '') {
+        // Write to relay so MAX picks it up on next poll
+        const relayPath = require('path').join(this.dataDir, '..', '..', '.max', 'choko_relay.json');
+        try {
+            let relays = [];
+            if (require('fs').existsSync(relayPath)) {
+                try { relays = JSON.parse(require('fs').readFileSync(relayPath, 'utf8')); } catch {}
+            }
+            relays.push({ from: 'Choko', title: text.slice(0, 80), detail: text, priority: 'medium', timestamp: new Date().toISOString(), emoji: '🍫' });
+            require('fs').writeFileSync(relayPath, JSON.stringify(relays.slice(-20), null, 2));
+        } catch {}
+        this.heartbeat?.emit('message', { text, details: source, timestamp: new Date().toISOString() });
+    }
+
     getStatus() {
         return {
             ready: this._ready,
