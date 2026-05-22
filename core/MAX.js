@@ -1165,13 +1165,25 @@ Actions:
                 { role: 'user',   content: userMessage }
             ] : null;
 
-            // ── Step 1: Brain Think ───────────────────────────────────────────
+            // ── Step 1: Brain Think (silent first pass) ───────────────────────
+            // We do NOT stream the initial response — local models often hallucinate
+            // tool results inline. We silently get the plan, execute real tools, then
+            // stream only the clean follow-up. If no tools needed we replay via onToken.
+            const SKIP_INLINE = new Set(['mcp']);
+            const _extractToolLines = (text) => text.split('\n')
+                .map(l => l.trim())
+                .filter(l => {
+                    if (l.startsWith('TOOL_BLOCKED')) { console.log(`[MAX] 🛡️ Skipping blocked tool: ${l}`); return false; }
+                    return /^TOOL\s*:[a-zA-Z_\s]+:[a-zA-Z_\s]+/.test(l);
+                })
+                .filter(l => !SKIP_INLINE.has(l.replace(/^TOOL\s*:\s*/i, '').split(/\s*:\s*/)[0]));
+
             let result = await this.brain.think(userMessage, {
                 systemPrompt,
                 temperature: driveTemp,
                 maxTokens:   maxTok,
                 tier:        options.tier || 'smart',
-                onToken,
+                onToken:     null, // silent — prevent fake streaming before tools run
                 messages,
                 signal
             });
@@ -1180,25 +1192,20 @@ Actions:
             response = stripLeakedPromptContext(response.replace(/^(\**MAX:\**\s*|MAX:\s*|Assistant:\s*)/i, '').trim());
 
             // ── Fix 1: Inline tool execution loop ────────────────────────────
-            // Execute any TOOL: calls MAX emitted, feed results back, get a real answer.
-            // mcp is meta — skip. goals ARE executed inline so MAX can queue work from chat.
+            // Execute real tools, then stream the clean follow-up.
             if (!signal.aborted) {
-                const SKIP_INLINE = new Set(['mcp']);
+                let toolsRan = false;
                 for (let _toolRound = 0; _toolRound < 3; _toolRound++) {
-                    const toolLines = response.split('\n')
-                        .map(l => l.trim())
-                        .filter(l => {
-                            if (l.startsWith('TOOL_BLOCKED')) {
-                                console.log(`[MAX] 🛡️ Skipping blocked tool: ${l}`);
-                                return false;
-                            }
-                            return /^TOOL:[a-zA-Z_]+:[a-zA-Z_]+/.test(l);
-                        })
-                        .filter(l => !SKIP_INLINE.has(l.split(':')[1]));
+                    const toolLines = _extractToolLines(response);
                     if (toolLines.length === 0) break;
+                    toolsRan = true;
+
+                    // Signal to UI that real tool work is happening
+                    this.heartbeat?.emit('tool_activity', { count: toolLines.length, tools: toolLines.map(l => l.slice(5, 40)) });
 
                     const toolResults = [];
                     for (const line of toolLines) {
+                        console.log(`[MAX] ⚙️  Executing tool: ${line.slice(0, 80)}`);
                         try {
                             const tr = await this.tools.executeLLMToolCall(line);
                             toolResults.push(`${line.slice(0, 80)}\n→ ${JSON.stringify(tr).slice(0, 1200)}`);
@@ -1213,7 +1220,7 @@ Actions:
                         temperature: driveTemp,
                         maxTokens:   maxTok,
                         tier:        options.tier || 'smart',
-                        onToken,
+                        onToken,   // stream the clean real-result response
                         signal,
                         messages: [
                             { role: 'system',    content: systemPrompt },
@@ -1224,7 +1231,17 @@ Actions:
                         ]
                     });
                     const followUpText = stripLeakedPromptContext(followUp.text.replace(/^(\**MAX:\**\s*|MAX:\s*|Assistant:\s*)/i, '').trim());
-                    response = response + '\n\n' + followUpText;
+                    response = followUpText; // replace — not append — the hallucinated draft
+                }
+
+                // No tools were needed: replay the silent response through onToken so
+                // the UI gets streaming tokens even though the first pass was silent.
+                if (!toolsRan && onToken && response) {
+                    const CHUNK = 6;
+                    for (let i = 0; i < response.length; i += CHUNK) {
+                        if (signal.aborted) break;
+                        onToken(response.slice(i, i + CHUNK));
+                    }
                 }
             }
 

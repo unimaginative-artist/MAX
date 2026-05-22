@@ -61,29 +61,31 @@ export class ToolRegistry {
      */
     async executeLLMToolCall(rawCall) {
         const trimmed = rawCall.trim();
-        if (!trimmed.startsWith('TOOL:')) return null;
+        // Lenient prefix check — allow "TOOL : " or "TOOL:"
+        if (!/^TOOL\s*:/i.test(trimmed)) return null;
 
-        const parts = trimmed.split(':');
+        // Normalize: collapse spaces around colons, drop leading "TOOL\s*:"
+        const normalized = trimmed.replace(/^TOOL\s*:\s*/i, 'TOOL:').replace(/\s*:\s*/g, ':');
+        const parts = normalized.split(':');
         if (parts.length < 3) return { success: false, error: 'Malformed tool call. Use TOOL:tool:action:params' };
 
-        const toolName = parts[1];
-        const action   = parts[2];
+        const toolName = parts[1].trim();
+        const action   = parts[2].trim();
         let params     = {};
 
         // Extract JSON params if present
         const jsonStart = trimmed.indexOf('{');
         if (jsonStart !== -1) {
             try {
-                // Heuristic: everything from the first '{' to the last '}'
                 const jsonStr = trimmed.slice(jsonStart, trimmed.lastIndexOf('}') + 1);
                 params = JSON.parse(jsonStr);
             } catch (err) {
-                // Fallback for messy LLM output: try to find unquoted keys/values
-                // (Very basic — if this fails, the tool will report the error)
+                // ignore parse failures — tool will report them
             }
-        } else if (parts[3]) {
-            // Fallback for simple single-string param: TOOL:tool:action:value
-            params = { value: parts.slice(3).join(':') };
+        } else {
+            // Fallback: strip angle-bracket wrappers like <file_path>:value and use remainder as value
+            const remainder = parts.slice(3).join(':').replace(/^<[^>]+>\s*:?\s*/, '').trim();
+            if (remainder) params = { value: remainder, path: remainder, filePath: remainder, query: remainder };
         }
 
         return await this.execute(toolName, action, params);

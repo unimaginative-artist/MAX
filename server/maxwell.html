@@ -5134,7 +5134,7 @@ function App() {
           });
         }
         if (msg.type === 'done') {
-          setIsThinking(false); setStreaming(false);
+          setIsThinking(false); setStreaming(false); setThinkLabel('thinking…');
           // Refresh real usage from API instead of trusting potentially incomplete telemetry
           fetch(`${maxUrl}/api/usage`, { headers: authHdrs(true) }).then(r=>r.json()).then(u => {
             if (u.today) {
@@ -5153,6 +5153,9 @@ function App() {
         }
         if (msg.type === 'agent_say') {
           setMessages(m => [...m, { id: nextMsgId(), role: 'max', persona: 'companion', text: msg.text, modelTier: 'fast', route: 'local' }]);
+        }
+        if (msg.type === 'thinking_label') {
+          setThinkLabel(msg.label || 'working…');
         }
         if (msg.type === 'choko_message' && msg.text) {
           const toast = `🍫 ${msg.title || 'Scout report'}: ${msg.text}`.slice(0, 220);
@@ -5522,6 +5525,7 @@ function App() {
                 if(d.state==='task') setAgentTask(t=>t||{task:d.task,steps:[],status:'running'});
                 else if(d.state==='idle' && !currentActivityGoalRef.current) setAgentTask(null);
               }
+              if(d.type==='thinking_label') setThinkLabel(d.label||'working…');
 
               // ── Agent task tracker + live chat activity stream ──
               if(d.type==='agent_busy'){

@@ -386,6 +386,7 @@ export async function createServer(max, port = 3100) {
     max.heartbeat?.on('started', () => broadcast({ type: 'heartbeat_status', state: 'running' }));
     max.heartbeat?.on('idle',    () => broadcast({ type: 'heartbeat_status', state: 'idle'    }));
     max.heartbeat?.on('task',  task => broadcast({ type: 'heartbeat_status', state: 'task', task: task?.label || task?.title || 'background task' }));
+    max.heartbeat?.on('tool_activity', data => broadcast({ type: 'thinking_label', label: `running ${data.count} tool${data.count !== 1 ? 's' : ''}…` }));
 
     // Agent lane status — UI shows what MAX is working on in the background
     max.agentLoop?.on('goalStart', ({ goal }) => {
