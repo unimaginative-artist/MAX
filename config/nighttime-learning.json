@@ -1,0 +1,16 @@
+{
+  "schedule": {
+    "learning_sessions": [
+      {
+        "name": "Web Knowledge Discovery (Brave)",
+        "tasks": [
+          {
+            "params": {
+              "topics": ["cancer", "oncology", "audit", "tax", "AI agents", "distributed systems"]
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

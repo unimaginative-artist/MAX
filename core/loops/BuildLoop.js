@@ -75,7 +75,11 @@ export class BuildLoop {
         const execResult = await this._execute(goal, finalPlan, research, max);
         console.log(`  [BuildLoop] ⚡ Execution complete (${execResult.modifiedFiles?.length ?? 0} files changed)`);
 
-        // ── Phase 5: Verify ───────────────────────────────────────────────
+        // ── Phase 5: Test-driven iteration — run tests, fix failures, repeat ─
+        const testResult = await this._runTestLoop(goal, execResult, max);
+        if (testResult) execResult = testResult;
+
+        // ── Phase 6: Verify ───────────────────────────────────────────────
         const verified = await this._verify(goal, execResult, max);
         console.log(`  [BuildLoop] ${verified ? '✅' : '⚠️ '} Verification: ${verified ? 'passed' : 'unclear'}`);
 
@@ -227,7 +231,56 @@ export class BuildLoop {
         return { summary: result.text, modifiedFiles };
     }
 
-    // ── Phase 5: Verify — check git diff + optional verifyCommand ─────────
+    // ── Test-driven iteration — detect test cmd, run, fix failures, repeat ─
+    async _runTestLoop(goal, execResult, max) {
+        const MAX_RETRIES = 3;
+        const testCmd = await this._detectTestCommand(max);
+        if (!testCmd) return null;
+
+        let lastExec = execResult;
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            console.log(`  [BuildLoop] 🧪 Test run ${attempt}/${MAX_RETRIES}: ${testCmd}`);
+            const testRun = await this._runChecked(testCmd, max).catch(() => null);
+            if (!testRun) return lastExec;
+
+            const passed = testRun.success || testRun.code === 0;
+            if (passed) {
+                console.log(`  [BuildLoop] ✅ Tests passed on attempt ${attempt}`);
+                return lastExec;
+            }
+
+            const failures = (testRun.stdout + '\n' + testRun.stderr).slice(0, 2000);
+            console.log(`  [BuildLoop] ❌ Tests failed — re-running execute with failure context`);
+
+            if (attempt === MAX_RETRIES) break;
+
+            // Feed failures back as a correction step
+            const fixGoal = {
+                ...goal,
+                title: `Fix test failures: ${goal.title}`,
+                description: `Tests failed with:\n${failures}\n\nFix the code so all tests pass.`
+            };
+            lastExec = await this._execute(fixGoal, lastExec.summary, {}, max);
+        }
+
+        console.log(`  [BuildLoop] ⚠️  Tests still failing after ${MAX_RETRIES} attempts`);
+        return lastExec;
+    }
+
+    async _detectTestCommand(max) {
+        try {
+            const pkgRaw = await fs.readFile(path.join(process.cwd(), 'package.json'), 'utf8');
+            const pkg = JSON.parse(pkgRaw);
+            if (pkg.scripts?.test && !pkg.scripts.test.includes('no test')) return 'npm test';
+            if (pkg.scripts?.['test:unit']) return 'npm run test:unit';
+        } catch {}
+        // Fallback: check for common test runners
+        try { await fs.access(path.join(process.cwd(), 'jest.config.js')); return 'npx jest --passWithNoTests'; } catch {}
+        try { await fs.access(path.join(process.cwd(), 'vitest.config.js')); return 'npx vitest run'; } catch {}
+        return null;
+    }
+
+    // ── Phase 6: Verify — check git diff + optional verifyCommand ─────────
     async _verify(goal, execResult, max) {
         // Nothing modified → fail fast (unless summary says it was already correct)
         if (execResult.modifiedFiles?.length === 0) {

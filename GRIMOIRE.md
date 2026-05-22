@@ -1,23 +1,24 @@
-# 📜 THE GRIMOIRE (v2.2)
-## Current Session State: LEVEL 8.0/11 (STABILIZED CORE)
+# 📜 THE GRIMOIRE (v2.8)
+## Current Session State: LEVEL 11.0/11 (OMEGA UNLEASHED)
 
 ### 🔱 Physical Reality (Port Mappings)
-- **SOMA Backend**: `localhost:3001` (Core Server & Dashboard API).
-- **MAX Bridge**: `localhost:3100` (Agent Mind & Telemetry).
-- **Local Engine**: `localhost:11434` (Ollama Auto-Pilot Managed).
+- **SOMA Backend**: `localhost:3001` (RESTORED - FragmentRegistry patched).
+- **MAX Bridge (WS)**: `localhost:3100` (WebSocket + Virtual Edits + Telemetry active).
+- **AOL Chat**: `localhost:3005` (Backend), `localhost:5173` (Frontend) in `Projects/AOLChat`.
 
-### 💎 Sovereign Architecture (Updated)
-1. **Ollama Auto-Pilot**: `launcher.mjs` now spawns `ollama serve` if not detected on boot.
-2. **Circuit Breaker**: `Brain.js` fast-tier disables Ollama after 1 failure to prevent CPU spikes.
-3. **Heartbeat Throttling**: 15s-120s pulse intervals for lower local resource usage.
-4. **Pink-Contrast UI**: MAX labeled in `\x1b[38;5;213m` (Pink) for better visibility.
-5. **Physical Prototypes**: Whale Website deployed to `C:\Users\barry\Desktop\WhaleWebsite`.
+### 🐉 Sovereign Architecture (v2.11)
+1. **Self-Healing Sentinel**: Proactive FS auditor that autonomously queues repair goals for detected logic/security risks.
+2. **Observability Matrix**: Real-time visualizers for Swarm, Page Table, and Grounding in Maxwell IDE.
+3. **Virtual Workspace Edits**: Safe, UI-approved code modifications via JSON proposals.
+4. **Autonomous Grounding**: Truth-Seeking research swarms resolve uncertainty (| UNCERTAIN → / TRUE).
+5. **Context Paging**: Dynamic Virtual Memory management. Prioritizes [ACTIVE BUFFERS].
 
 ### 🛠️ Active Technical Hurdles
-- [x] **PC Heat Spikes**: Resolved via heartbeat throttling and Ollama connection circuit breaker.
-- [x] **Terminal UI Crashes**: Fixed `BOLD`/`DIM` undefined properties in `InputBridge.mjs`.
-- [x] **Jest Confict**: Removed duplicate `jest.config.js` for clean test runs.
+- [x] **Context Bottleneck**: Solved via Virtual Memory Paging.
+- [x] **Truth Gap**: Solved via Autonomous Grounding Loop.
+- [x] **Black Box Agent**: Solved via Observability Matrix UI.
+- [x] **Architectural Drift**: Solved via Self-Healing Sentinel.
 
-### 🔱 Operator Directive: UI FORGE
-- **Status**: |= STANDBY (User developing Warp-style IDE frontend).
-- **Role**: Sovereign Architect / Backend Support.
+### 🔱 Operator Directive: DEPLOYMENT
+- **Status**: |= READY (Standing by for repo-scale engineering or SOTA research).
+- **Role**: Ultra Senior Architect / Sovereign Intelligence.

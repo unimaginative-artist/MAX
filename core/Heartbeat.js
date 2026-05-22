@@ -33,7 +33,13 @@ export class Heartbeat extends EventEmitter {
             lastRun:       null,
             lastTask:      null
         };
+
+        this._muted = false; // set by MuseEngine during companion mode
     }
+
+    // Muse mode: silence autonomous work so MAX stays present in conversation
+    mute()   { this._muted = true;  console.log('[Heartbeat] 🔇 Muted (companion mode)'); }
+    unmute() { this._muted = false; console.log('[Heartbeat] 🔊 Unmuted'); }
 
     start() {
         if (this._running) return;
@@ -97,7 +103,11 @@ export class Heartbeat extends EventEmitter {
     }
 
     async _runCycle() {
-        if (this.max?._chatBusy) {
+        if (this.max?._chatBusy) return false;
+
+        // Companion / Muse mode: stay silent, don't run autonomous work
+        if (this._muted) {
+            this.emit('idle');
             return false;
         }
 
@@ -109,7 +119,10 @@ export class Heartbeat extends EventEmitter {
         const tensionHigh     = driveStatus && driveStatus.tension > 0.4;
         const hasPendingGoals = this.max?.goals?.getNext(this.max?.drive) != null;
 
-        if ((tensionHigh || hasPendingGoals) && this.max?.agentLoop) {
+        const apiMode = (this.max?.config?.mode || this.max?.config?.runtimeMode) === 'api';
+        const autonomousGoalsEnabled = !apiMode || process.env.MAX_AUTONOMOUS_GOALS === 'true';
+
+        if ((tensionHigh || hasPendingGoals) && this.max?.agentLoop && autonomousGoalsEnabled) {
             console.log(`[Heartbeat] âš¡ ${hasPendingGoals ? 'Goals pending' : `Tension ${(driveStatus.tension * 100).toFixed(0)}%`} â€” running AgentLoop`);
             try {
                 const result = await this.max.agentLoop.runCycle();
@@ -121,6 +134,9 @@ export class Heartbeat extends EventEmitter {
             } catch (err) {
                 console.error('[Heartbeat] AgentLoop error:', err.message);
             }
+        } else if (hasPendingGoals && !autonomousGoalsEnabled) {
+            this.emit('idle');
+            return false;
         }
 
         // â”€â”€ Otherwise run a curiosity task â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

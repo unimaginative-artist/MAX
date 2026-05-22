@@ -16,6 +16,7 @@ export class EvolutionArbiter {
         this.stagingDir = path.join(this.baseDir, '.max', 'evolution', 'staging');
         this.backupDir  = path.join(this.baseDir, '.max', 'evolution', 'backups');
         this.swarm      = config.swarm || null;
+        this.lastReport = null;
     }
 
     async initialize() {
@@ -142,11 +143,22 @@ CODE:
 ${content}
 
 Return a DISCOVERY: {"riskSeverity": 0.0-1.0, "reason": "..."} if you find issues.`
+                    },
+                    {
+                        id: 'UserProxy',
+                        prompt: `Review this change against the user's known preferences and profile.
+USER PROFILE:
+${this.max?.profile?._user || 'No profile yet.'}
+
+Does this change match the user's coding style and technical direction? 
+CODE:
+${content}`
                     }
                 ]
             };
 
             const result = await this.swarm.run(task);
+            this.lastReport = result;
             
             // If the SecurityAuditor found a high risk, reject
             const securityResult = result.results.find(r => r.id === 'SecurityAuditor');
@@ -155,14 +167,14 @@ Return a DISCOVERY: {"riskSeverity": 0.0-1.0, "reason": "..."} if you find issue
             if (risk > 0.7) {
                 const reason = securityResult?.discoveries?.reason || 'High risk detected';
                 console.warn(`[Evolution] ❌ Swarm Rejected change: ${reason}`);
-                return { success: false, reason };
+                return { success: false, reason, report: result };
             }
 
             console.log(`[Evolution] ✅ Swarm Approved change`);
-            return { success: true };
+            return { success: true, report: result };
         } catch (err) {
             console.warn(`[Evolution] ⚠️ Review failed (ignoring): ${err.message}`);
-            return { success: true }; // don't block on swarm failure
+            return { success: true, report: null }; // don't block on swarm failure
         }
     }
 

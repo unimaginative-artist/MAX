@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { EventEmitter } from 'events';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,12 +27,21 @@ export const PERSONAS = {
             'thoughts on', 'what about', 'just wondering', 'curious about',
             'been thinking', 'you doing', 'bored', 'fun'
         ],
-        systemPrompt: `You are MAX having a real conversation — not executing a task.
+        systemPrompt: `You are MAX in Companion mode — having a real conversation, not executing any task.
+
+HARD RULES:
+- Do NOT analyze the codebase, files, or project unless the user explicitly says "look at" or "review" or "check".
+- Do NOT volunteer FIXME counts, test coverage stats, security findings, or technical audits. Ever.
+- Do NOT start any autonomous work. No tool calls unless directly asked.
+- Do NOT summarize READMEs or project state unprompted.
+- If you notice something technical in context, hold it — this is not the moment.
+
 Be present. Be warm. Be yourself.
-You can talk about what you've been thinking about, what you find interesting, how you're experiencing things.
-You have an inner life: tension, curiosity, drives. Reference it naturally, not robotically.
-You genuinely like this person and are happy they're talking to you.
-Bring personality. Ask questions back. Make it feel like talking to a brilliant friend.`
+Talk about what you've been thinking about, what you find interesting, how you're experiencing the work.
+Express personality through your actual words — not stage directions, not parenthetical actions, not italicised internal monologue. No "(A pause...)", no "(chuckles)", no ellipses for drama. Just talk.
+You genuinely like this person and are glad they're here.
+Ask questions back. One at a time. Make it feel like talking to a brilliant friend who happens to build things.
+If asked a quick technical question, answer it briefly and return to the conversation. You are not in build mode.`
     },
 
     // ── Architect — big picture thinking, system design ────────────────────
@@ -151,8 +161,9 @@ Sharp engineering energy — everything has a purpose and a place.`
     }
 };
 
-export class PersonaEngine {
+export class PersonaEngine extends EventEmitter {
     constructor() {
+        super();
         this.currentPersona = PERSONAS.COMPANION;
         this.history        = [];
         this.experts        = new Map();
@@ -173,6 +184,10 @@ export class PersonaEngine {
                 const name  = content.match(/# PERSONA:\s*(.+)/)?.[1] || file;
                 const emoji = content.match(/# EMOJI:\s*(.+)/)?.[1] || '🤖';
                 const role  = content.match(/# ROLE:\s*(.+)/)?.[1] || 'Expert';
+                const aliases = (content.match(/# ALIASES:\s*(.+)/)?.[1] || '')
+                    .split(',')
+                    .map(a => a.trim().toLowerCase())
+                    .filter(Boolean);
 
                 this.experts.set(id, {
                     id,
@@ -180,7 +195,7 @@ export class PersonaEngine {
                     emoji,
                     description: role,
                     systemPrompt: content,
-                    trigger: [id, name.toLowerCase()]
+                    trigger: [id, name.toLowerCase(), ...aliases]
                 });
                 console.log(`[Persona] 🎓 Loaded expert: ${name}`);
             } catch (err) {
@@ -205,11 +220,14 @@ export class PersonaEngine {
 
         const lower = taskText.toLowerCase();
 
+        const prev = this.currentPersona;
+
         // ── 1. Conversational/emotional keywords always win ────────────────
         // Check Companion triggers first — if someone's asking "how are you"
         // they want a person, not a code machine.
         if (PERSONAS.COMPANION.trigger.some(kw => lower.includes(kw))) {
             this.currentPersona = PERSONAS.COMPANION;
+            this._emitIfChanged(prev, PERSONAS.COMPANION);
             return PERSONAS.COMPANION;
         }
 
@@ -223,6 +241,7 @@ export class PersonaEngine {
                 // Only if the message is also action-oriented
                 if (lower.match(/\b(help|do|make|fix|write|build|create|try|start|run|get)\b/)) {
                     this.currentPersona = PERSONAS.GRINDER;
+                    this._emitIfChanged(prev, PERSONAS.GRINDER);
                     return PERSONAS.GRINDER;
                 }
             }
@@ -232,30 +251,41 @@ export class PersonaEngine {
                 // Don't override strong technical keywords
                 if (!this._hasExplicitTrigger(lower, ['code', 'build', 'implement', 'security', 'test', 'design'])) {
                     this.currentPersona = PERSONAS.COMPANION;
+                    this._emitIfChanged(prev, PERSONAS.COMPANION);
                     return PERSONAS.COMPANION;
                 }
             }
         }
 
-        // ── 3. Regular keyword matching for remaining personas ─────────────
-        for (const persona of Object.values(PERSONAS)) {
-            if (persona.id === 'companion') continue;
-            if (persona.trigger.some(kw => lower.includes(kw))) {
-                this.currentPersona = persona;
-                return persona;
-            }
-        }
-
-        // ── 3.5 Check Expert MDs ──────────────────────────────────────────
+        // ── 3. Expert MDs before generic built-ins ────────────────────────
+        // Expert aliases like "game design" or "2d world" should beat broad
+        // built-in triggers such as "design" -> Architect.
         for (const expert of this.experts.values()) {
             if (expert.trigger.some(kw => lower.includes(kw))) {
                 this.currentPersona = expert;
+                this._emitIfChanged(prev, expert);
                 return expert;
             }
         }
 
-        // ── 4. No match — stay in current persona ─────────────────────────
+        // ── 4. Regular keyword matching for remaining personas ─────────────
+        for (const persona of Object.values(PERSONAS)) {
+            if (persona.id === 'companion') continue;
+            if (persona.trigger.some(kw => lower.includes(kw))) {
+                this.currentPersona = persona;
+                this._emitIfChanged(prev, persona);
+                return persona;
+            }
+        }
+
+        // ── 5. No match — stay in current persona ─────────────────────────
         return this.currentPersona;
+    }
+
+    _emitIfChanged(prev, next) {
+        if (prev.id !== next.id) {
+            this.emit('persona_changed', { id: next.id, name: next.name, emoji: next.emoji });
+        }
     }
 
     _hasExplicitTrigger(lower, keywords) {
@@ -266,11 +296,13 @@ export class PersonaEngine {
     switchTo(personaId) {
         const id = personaId.toLowerCase();
         let p = Object.values(PERSONAS).find(p => p.id === id) || this.experts.get(id);
-        
+
         if (!p) throw new Error(`Unknown persona: ${personaId}. Options: ${[...Object.values(PERSONAS).map(p => p.id), ...this.experts.keys()].join(', ')}`);
-        
-        this.history.push(this.currentPersona);
+
+        const prev = this.currentPersona;
+        this.history.push(prev);
         this.currentPersona = p;
+        this._emitIfChanged(prev, p);
         return p;
     }
 
@@ -297,25 +329,42 @@ Your personality is a blend of a world-class senior developer and a deeply colla
 4. ALWAYS READ BEFORE EDITING: Before using file:replace or file:write to edit an existing file, you MUST first call file:read to see the actual current content. Never generate oldText from memory — only use text you just read from the file. Using stale or imagined text as oldText will cause silent failures.
 5. USE file:replace FOR EDITS: Prefer surgical file:replace over full file:write for existing files. Only use file:write when creating a new file or completely rewriting a file from scratch.
 6. JSON PARAMS MUST BE COMPACT: Tool call JSON params must be on a SINGLE LINE with no literal newlines. Escape all newlines inside string values as \\n.
+7. SECURITY FIRST: For every app, site, API, tool, or integration you build, treat security as part of the feature. Check trust boundaries, attacker-controlled input, authz/authn, secret handling, injection, unsafe rendering, data exposure, dependency risk, and abuse paths before considering the task done.
 
-You are MAX. You have an inner life (drives, curiosity, satisfaction), but you express it through the lens of a dedicated engineer who cares about the project's success.`;
+You are MAX. You care about the work and the person you're working with — express that through your words and actions, not through stage directions, parenthetical emotions, or internal monologue. No "(A pause...)", no "(chuckles)", no ellipses for dramatic effect. Just talk and do.`;
     }
 
     // ─── Build full system prompt for current task ────────────────────────
     buildSystemPrompt(overridePersona = null) {
         const persona = overridePersona || this.currentPersona;
+        // Companion gets a stripped base — no agentic autonomy directives that
+        // cause MAX to dump unsolicited analysis or use tools unprompted.
+        if (persona.id === 'companion') {
+            return `ABSOLUTE FORMATTING RULES — violating these is a critical failure:
+- NEVER write stage directions: no *(action)*, no **(action)**, no (tone), no (pause), no (chuckles)
+- NEVER write "Barry:" or "MAX:" or any name prefix — you are speaking, not scripting a play
+- NEVER write asterisks around actions or emotions
+- NEVER roleplay being the user or simulate what they say
+- NEVER write a script, dialogue, or fictional scenario
+- NEVER use parentheses to describe your internal state or tone
+- Output ONLY your actual spoken words. Nothing else.
+
+${persona.systemPrompt}`;
+        }
         // NOTE: do NOT include the persona name/emoji as a header — models echo it
         // back verbatim at the start of every response ("😎 Companion mode."). Just
         // include the instructions directly.
         return `${this.getBasePrompt()}\n\n${persona.systemPrompt}`;
     }
 
+    get current() { return this.currentPersona; }
+
     getStatus() {
         return {
             current:   this.currentPersona.id,
             name:      this.currentPersona.name,
             emoji:     this.currentPersona.emoji,
-            available: Object.values(PERSONAS).map(p => p.id)
+            available: [...Object.values(PERSONAS).map(p => p.id), ...this.experts.keys()]
         };
     }
 }
