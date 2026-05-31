@@ -1,7 +1,7 @@
 import { SecurityCouncil } from '../../../core/SecurityCouncil.js';
 
 function makeCouncil(config = {}) {
-    return new SecurityCouncil({ agentBrain: { _ready: false } }, config);
+    return new SecurityCouncil({ agentBrain: { _ready: false } }, { enabled: true, ...config });
 }
 
 describe('SecurityCouncil', () => {
@@ -14,13 +14,13 @@ describe('SecurityCouncil', () => {
 
     it('is enabled by default', () => {
         delete process.env.MAX_SECURITY_COUNCIL;
-        const council = makeCouncil();
+        const council = new SecurityCouncil({ agentBrain: { _ready: false } });
         expect(council.getStatus().enabled).toBe(true);
     });
 
     it('can be disabled explicitly with MAX_SECURITY_COUNCIL=false', () => {
         process.env.MAX_SECURITY_COUNCIL = 'false';
-        const council = makeCouncil();
+        const council = new SecurityCouncil({ agentBrain: { _ready: false } });
         expect(council.getStatus().enabled).toBe(false);
     });
 

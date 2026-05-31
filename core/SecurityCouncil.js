@@ -20,7 +20,7 @@ import { EventEmitter } from 'events';
 // Static pattern checks — fast, no LLM needed
 const STATIC_PATTERNS = [
     // Secrets
-    { pattern: /['"]?(?:api[_-]?key|secret|password|token|passwd|auth)['"_-]?\s*[:=]\s*['"][^'"]{8,}['"]/i,
+    { pattern: /['"]?(?!author|authority|authorize|authentic|authenticate)(?:api[_-]?key|secret|password|token|passwd|auth)[A-Za-z0-9_-]*['"_-]?\s*[:=]\s*['"][^'"]{8,}['"]/i,
       severity: 'critical', issue: 'Hardcoded secret or credential detected' },
     { pattern: /(?:sk-|ghp_|xoxb-|AKIA)[A-Za-z0-9]{16,}/,
       severity: 'critical', issue: 'API key pattern detected (OpenAI/GitHub/Slack/AWS)' },
