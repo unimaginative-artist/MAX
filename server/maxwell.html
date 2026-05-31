@@ -14,8 +14,17 @@
 // Save React/Babel's require context before Monaco clobbers it
 window.__savedRequire = window.require;
 window.MonacoEnvironment = {
-  getWorkerUrl: function() {
-    return 'data:text/javascript;charset=utf-8,' + encodeURIComponent('self.onmessage=function(){};');
+  getWorkerUrl: function(workerId, label) {
+    const base = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs';
+    const paths = {
+      json: 'language/json/json.worker.js',
+      css: 'language/css/css.worker.js', scss: 'language/css/css.worker.js', less: 'language/css/css.worker.js',
+      html: 'language/html/html.worker.js', handlebars: 'language/html/html.worker.js', razor: 'language/html/html.worker.js',
+      typescript: 'language/typescript/ts.worker.js', javascript: 'language/typescript/ts.worker.js',
+    };
+    const workerUrl = `${base}/${paths[label] || 'editor/editor.worker.js'}`;
+    // Blob proxy: importScripts is allowed cross-origin inside workers, bypassing same-origin restriction
+    return URL.createObjectURL(new Blob([`importScripts('${workerUrl}');`], { type: 'text/javascript' }));
   }
 };
 </script>
@@ -1797,6 +1806,75 @@ function ClarificationCard({ msg, maxUrl, onAnswered }) {
           </div>
         )}
         {submitted && <div style={{marginTop:8,fontSize:10,color:'var(--green)'}}>✓ Answers submitted — MAX will continue with context.</div>}
+      </div>
+    </div>
+  );
+}
+
+function ApprovalCard({ msg, maxUrl, onResolved }) {
+  const [state, setState] = React.useState('pending'); // 'pending' | 'approved' | 'denied' | 'sending'
+
+  const respond = async (decision) => {
+    setState('sending');
+    try {
+      await fetch(`${maxUrl}/api/agent/${decision}`, {
+        method: 'POST',
+        headers: authHdrs(),
+      });
+      setState(decision === 'approve' ? 'approved' : 'denied');
+      onResolved?.(msg.id);
+      if (decision === 'approve') playAccept(); else playReject();
+    } catch {
+      setState('pending');
+    }
+  };
+
+  const tool   = msg.tool || '?';
+  const action = msg.action || '?';
+  const file   = msg.params?.filePath || msg.params?.path || msg.params?.command || '';
+
+  return (
+    <div style={{
+      margin:'8px 0', borderRadius:8, overflow:'hidden',
+      border: state === 'approved' ? '1px solid rgba(16,185,129,.4)'
+            : state === 'denied'   ? '1px solid rgba(239,68,68,.3)'
+            : '1px solid rgba(245,158,11,.5)',
+      background: state === 'approved' ? 'rgba(16,185,129,.05)'
+               : state === 'denied'   ? 'rgba(239,68,68,.04)'
+               : 'rgba(245,158,11,.06)',
+    }}>
+      <div style={{padding:'8px 12px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',gap:8}}>
+        <span style={{fontSize:13}}>{state==='approved'?'✅':state==='denied'?'🚫':'🔐'}</span>
+        <span style={{fontSize:12,fontWeight:600,color: state==='approved'?'var(--green)':state==='denied'?'var(--red)':'var(--amber)'}}>
+          {state==='approved'?'Approved':state==='denied'?'Denied':'Approval required'}
+        </span>
+        <span style={{fontSize:10,color:'var(--muted)',flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{msg.goalTitle||msg.goal?.title||''}</span>
+      </div>
+      <div style={{padding:'10px 12px'}}>
+        <div style={{display:'flex',gap:8,marginBottom:8,flexWrap:'wrap'}}>
+          <span style={{fontSize:11,color:'var(--amber)',fontFamily:'var(--mono)',background:'rgba(245,158,11,.1)',padding:'2px 7px',borderRadius:4,border:'1px solid rgba(245,158,11,.25)'}}>{tool}.{action}</span>
+          {file && <span style={{fontSize:11,color:'var(--accent2)',fontFamily:'var(--mono)',background:'var(--s3)',padding:'2px 7px',borderRadius:4,maxWidth:220,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{file.split(/[\\/]/).pop()}</span>}
+        </div>
+        {msg.params?.content && state === 'pending' && (
+          <pre style={{fontSize:10,fontFamily:'var(--mono)',color:'var(--muted)',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:4,padding:'6px 8px',maxHeight:80,overflow:'auto',marginBottom:8,whiteSpace:'pre-wrap',wordBreak:'break-all'}}>
+            {String(msg.params.content).slice(0,300)}{msg.params.content.length>300?'…':''}
+          </pre>
+        )}
+        {state === 'pending' && (
+          <div style={{display:'flex',gap:8}}>
+            <button onClick={()=>respond('approve')} disabled={state==='sending'}
+              style={{background:'rgba(16,185,129,.15)',border:'1px solid rgba(16,185,129,.4)',borderRadius:5,color:'var(--green)',padding:'4px 14px',fontSize:11,fontWeight:700,cursor:'pointer'}}>
+              ✓ Approve
+            </button>
+            <button onClick={()=>respond('deny')} disabled={state==='sending'}
+              style={{background:'rgba(239,68,68,.1)',border:'1px solid rgba(239,68,68,.3)',borderRadius:5,color:'var(--red)',padding:'4px 12px',fontSize:11,fontWeight:700,cursor:'pointer'}}>
+              ✕ Deny
+            </button>
+          </div>
+        )}
+        {state === 'sending' && <div style={{fontSize:11,color:'var(--muted)',fontStyle:'italic'}}>Sending…</div>}
+        {state === 'approved' && <div style={{fontSize:10,color:'var(--green)'}}>✓ Approved — MAX will continue.</div>}
+        {state === 'denied'   && <div style={{fontSize:10,color:'var(--red)'}}>✕ Denied — MAX will skip this step.</div>}
       </div>
     </div>
   );
@@ -5276,6 +5354,23 @@ function App() {
             answered: false,
           }]);
         }
+        if (msg.type === 'approval_needed') {
+          playReject(); // alert tone
+          setMessages(m => [...m, {
+            id: nextMsgId(),
+            role: 'approval',
+            goalId: msg.goalId,
+            goalTitle: msg.goalTitle || msg.goal?.title,
+            goal: msg.goal,
+            tool: msg.tool,
+            action: msg.action,
+            params: msg.params,
+            resolved: false,
+          }]);
+        }
+        if (msg.type === 'approval_granted' || msg.type === 'approval_denied') {
+          setMessages(m => m.map(x => x.role === 'approval' && !x.resolved ? { ...x, resolved: true } : x));
+        }
       } catch (err) { console.warn('[WS] Message error:', err); }
     };
     ws.onclose = () => console.warn('[WS] Closed');
@@ -5618,6 +5713,23 @@ function App() {
                   questions: d.questions,
                   answered: false,
                 }]);
+              }
+              if(d.type==='approval_needed'){
+                playReject();
+                setMessages(m=>[...m,{
+                  id: nextMsgId(),
+                  role: 'approval',
+                  goalId: d.goalId,
+                  goalTitle: d.goalTitle || d.goal?.title,
+                  goal: d.goal,
+                  tool: d.tool,
+                  action: d.action,
+                  params: d.params,
+                  resolved: false,
+                }]);
+              }
+              if(d.type==='approval_granted'||d.type==='approval_denied'){
+                setMessages(m=>m.map(x=>x.role==='approval'&&!x.resolved?{...x,resolved:true}:x));
               }
               // max.say() — always surface as a real chat bubble so Barry sees it
               if(d.type==='agent_say' && d.text){
@@ -6745,7 +6857,10 @@ function App() {
                 : msg.role==='clarification'
                   ? <ClarificationCard key={msg.id} msg={msg} maxUrl={maxUrl}
                       onAnswered={id=>setMessages(m=>m.map(x=>x.id===id?{...x,answered:true}:x))}/>
-                  : <MaxMsg key={msg.id} msg={msg} pendingChanges={pendingChanges} setPendingChanges={setPendingChanges} setActiveTab={setActiveTab}/>
+                  : msg.role==='approval'
+                    ? <ApprovalCard key={msg.id} msg={msg} maxUrl={maxUrl}
+                        onResolved={id=>setMessages(m=>m.map(x=>x.id===id?{...x,resolved:true}:x))}/>
+                    : <MaxMsg key={msg.id} msg={msg} pendingChanges={pendingChanges} setPendingChanges={setPendingChanges} setActiveTab={setActiveTab}/>
             )}
             {isThinking && <Thinking label={thinkLabel} onAbort={handleAbort}/>}
             <div ref={messagesEndRef}/>

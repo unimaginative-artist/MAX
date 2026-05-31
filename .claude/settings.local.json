@@ -20,7 +20,30 @@
       "Bash(ollama rm:*)",
       "Bash(cd:*)",
       "Bash(find:*)",
-      "Bash(git merge *)"
+      "Bash(git merge *)",
+      "Bash(xargs git branch -D)",
+      "Bash(git worktree *)",
+      "Bash(git branch *)",
+      "Bash(node launcher.mjs --mode api)",
+      "Bash(Start-Sleep 8)",
+      "Bash(Get-Content \"C:\\\\Users\\\\barry\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-barry-Desktop-MAX\\\\64e4e641-87e5-47a0-ba3d-b330061b78ac\\\\tasks\\\\b5x1c3t06.output\")",
+      "Bash(Select-Object -Skip 40)",
+      "Bash(pkill -f \"node launcher.mjs\")",
+      "Bash(pkill -f \"launcher.mjs\")",
+      "Bash(git commit -m ' *)",
+      "Bash(echo \"EXIT_CODE: $?\")",
+      "Bash(node -e ' *)",
+      "Bash(netstat -ano)",
+      "Bash(findstr \":3100\")",
+      "Bash(findstr \"LISTENING\")",
+      "Bash(taskkill *)",
+      "PowerShell(Stop-Process *)",
+      "Bash(node --check core/PortUtils.js)",
+      "Bash(node --check core/AgentLoop.js)",
+      "Bash(node --check server/server.js)",
+      "Bash(Select-String -Path \"server/server.js\" -Pattern \"api/debate|api/inspect|inspect.*scan\")",
+      "Bash(Start-Sleep -Seconds 18)",
+      "Bash(Get-Content \"C:\\\\Users\\\\barry\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-barry-Desktop-MAX\\\\fa7fc7cf-2f99-4837-85ea-7935d8c8512d\\\\tasks\\\\bshd7yr3b.output\")"
     ]
   }
 }

@@ -8,6 +8,8 @@ export function checkPort(port) {
         const srv = net.createServer();
         srv.once('error', () => resolve(false));
         srv.once('listening', () => srv.close(() => resolve(true)));
-        srv.listen(port, '127.0.0.1');
+        // No host: binds to the wildcard (:: on IPv6-enabled systems, same as the actual server).
+        // Binding to '127.0.0.1' misses the case where another process holds :::PORT on Windows.
+        srv.listen(port);
     });
 }

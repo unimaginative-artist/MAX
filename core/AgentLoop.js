@@ -1,4 +1,4 @@
-﻿// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // AgentLoop.js â€” MAX's autonomous execution engine
 //
 // This is what makes MAX agentic. When the heartbeat fires, the AgentLoop:
@@ -687,7 +687,6 @@ export class AgentLoop extends EventEmitter {
                     const isFileMod = toolName === 'file' && ['write', 'replace', 'edit', 'patch'].includes(action);
                     if (isFileMod && toolParams.filePath) {
                         try {
-                            const fs = await import('fs/promises');
                             originalContent = await fs.readFile(toolParams.filePath, 'utf8');
                         } catch { /* file might not exist yet, which is fine for 'write' */ }
                     }
@@ -727,9 +726,8 @@ export class AgentLoop extends EventEmitter {
 
                                 if (hasError) {
                                     console.warn(`  [AgentLoop] ❌ Shadow Validation Failed! Reverting change.`);
-                                    // Auto-revert the broken code
-                                    const fs = await import('fs/promises');
-                                    if (originalContent !== null) {
+                                     // Auto-revert the broken code
+                                     if (originalContent !== null) {
                                         await fs.writeFile(toolParams.filePath, originalContent);
                                     } else {
                                         await fs.unlink(toolParams.filePath).catch(() => {});

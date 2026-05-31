@@ -57,10 +57,35 @@ export class ToolRegistry {
 
     /**
      * Parse and execute a tool call from raw LLM output.
-     * Expected format: TOOL:toolName:actionName:{"param":"value"}
+     * Supports both modern JSON-first structure and legacy TOOL: format.
      */
     async executeLLMToolCall(rawCall) {
         const trimmed = rawCall.trim();
+
+        // 1. Try Native JSON format first
+        try {
+            // Find the first and last brace to extract JSON even if surrounded by text
+            const jsonStart = trimmed.indexOf('{');
+            const jsonEnd = trimmed.lastIndexOf('}');
+            if (jsonStart !== -1 && jsonEnd !== -1 && jsonStart < jsonEnd) {
+                const jsonStr = trimmed.slice(jsonStart, jsonEnd + 1);
+                const parsed = JSON.parse(jsonStr);
+                
+                // If it strictly matches our native JSON tool schema
+                if (parsed.tool && parsed.action) {
+                    return await this.execute(parsed.tool, parsed.action, parsed.params || {});
+                }
+                // Support MCP/OpenAI/Anthropic tool call style schemas
+                if (parsed.name && parsed.arguments) {
+                    const [toolName, action] = parsed.name.includes('.') ? parsed.name.split('.') : [parsed.name, 'run'];
+                    return await this.execute(toolName, action, parsed.arguments);
+                }
+            }
+        } catch (err) {
+            // Fall through to legacy parsing if JSON parsing fails
+        }
+
+        // 2. Legacy fallback
         // Lenient prefix check — allow "TOOL : " or "TOOL:"
         if (!/^TOOL\s*:/i.test(trimmed)) return null;
 

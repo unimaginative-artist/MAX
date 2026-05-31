@@ -41,6 +41,7 @@ import { createSystemTool }    from '../tools/SystemTool.js';
 import { DiscordTool, autoConnectDiscord } from '../tools/DiscordTool.js';
 import { EmailTool,   autoConnectEmail   } from '../tools/EmailTool.js';
 import { KnowledgeTool }      from '../tools/KnowledgeTool.js';
+import { AppSecBreakerTool } from '../tools/AppSecBreakerTool.js';
 import { SwarmCoordinator }   from '../swarm/SwarmCoordinator.js';
 import { MaxMemory }          from '../memory/MaxMemory.js';
 import { KnowledgeBase }      from '../memory/KnowledgeBase.js';
@@ -336,6 +337,7 @@ export class MAX {
         this.tools.register(GameWorldTool);
         this.tools.register(GameCodeTool);
         this.tools.register(GameAssetFetcherTool);
+        this.tools.register(AppSecBreakerTool);
         this._installAutonomyPolicy();
 
         // Seal the SkillMutator primitive registry now that all tools are registered

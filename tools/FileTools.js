@@ -4,7 +4,7 @@
 
 import fs   from 'fs/promises';
 import path  from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 
 export const FileTools = {
     name: 'file',
@@ -413,7 +413,7 @@ function verifySyntax(filePath, content) {
     } else if (ext === '.js' || ext === '.mjs' || ext === '.cjs') {
         try {
             // node --check is the only reliable way to verify ESM syntax
-            execSync(`node --check "${filePath}"`, { stdio: 'ignore' });
+            execFileSync('node', ['--check', filePath], { stdio: 'ignore' });
         } catch (e) {
             return `Syntax check failed: ${e.message}`;
         }

@@ -24,6 +24,7 @@ const execAsync = promisify(exec);
 
 // ── Persistent state ──
 let _procs = new Map();              // name → { pid, proc, command, started, log }
+const _sessionShells = new Map();    // sessionId → VirtualShell
 
 // The true persistent shell
 const vShell = new VirtualShell();
@@ -47,6 +48,37 @@ vShell.on('data_err', (data) => {
         if (l) printShellLine(l, true);
     }
 });
+
+function getShellForSession(sessionId) {
+    if (!sessionId) {
+        return vShell;
+    }
+    if (_sessionShells.has(sessionId)) {
+        return _sessionShells.get(sessionId);
+    }
+    const sessShell = new VirtualShell();
+    sessShell.start();
+
+    sessShell.on('data', (data) => {
+        const lines = data.split(/\r?\n/);
+        for (const l of lines) {
+            if (!l) continue;
+            if (l.includes('__EXIT_CODE_') || l.includes('__MAX_SHELL_DONE_')) continue;
+            if (/^[A-Za-z]:[\\\/].*>/.test(l.trim())) continue;
+            printShellLine(`[${sessionId}] ${l}`);
+        }
+    });
+
+    sessShell.on('data_err', (data) => {
+        const lines = data.split(/\r?\n/);
+        for (const l of lines) {
+            if (l) printShellLine(`[${sessionId}] ${l}`, true);
+        }
+    });
+
+    _sessionShells.set(sessionId, sessShell);
+    return sessShell;
+}
 
 const PID_FILE = path.join(process.env.USERPROFILE || process.env.HOME || '.', '.max', 'pids.json');
 
@@ -131,7 +163,7 @@ export const ShellTool = {
     description: 'Run shell commands with a stateful Virtual Shell. Keeps working directory and environment variables persistent. Can start/stop background daemons.',
 
     actions: {
-        async run({ command, timeoutMs = 120_000, signal = null }) {
+        async run({ command, timeoutMs = 120_000, signal = null, sessionId = null }) {
             const blocked = isBlocked(command);
             if (blocked) return { success: false, error: blocked };
 
@@ -139,7 +171,8 @@ export const ShellTool = {
             const start = Date.now();
 
             try {
-                const res = await vShell.run(command, timeoutMs, signal);
+                const shell = getShellForSession(sessionId);
+                const res = await shell.run(command, timeoutMs, signal);
                 const ms = Date.now() - start;
                 printShellFooter(res.code, ms);
 
@@ -260,16 +293,39 @@ export const ShellTool = {
             return { success: true, processes: list, count: list.length };
         },
 
-        async cd({ path: targetPath }) {
+        async cd({ path: targetPath, sessionId = null }) {
             // Because we use a Virtual Shell, we just pass the 'cd' command directly to it!
-            const res = await vShell.run(`cd "${targetPath}"`);
+            const shell = getShellForSession(sessionId);
+            const res = await shell.run(`cd "${targetPath}"`);
             return { success: res.success, output: res.stdout, error: res.stderr };
         },
 
-        async which({ program }) {
+        async which({ program, sessionId = null }) {
             const cmd = process.platform === 'win32' ? `where ${program}` : `which ${program}`;
-            const res = await vShell.run(cmd, 5000);
+            const shell = getShellForSession(sessionId);
+            const res = await shell.run(cmd, 5000);
             return { success: true, found: res.success, path: res.stdout.trim() };
+        },
+
+        async cleanupSession({ sessionId }) {
+            if (sessionId && _sessionShells.has(sessionId)) {
+                const shell = _sessionShells.get(sessionId);
+                if (shell.proc && shell.proc.pid) {
+                    try {
+                        await _killByPid(shell.proc.pid);
+                    } catch (err) {
+                        console.warn(`Failed to kill process group for shell session ${sessionId}:`, err.message);
+                    }
+                }
+                try {
+                    shell.stop();
+                } catch (err) {
+                    console.warn(`Error stopping shell session ${sessionId}:`, err.message);
+                }
+                _sessionShells.delete(sessionId);
+                console.log(`[ShellTool] Cleaned up shell session ${sessionId}`);
+            }
+            return { success: true };
         }
     }
 };

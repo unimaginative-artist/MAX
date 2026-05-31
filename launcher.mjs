@@ -407,6 +407,7 @@ async function main() {
 
     // Check port BEFORE expensive initialization so we fail fast
     const port = +(opts.port || process.env.MAX_PORT || 3100);
+    const host = process.env.MAX_HOST || process.env.HOST || '127.0.0.1';
     const portFree = await checkPort(port);
     if (!portFree) {
         console.error(`[Launcher] ❌ Port ${port} is already in use. Stop the existing process or set MAX_PORT to a free port.`);
@@ -427,7 +428,7 @@ async function main() {
     await max.initialize();
 
     const { createServer } = await import('./server/server.js');
-    await createServer(max, port);
+    await createServer(max, port, host);
 
     if (opts.mode === 'chat') {
         await chatMode(max, opts);

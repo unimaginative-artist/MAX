@@ -52,7 +52,7 @@ function trackRequest(sessionId, tokensUsed = 0) {
     _sessions.set(sessionId, s);
 }
 
-export async function createServer(max, port = 3100) {
+export async function createServer(max, port = 3100, host = process.env.MAX_HOST || process.env.HOST || '127.0.0.1') {
     const API_KEY = loadOrCreateApiKey();
     const app = express();
     const httpServer = createHttpServer(app);
@@ -193,17 +193,15 @@ export async function createServer(max, port = 3100) {
                         try { ws.send(JSON.stringify({ type: 'token', text: token, requestId: msg.requestId })); } catch {}
                     };
 
-                    // ── Instant fast-tier ack (Ollama, <1s) ──────────────────────────
-                    // Fires directly on the brain, bypassing the chat queue.
-                    // Gives the user immediate visual feedback before DeepSeek responds.
+                    // ── Instant ack — static string sent before the real LLM responds ────
+                    // This is NOT from the fast model — it's a hardcoded acknowledgement
+                    // sent immediately so the UI shows something while DeepSeek is warming up.
                     if (max.brain?._fast?.ready && tier !== 'fast') {
                         const ACK_PROMPT = [
                             'On it.', 'Got it.', 'Looking into that.', 'Let me check.',
                             'On it, one sec.', 'Working on it.', 'Sure thing.'
                         ];
-                        const pick = ACK_PROMPT[Math.floor(Math.random() * ACK_PROMPT.length)];
-                        // Send ack immediately as pre-seeded tokens, no LLM call needed
-                        sendToken(pick + '\n\n');
+                        sendToken(ACK_PROMPT[Math.floor(Math.random() * ACK_PROMPT.length)] + '\n\n');
                     }
 
                     // ── Full smart-tier response ──────────────────────────────────────
@@ -558,12 +556,22 @@ export async function createServer(max, port = 3100) {
     // so the frontend can authenticate without requiring manual key entry.
     function serveMaxwell(req, res) {
         try {
+            const ip = req.ip || req.socket.remoteAddress || '';
+            const isLocal = ip === '127.0.0.1' || 
+                            ip === '::1' || 
+                            ip === '::ffff:127.0.0.1' || 
+                            req.hostname === 'localhost' || 
+                            req.hostname === '127.0.0.1';
+
             let html = readFileSync(join(__dirname, 'maxwell.html'), 'utf8');
+            const keyToInject = isLocal ? API_KEY : '';
             const injection = `<script>
-window.__MAX_API_KEY = ${JSON.stringify(API_KEY)};
+window.__MAX_API_KEY = ${JSON.stringify(keyToInject)};
 window.__MAX_BASE_URL = 'http://localhost:${port}';
 window.MAX_URL = window.__MAX_BASE_URL;
-try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } catch(e) {}
+if (${isLocal}) {
+    try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } catch(e) {}
+}
 </script>`;
             if (html.includes('</head>')) {
                 html = html.replace('</head>', `${injection}\n</head>`);
@@ -1560,8 +1568,8 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
     });
 
     await new Promise((resolve, reject) => {
-        const server = httpServer.listen(port, () => {
-            console.log(`[MAX] 🌐 API  →  http://localhost:${port}`);
+        const server = httpServer.listen(port, host, () => {
+            console.log(`[MAX] 🌐 API  →  http://${host}:${port}`);
             console.log(`[MAX]   POST /api/chat                    — streaming chat (SSE)`);
             console.log(`[MAX]   WS   /api/events                  — bidirectional (WebSockets)`);
             console.log(`[MAX]   GET  /api/events                  — SSE live feed`);
@@ -1573,16 +1581,20 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
             console.log(`[MAX]   POST /api/processes/:name/monitor — start health monitoring`);
             console.log(`[MAX]   GET  /api/goals                   — list goals`);
             console.log(`[MAX]   GET  /api/status                  — system status`);
-            console.log(`[MAX] 🎨 IDE  →  http://localhost:${port}/maxwell`);
+            console.log(`[MAX] 🎨 IDE  →  http://${host}:${port}/maxwell`);
             resolve();
         });
         server.on('error', (err) => {
             if (err.code === 'EADDRINUSE') {
-                console.warn(`[MAX] ⚠️  Port ${port} in use — web UI unavailable (kill old MAX process or change MAX_PORT)`);
+                console.error(`\n[MAX] ❌ Port ${port} is already in use — another MAX instance is running.`);
+                console.error(`[MAX]    Find the PID:  netstat -ano | findstr :${port}`);
+                console.error(`[MAX]    Kill it:       taskkill /PID <pid> /F`);
+                console.error(`[MAX]    Or change port: set MAX_PORT=<free_port> in config/api-keys.env\n`);
+                process.exit(1);
             } else {
                 console.error('[MAX] Server error:', err.message);
+                reject(err);
             }
-            reject(err);
         });
     });
 
