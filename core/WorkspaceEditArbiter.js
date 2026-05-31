@@ -11,7 +11,12 @@ export class WorkspaceEditArbiter extends EventEmitter {
     constructor(max, config = {}) {
         super();
         this.max = max;
-        this._autoApplyMs   = config.autoApplyMs ?? 30_000;
+        
+        let autoApplyMs = config.autoApplyMs ?? 30_000;
+        if (process.env.MAX_AUTO_APPLY_PROPOSALS === 'false') {
+            autoApplyMs = 0;
+        }
+        this._autoApplyMs   = autoApplyMs;
         this.pendingEdits   = new Map(); // editId -> editDetails
         this._pendingTimers = new Map(); // editId -> timer
     }
@@ -35,25 +40,31 @@ export class WorkspaceEditArbiter extends EventEmitter {
         console.log(`[WorkspaceEdit] 🚀 Proposed ${type} for ${filePath} (${editId})`);
         this.emit('editProposed', proposal);
 
-        // If IDE doesn't accept within 30s, apply directly so the edit isn't lost.
-        const timer = setTimeout(async () => {
-            if (!this.pendingEdits.has(editId)) return; // already accepted/rejected
-            console.log(`[WorkspaceEdit] ⏱️  No IDE response for ${filePath} — applying directly.`);
-            this.pendingEdits.delete(editId);
-            try {
-                const result = await this.max.tools.execute('file', type, { ...params, __applyProposal: true });
-                this.emit('editApplied', { id: editId, result });
-            } catch (err) {
-                this.emit('editFailed', { id: editId, error: err.message });
-            }
-        }, this._autoApplyMs);
-        timer.unref?.();
-        this._pendingTimers.set(editId, timer);
+        if (this._autoApplyMs > 0) {
+            // If IDE doesn't accept within 30s, apply directly so the edit isn't lost.
+            const timer = setTimeout(async () => {
+                if (!this.pendingEdits.has(editId)) return; // already accepted/rejected
+                console.log(`[WorkspaceEdit] ⏱️  No IDE response for ${filePath} — applying directly.`);
+                this.pendingEdits.delete(editId);
+                try {
+                    const result = await this.max.tools.execute('file', type, { ...params, __applyProposal: true });
+                    this.emit('editApplied', { id: editId, result });
+                } catch (err) {
+                    this.emit('editFailed', { id: editId, error: err.message });
+                }
+            }, this._autoApplyMs);
+            timer.unref?.();
+            this._pendingTimers.set(editId, timer);
+        } else {
+            console.log(`[WorkspaceEdit] 🔒 Auto-apply disabled for ${filePath}. Awaiting strict manual approval in the IDE.`);
+        }
 
         return {
             success: true,
             editId,
-            message: `Edit proposed to IDE for ${filePath}. Awaiting UI approval (auto-applies in 30s if no response).`
+            message: this._autoApplyMs > 0
+                ? `Edit proposed to IDE for ${filePath}. Awaiting UI approval (auto-applies in ${this._autoApplyMs / 1000}s if no response).`
+                : `Edit proposed to IDE for ${filePath}. Awaiting strict manual approval (auto-apply is disabled).`
         };
     }
 

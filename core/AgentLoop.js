@@ -154,8 +154,9 @@ export class AgentLoop extends EventEmitter {
             return null;
         }
 
-        // ── 1.5 Clarification gate — ask before diving in ─────────────────
-        if (goal.source === 'user' && !goal._clarified) {
+        try {
+            // ── 1.5 Clarification gate — ask before diving in ─────────────────
+            if (goal.source === 'user' && !goal._clarified) {
             goal._clarified = true;
             const questions = await this._getClarifyingQuestions(goal);
             if (questions?.length) {
@@ -590,6 +591,18 @@ export class AgentLoop extends EventEmitter {
 
         this.emit('goalDone', { goal, success: goalSuccess });
         return { goal: goal.title, success: goalSuccess, summary: goalSummary };
+        } finally {
+            if (goal && goal.id) {
+                try {
+                    const shellTool = this.max.tools.get('shell');
+                    if (shellTool && shellTool.actions && shellTool.actions.cleanupSession) {
+                        await shellTool.actions.cleanupSession({ sessionId: goal.id });
+                    }
+                } catch (err) {
+                    console.warn(`  [AgentLoop] Failed to cleanup shell session ${goal.id}:`, err.message);
+                }
+            }
+        }
     }
 
     // ─── Execute a single step ─────────────────────────────────────────────
@@ -670,6 +683,7 @@ export class AgentLoop extends EventEmitter {
                         query:    action,       // web fallback
                         cwd:      process.cwd(),
                         signal,
+                        sessionId: goal.id,
                         ...(step.params || {})  // planner-specified params win
                     };
 

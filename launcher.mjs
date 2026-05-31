@@ -405,10 +405,9 @@ async function main() {
     const opts = parseArgs();
     console.log('[Launcher] 🚀 Booting MAX OMEGA...');
 
-    // Check port BEFORE expensive initialization so we fail fast
     const port = +(opts.port || process.env.MAX_PORT || 3100);
     const host = process.env.MAX_HOST || process.env.HOST || '127.0.0.1';
-    const portFree = await checkPort(port);
+    const portFree = await checkPort(port, host);
     if (!portFree) {
         console.error(`[Launcher] ❌ Port ${port} is already in use. Stop the existing process or set MAX_PORT to a free port.`);
         process.exit(1);
