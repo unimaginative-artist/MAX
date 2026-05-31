@@ -351,6 +351,9 @@ export class Environment {
             }
 
             if (variant) {
+                if (this.compositionMap.has(variant.signature)) {
+                    return null;
+                }
                 this.compositions.add(variant);
                 this.compositionMap.set(variant.signature, variant);
 
