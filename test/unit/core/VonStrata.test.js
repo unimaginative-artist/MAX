@@ -36,6 +36,41 @@ describe('VonStrata Structures', () => {
             expect(result).not.toBeNull();
             expect(result.data).toBe(30);
         });
+
+        it('executes strip_ansi on terminal text with color escapes', async () => {
+            const cell = new StratumCell('strip_ansi');
+            const payload = new Payload('\x1b[31mError:\x1b[0m Failed syntax check');
+            const result = await cell.execute(payload);
+            expect(result.data).toBe('Error: Failed syntax check');
+        });
+
+        it('executes extract_json on unstructured string text', async () => {
+            const cell = new StratumCell('extract_json');
+            const payload = new Payload('Some preamble stuff {"key": "val", "num": 123} trailing notes');
+            const result = await cell.execute(payload);
+            expect(result.data).toEqual({ key: 'val', num: 123 });
+        });
+
+        it('executes split_lines on a multiline string', async () => {
+            const cell = new StratumCell('split_lines');
+            const payload = new Payload('line1\nline2\r\nline3');
+            const result = await cell.execute(payload);
+            expect(result.data).toEqual(['line1', 'line2', 'line3']);
+        });
+
+        it('executes lowercase on a string', async () => {
+            const cell = new StratumCell('lowercase');
+            const payload = new Payload('SHOUTING TEXT');
+            const result = await cell.execute(payload);
+            expect(result.data).toBe('shouting text');
+        });
+
+        it('executes regex_filter on string arrays using context pattern', async () => {
+            const cell = new StratumCell('regex_filter');
+            const payload = new Payload(['apple', 'banana', 'apricot', 'cherry'], { pattern: '^ap' });
+            const result = await cell.execute(payload);
+            expect(result.data).toEqual(['apple', 'apricot']);
+        });
     });
 
     describe('CompositionCell & Chains', () => {

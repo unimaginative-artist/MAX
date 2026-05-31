@@ -103,6 +103,59 @@ TransformRegistry.register("double", (payload) => {
     return payload;
 });
 
+TransformRegistry.register("strip_ansi", (payload) => {
+    if (typeof payload.data === 'string') {
+        const clean = payload.data.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
+        return new Payload(clean, payload.context);
+    }
+    return payload;
+});
+
+TransformRegistry.register("extract_json", (payload) => {
+    if (typeof payload.data === 'string') {
+        const match = payload.data.match(/\{[\s\S]*?\}/);
+        if (match) {
+            try {
+                const obj = JSON.parse(match[0]);
+                return new Payload(obj, payload.context);
+            } catch (err) {
+                return new Payload(match[0], payload.context);
+            }
+        }
+    }
+    return payload;
+});
+
+TransformRegistry.register("split_lines", (payload) => {
+    if (typeof payload.data === 'string') {
+        return new Payload(payload.data.split(/\r?\n/), payload.context);
+    }
+    return payload;
+});
+
+TransformRegistry.register("lowercase", (payload) => {
+    if (typeof payload.data === 'string') {
+        return new Payload(payload.data.toLowerCase(), payload.context);
+    }
+    return payload;
+});
+
+TransformRegistry.register("regex_filter", (payload) => {
+    if (Array.isArray(payload.data)) {
+        const patternStr = payload.context.pattern;
+        if (patternStr) {
+            try {
+                const regex = new RegExp(patternStr, 'i');
+                const filtered = payload.data.filter(x => regex.test(String(x)));
+                return new Payload(filtered, payload.context);
+            } catch (err) {
+                return payload;
+            }
+        }
+    }
+    return payload;
+});
+
 TransformRegistry.seal();
 
 // ============================================================
