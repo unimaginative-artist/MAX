@@ -1,5 +1,5 @@
-# 📜 THE GRIMOIRE (v3.0)
-## Current Session State: LEVEL 12.0/12 (SECURITY COUNCIL ENHANCED & STABLE)
+# 📜 THE GRIMOIRE (v3.1)
+## Current Session State: LEVEL 13.0/13 (SELF-INSPECTION & HYDRA SCOUT ACTIVE)
 
 ### 🔱 Physical Reality (Port & Host Mappings)
 - **MAX Host Binding**: Defaults to loopback `127.0.0.1` (configurable via `MAX_HOST` or `HOST`).
@@ -23,6 +23,7 @@
 - [x] **Architectural Drift**: Solved via Self-Healing Sentinel.
 - [x] **Production Readiness & Security**: Zero-stubs, secure host resolution, safe command execution, and state isolation fully resolved.
 - [x] **Security Council False Positives & Test Leakage**: Excluded non-sensitive metadata keys (e.g. `author`) and isolated unit tests from external process environment settings.
+- [x] **Codebase Self-Maintenance & Swarm Targets**: Fixed and activated `SelfCodeInspector` in `MAX.js` for background `DreamLoop` scans, and secured `HydraController.js` targeting against hallucinated files.
 
 ### 🔱 Operator Directive: DEPLOYMENT
 - **Status**: |= READY (All unit and integration tests passing 100%).
