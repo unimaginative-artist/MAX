@@ -404,7 +404,7 @@ export class MAX {
         this.evolution.swarm = this.swarm; // Link swarm for adversarial reviews
         this.evolution.max   = this;       // Link MAX so UserProxy can read user profile
         this.toolCreator = new ToolCreator(this.brain, this.tools, path.join(__dirname, '..', 'tools', 'generated'));
-        this.selfInspector = new SelfCodeInspector(this.brain, this.memory);
+        this.selfInspector = new SelfCodeInspector(this.goals);
         this.reflection = new ReflectionEngine(this.brain, this.goals, this.outcomes, this.kb, this);
 
         // Initialize long-horizon planner (loads persisted DAG maps from disk)

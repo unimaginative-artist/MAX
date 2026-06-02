@@ -138,15 +138,33 @@ export class HydraController {
         console.log('\n[HYDRA-PRIME] ⚙️ Initiating Hephaestus Loop: Autonomous Self-Optimization...');
         
         try {
-            // 1. Scout identifies a bottleneck
+            // 1. Scout identifies a bottleneck from candidate files
             console.log('[HYDRA-SCOUT] 🔭 Scanning architecture for targets...');
+            
+            const coreFiles = await fs.readdir(path.join(this.basePath, 'core')).catch(() => []);
+            const toolsFiles = await fs.readdir(path.join(this.basePath, 'tools')).catch(() => []);
+            const candidateFiles = [
+                ...coreFiles.map(f => path.join('core', f)),
+                ...toolsFiles.map(f => path.join('tools', f))
+            ].filter(f => f.endsWith('.js') || f.endsWith('.mjs'));
+
             const scanResult = await this.max.brain.think(
-                "You are HYDRA-SCOUT. Identify one specific, isolated piece of technical debt or performance bottleneck in the MAX codebase that can be refactored safely. Output ONLY the file path and a 1-sentence reason.",
+                `You are HYDRA-SCOUT. Identify one specific, isolated piece of technical debt or performance bottleneck in the MAX codebase from the following list that can be refactored safely.
+CANDIDATE FILES:
+${candidateFiles.join('\n')}
+
+Output ONLY the chosen file path and a 1-sentence reason.`,
                 { tier: 'fast', maxTokens: 200 }
             );
 
             const targetMatch = scanResult.text?.match(/([a-zA-Z0-9_\-\/]+\.[a-z]+)/);
-            const target = targetMatch ? targetMatch[1] : null;
+            let target = targetMatch ? targetMatch[1] : null;
+
+            // Strict validation: Ensure target exists on disk
+            if (target && !existsSync(path.join(this.basePath, target))) {
+                console.warn(`[HYDRA-SCOUT] ⚠️ Target file ${target} does not exist. Falling back to tools/ToolRegistry.js.`);
+                target = 'tools/ToolRegistry.js';
+            }
 
             if (!target) {
                 console.log('[HYDRA-PRIME] ⏸️ No clear target identified. Swarm standing down.');

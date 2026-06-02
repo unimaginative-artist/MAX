@@ -42,14 +42,21 @@ export class DreamLoop {
         // ── 2. Scan for "Code Smells" ──────────────────────────────────────
         agentLoop?.emit('progress', { goal: 'Dreaming', step: 2, total: 4, action: 'Scanning for code smells' });
         try {
-            const result = await max.tools.execute('shell', 'run', { 
-                command: 'powershell -Command "Get-ChildItem -Recurse -Include *.js,*.mjs,*.cjs,*.md | Select-String -Pattern \'TODO|FIXME|HACK|XXX\' | Select-Object -First 20"' 
-            });
-            if (result.stdout) {
-                const count = result.stdout.split('\n').filter(l => l.trim()).length;
-                findings.push(`Found ${count} technical debt markers`);
+            if (max.selfInspector) {
+                const scanFindings = await max.selfInspector.inspect();
+                if (scanFindings && scanFindings.length > 0) {
+                    findings.push(`Found ${scanFindings.length} technical debt markers`);
+                    const queued = max.selfInspector.queueGoals(3);
+                    if (queued && queued.length > 0) {
+                        findings.push(`Queued ${queued.length} self-improvement goals`);
+                    }
+                } else {
+                    findings.push('No technical debt markers found');
+                }
             }
-        } catch { /* non-fatal */ }
+        } catch (err) {
+            findings.push(`Self-inspection failed: ${err.message}`);
+        }
 
         // ── 3. Optimize internal state ─────────────────────────────────────
         agentLoop?.emit('progress', { goal: 'Dreaming', step: 3, total: 5, action: 'Refining world model and curiosity' });
