@@ -1,10 +1,10 @@
 
 import fs from 'fs/promises';
 import path from 'path';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * EvolutionArbiter — Production-grade self-modification pipeline.
@@ -47,15 +47,15 @@ export class EvolutionArbiter {
 
         // 1. Basic Node.js syntax check
         try {
-            await execAsync(`node --check "${stagedPath}"`);
+            await execFileAsync('node', ['--check', stagedPath]);
         } catch (err) {
             return { success: false, error: `Syntax Error: ${err.stderr || err.message}` };
         }
 
         // 2. ESLint check (Production Grade)
         try {
-            // We use a basic config for safety
-            await execAsync(`npx eslint "${stagedPath}" --no-eslintrc --rule 'no-undef: error'`);
+            // We use a basic config for safety on Windows, npx requires shell: true
+            await execFileAsync('npx', ['eslint', stagedPath, '--no-eslintrc', '--rule', 'no-undef: error'], { shell: true });
         } catch (err) {
             // ESLint returns non-zero on warnings/errors
             if (err.stdout?.includes('error')) {
@@ -79,7 +79,7 @@ export class EvolutionArbiter {
             console.log(`[Evolution] 🧪 Running project test suite against change...`);
             // We run with --passWithNoTests so it doesn't fail if the user hasn't written any yet,
             // but if there ARE tests, they MUST pass.
-            await execAsync('npm test');
+            await execFileAsync('npm', ['test'], { shell: true });
         } catch (err) {
             return { 
                 success: false, 
@@ -97,7 +97,7 @@ export class EvolutionArbiter {
             const scriptPath = path.join(this.stagingDir, 'dry_run.js');
             await fs.writeFile(scriptPath, dryRunScript);
             
-            await execAsync(`node "${scriptPath}"`, { cwd: this.stagingDir });
+            await execFileAsync('node', [scriptPath], { cwd: this.stagingDir });
             await fs.unlink(scriptPath).catch(() => {});
         } catch (err) {
             return {

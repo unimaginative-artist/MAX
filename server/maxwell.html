@@ -1435,7 +1435,7 @@ function fileIcon(name) {
 
 // ── Personas ──────────────────────────────────────────────────
 const PERSONAS = {
-  companion: { icon:'◉', color:'#10b981', label:'Companion', desc:'Warm and encouraging. Explains things clearly, celebrates wins, never makes you feel dumb. Best for learning and pair programming.' },
+  muse:      { icon:'🔮', color:'#10b981', label:'Muse',      desc:'Self-aware companion intelligence. Reflects memory, association, and drive state.' },
   architect: { icon:'◈', color:'#60a5fa', label:'Architect', desc:'Systems thinker. Designs for scale, catches structural problems early, argues for the right abstraction over the quick fix.' },
   grinder:   { icon:'◎', color:'#f59e0b', label:'Grinder',   desc:'Head-down executor. Writes the code, ships the feature, asks questions later. Best when you just need things done fast.' },
   paranoid:  { icon:'◆', color:'#ef4444', label:'Paranoid',  desc:'Security-first auditor. Finds the edge cases, injection vectors, and failure modes everyone else missed. Trust nothing.' },
@@ -2211,7 +2211,7 @@ function stripInternalContext(text = '') {
 
 // ── MAX message ───────────────────────────────────────────────
 function MaxMsg({ msg, pendingChanges, setPendingChanges, setActiveTab }) {
-  const p = PERSONAS[msg.persona] || PERSONAS.companion;
+  const p = PERSONAS[msg.persona] || PERSONAS.muse;
   const tier = msg.modelTier || 'smart';
   const isLocal = tier === 'fast';
   if (msg.role === 'user') return (
@@ -3308,7 +3308,7 @@ function ChokoToast({ msg, onClose, typing, onSendToMax }) {
         <div className="choko-name">
           <div className="cn-dot"/>
           Choko
-          <span style={{fontSize:9,color:'var(--muted)',fontWeight:400,letterSpacing:0}}>companion</span>
+          <span style={{fontSize:9,color:'var(--muted)',fontWeight:400,letterSpacing:0}}>scout</span>
         </div>
         {typing
           ? <div className="choko-typing"><span/><span/><span/></div>
@@ -4075,7 +4075,7 @@ class ErrorBoundary extends React.Component {
 }
 
 // ── Persona picker dropdown ───────────────────────────────────────────────
-function PersonaPicker({ persona, maxUrl, setMaxStatus, authHdrs, onCompanion, onLeaveCompanion }) {
+function PersonaPicker({ persona, maxUrl, setMaxStatus, authHdrs, onMuse, onLeaveMuse }) {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef(null);
 
@@ -4090,8 +4090,8 @@ function PersonaPicker({ persona, maxUrl, setMaxStatus, authHdrs, onCompanion, o
     try {
       await fetch(`${maxUrl}/api/persona`, { method:'POST', headers:authHdrs(), body:JSON.stringify({ persona: id }) });
       setMaxStatus(s => ({ ...s, persona: id }));
-      if (id === 'companion') onCompanion?.();
-      else onLeaveCompanion?.();
+      if (id === 'muse') onMuse?.();
+      else onLeaveMuse?.();
     } catch {}
   };
 
@@ -4397,7 +4397,10 @@ function MuseRoomField({ messages, concepts, waveform='listening', ambient={inte
     if(onSend) onSend(t);
   };
   const onKey=(e)=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submit();}};
-  React.useEffect(()=>{ setTimeout(()=>inputRef.current?.focus(),300); },[]);
+  React.useEffect(()=>{
+    const t = setTimeout(()=>inputRef.current?.focus(),300);
+    return ()=>clearTimeout(t);
+  },[]);
   React.useEffect(()=>{ if(scrollRef.current) scrollRef.current.scrollTop=scrollRef.current.scrollHeight; },[messages]);
   const conv = messages.slice(-8);
   // Residue = short concept phrases only (≤3 words, ≤24 chars) — no full sentences
@@ -4434,7 +4437,7 @@ function MuseRoomField({ messages, concepts, waveform='listening', ambient={inte
       </div>
       <div style={{position:'absolute',top:20,left:'50%',transform:'translateX(-50%)',display:'flex',alignItems:'center',gap:10,fontSize:10,letterSpacing:'.3em',textTransform:'uppercase',color:MUSE.textMute,zIndex:5}}>
         <MuseSigMark size={13}/>
-        <span>MAX · Companion</span>
+        <span>MAX · Muse</span>
       </div>
       <div style={{position:'absolute',top:20,right:24,zIndex:5}}>
         <MuseRoomSwitcher current="field" onSwitch={onSwitch}/>
@@ -4616,7 +4619,10 @@ function MuseRoomConstellation({ messages, concepts, waveform='listening', ambie
   React.useEffect(()=>{
     let raf; const loop=()=>{setTick(p=>p+1);raf=requestAnimationFrame(loop);}; raf=requestAnimationFrame(loop); return ()=>cancelAnimationFrame(raf);
   },[]);
-  React.useEffect(()=>{ setTimeout(()=>inputRef.current?.focus(),300); },[]);
+  React.useEffect(()=>{
+    const t = setTimeout(()=>inputRef.current?.focus(),300);
+    return ()=>clearTimeout(t);
+  },[]);
 
   const submit=()=>{ const t=draft.trim(); if(!t) return; setDraft(''); if(onSend) onSend(t); };
   const onKey=(e)=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submit();} };
@@ -4629,6 +4635,27 @@ function MuseRoomConstellation({ messages, concepts, waveform='listening', ambie
     const built = buildSemanticLayout(concepts, messages);
     return built.length > 0 ? built : [{id:'listening',label:'listening…',x:cx,y:cy,tier:0,cooc:[],importance:0,pulse:true}];
   }, [concepts, messages]);
+
+  // Keep track of smoothed/damped positions for nodes to prevent snapping
+  const animatedNodesRef = React.useRef(new Map());
+  const animatedNodes = React.useMemo(() => {
+    return nodes.map(n => {
+      let state = animatedNodesRef.current.get(n.id);
+      if (!state) {
+        state = { x: n.x, y: n.y, vx: 0, vy: 0 };
+        animatedNodesRef.current.set(n.id, state);
+      }
+      const k = 0.08;      // Spring stiffness
+      const damping = 0.82; // Friction damping
+      const ax = (n.x - state.x) * k;
+      const ay = (n.y - state.y) * k;
+      state.vx = (state.vx + ax) * damping;
+      state.vy = (state.vy + ay) * damping;
+      state.x += state.vx;
+      state.y += state.vy;
+      return { ...n, x: state.x, y: state.y };
+    });
+  }, [nodes, tick]);
 
   // MAX light target — the concept most recently mentioned by the user
   const lightTarget = React.useMemo(()=>{
@@ -4679,11 +4706,11 @@ function MuseRoomConstellation({ messages, concepts, waveform='listening', ambie
       {/* concept graph — SVG edges drawn only between co-occurring concepts */}
       <svg width="100%" height="100%" viewBox={`0 0 ${w} ${h}`}
         style={{position:'absolute',inset:0,zIndex:2,pointerEvents:'none'}}>
-        {nodes.map((a,ai)=>nodes.slice(ai+1).map((b,_bi)=>{
+        {animatedNodes.map((a,ai)=>animatedNodes.slice(ai+1).map((b,_bi)=>{
           const bj=ai+1+_bi;
-          const strength=a.cooc?.(bj)||0;
+          const strength=a.cooc?.[bj]||0;
           if (strength===0) return null;
-          const maxStr=Math.max(...nodes.map((_,i)=>nodes.map((_2,j)=>nodes[i]?.cooc?.[j]||0)).flat(),1);
+          const maxStr=Math.max(...animatedNodes.map((_,i)=>animatedNodes.map((_2,j)=>animatedNodes[i]?.cooc?.[j]||0)).flat(),1);
           const norm=strength/maxStr;
           const isPrimary=norm>0.6;
           const isMid=norm>0.25&&!isPrimary;
@@ -4694,7 +4721,7 @@ function MuseRoomConstellation({ messages, concepts, waveform='listening', ambie
             stroke={stroke} strokeOpacity={op} strokeWidth={isPrimary?1.2:.7}
             strokeDasharray={isPrimary?undefined:isMid?"4 5":"2 8"}/>;
         }).filter(Boolean))}
-        {nodes.map(n=>{
+        {animatedNodes.map(n=>{
           const ts=tierStyle(n.tier);
           return (
             <g key={n.id} transform={`translate(${n.x*w},${n.y*h})`}>
@@ -4721,7 +4748,7 @@ function MuseRoomConstellation({ messages, concepts, waveform='listening', ambie
       </svg>
 
       {/* node labels — clickable, pre-fill input with concept */}
-      {nodes.map(n=>{
+      {animatedNodes.map(n=>{
         const ts=tierStyle(n.tier);
         const above=n.y<.46;
         const clickable = n.id !== 'listening' && onSend;
@@ -4806,7 +4833,10 @@ function MuseRoomStudio({ messages, concepts, notices, waveform='listening', amb
   const inputRef  = React.useRef(null);
   const scrollRef = React.useRef(null);
 
-  React.useEffect(()=>{ setTimeout(()=>inputRef.current?.focus(), 300); },[]);
+  React.useEffect(()=>{
+    const t = setTimeout(()=>inputRef.current?.focus(), 300);
+    return ()=>clearTimeout(t);
+  },[]);
   React.useEffect(()=>{ if(scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; },[messages]);
 
   const submit = () => { const t=draft.trim(); if(!t) return; setDraft(''); if(onSend) onSend(t); };
@@ -4868,7 +4898,7 @@ function MuseRoomStudio({ messages, concepts, notices, waveform='listening', amb
       <div style={{position:'relative',zIndex:2,display:'flex',flexDirection:'column',overflow:'hidden'}}>
         {/* header */}
         <div style={{padding:'48px 64px 20px',flexShrink:0}}>
-          <div style={{fontSize:10,letterSpacing:'.3em',textTransform:'uppercase',color:MUSE.ember,opacity:.8,marginBottom:6}}>companion mode</div>
+          <div style={{fontSize:10,letterSpacing:'.3em',textTransform:'uppercase',color:MUSE.ember,opacity:.8,marginBottom:6}}>muse mode</div>
           <div style={{fontFamily:"'Fraunces',Georgia,serif",fontSize:26,fontWeight:350,color:MUSE.text,letterSpacing:'-.015em',fontStyle:'italic',lineHeight:1.15}}>
             {concepts[0] || 'thinking together'}
           </div>
@@ -5120,6 +5150,30 @@ function App() {
   const [museInsights, setMuseInsights] = useState([]); // accumulates from insight events
   const [museState, setMuseState] = useState({ concepts:[], arc:'opening', waveform:'listening', ambient:{intensity:.45,warmth:.45} });
   const [somaStatus, setSomaStatus] = useState({ connected: false, signalConnected: false });
+  const museExitTimer = useRef(null);
+
+  const enterMuseMode = React.useCallback(() => {
+    if (museExitTimer.current) {
+      clearTimeout(museExitTimer.current);
+      museExitTimer.current = null;
+    }
+    setMuseMode(true);
+    setMuseExiting(false);
+  }, []);
+
+  const exitMuseMode = React.useCallback(() => {
+    if (museExitTimer.current) clearTimeout(museExitTimer.current);
+    setMuseExiting(true);
+    museExitTimer.current = setTimeout(() => {
+      museExitTimer.current = null;
+      setMuseMode(false);
+      setMuseExiting(false);
+    }, 420);
+  }, []);
+
+  useEffect(() => () => {
+    if (museExitTimer.current) clearTimeout(museExitTimer.current);
+  }, []);
 
   // Drive status bar problem count from live LSP diagnostics
   useEffect(() => {
@@ -5167,11 +5221,10 @@ function App() {
         }
         if (msg.type === 'persona_changed') {
           setMaxStatus(s => ({ ...s, persona: msg.id }));
-          if (msg.id === 'companion') {
-            setMuseMode(true); setMuseExiting(false);
+          if (msg.id === 'muse') {
+            enterMuseMode();
           } else {
-            setMuseExiting(true);
-            setTimeout(()=>{ setMuseMode(false); setMuseExiting(false); }, 420);
+            exitMuseMode();
           }
         }
         if (msg.type === 'muse_state') {
@@ -5213,6 +5266,9 @@ function App() {
         }
         if (msg.type === 'done') {
           setIsThinking(false); setStreaming(false); setThinkLabel('thinking…');
+          if (msg.requestId && msg.response) {
+            setMessages(m => m.map(x => x.requestId === msg.requestId ? { ...x, text: msg.response, streaming: false } : x));
+          }
           // Refresh real usage from API instead of trusting potentially incomplete telemetry
           fetch(`${maxUrl}/api/usage`, { headers: authHdrs(true) }).then(r=>r.json()).then(u => {
             if (u.today) {
@@ -5230,7 +5286,7 @@ function App() {
           setMaxStatus(s => ({ ...s, tension: msg.drive?.tension ?? s.tension }));
         }
         if (msg.type === 'agent_say') {
-          setMessages(m => [...m, { id: nextMsgId(), role: 'max', persona: 'companion', text: msg.text, modelTier: 'fast', route: 'local' }]);
+          setMessages(m => [...m, { id: nextMsgId(), role: 'max', persona: 'muse', text: msg.text, modelTier: 'fast', route: 'local' }]);
         }
         if (msg.type === 'thinking_label') {
           setThinkLabel(msg.label || 'working…');
@@ -5403,7 +5459,7 @@ function App() {
         return s.map(m=>({...m, id: typeof m.id==='string'&&m.id.startsWith('m') ? m.id : nextMsgId()}));
       }
     }catch{}
-    return [{id:nextMsgId(),role:'max',persona:'companion',modelTier:'fast',route:'local',text:"Hey — Maxwell is live. What are we building today?"}];
+    return [{id:nextMsgId(),role:'max',persona:'muse',modelTier:'fast',route:'local',text:"Hey — Maxwell is live. What are we thinking about today?"}];
   });
   const [contextMenu, setContextMenu] = useState(null); // {x,y,file}
   const [input, setInput]           = useState('');
@@ -5685,11 +5741,10 @@ function App() {
               }
               if(d.type==='persona_changed'){
                 setMaxStatus(s=>({...s, persona: d.id}));
-                if(d.id==='companion'){
-                  setMuseMode(true); setMuseExiting(false);
+                if(d.id==='muse'){
+                  enterMuseMode();
                 } else {
-                  setMuseExiting(true);
-                  setTimeout(()=>{ setMuseMode(false); setMuseExiting(false); }, 420);
+                  exitMuseMode();
                 }
               }
               if(d.type==='muse_state'){
@@ -5864,7 +5919,7 @@ function App() {
     if(!connected){
       setTimeout(()=>{
         setIsThinking(false);
-        setMessages(m=>[...m,{id:nextMsgId(),role:'max',persona:'companion',modelTier:'fast',route:'local',
+        setMessages(m=>[...m,{id:nextMsgId(),role:'max',persona:'muse',modelTier:'fast',route:'local',
           text:`Not connected to MAX.\n\nStart it with:\n\`\`\`bash\ncd MAX && node launcher.mjs --mode api\n\`\`\`\n\nThen refresh — I'll wire up automatically at **${maxUrl}**.`}]);
       },1200);
       return;
@@ -5896,7 +5951,7 @@ function App() {
 
       if(r.status===401){
         setIsThinking(false); setStreaming(false);
-        setMessages(m=>[...m,{id:msgId2,role:'max',persona:'companion',modelTier:'fast',route:'local',
+        setMessages(m=>[...m,{id:msgId2,role:'max',persona:'muse',modelTier:'fast',route:'local',
           text:`**API key rejected.** Open ⚙ Settings → General and paste your key from \`.max/api-key.txt\`.\n\nVisit \`${maxUrl}/maxwell\` directly to get the key auto-injected.`}]);
         return;
       }
@@ -6302,7 +6357,7 @@ function App() {
     return ()=>{ window.removeEventListener('mousemove',onMove); window.removeEventListener('mouseup',onUp); };
   },[draggingBottom]);
 
-  const persona=PERSONAS[maxStatus.persona]||PERSONAS.companion;
+  const persona=PERSONAS[maxStatus.persona]||PERSONAS.muse;
   const flattenTree=(arr)=>(arr||[]).flatMap(f=>f.type==='dir'?flattenTree(f.children||[]):[f]);
 
   const splitPane = () => {
@@ -6412,7 +6467,7 @@ function App() {
           onSendToMax={chokoMsg ? async ()=>{
             // Queue current Choko message as a MAX goal
             const goalTitle = 'Choko spotted: ' + chokoMsg.replace(/[^ws~!?.,]/g,'').trim().slice(0,80);
-            setMessages(m=>[...m,{id:nextMsgId(),role:'max',persona:'companion',modelTier:'fast',
+            setMessages(m=>[...m,{id:nextMsgId(),role:'max',persona:'muse',modelTier:'fast',
               text:'Choko queued a task for me~ 🍫 Looking into: **' + chokoMsg.replace(/[^ws~!?,.-]/g,'').slice(0,60) + '**'}]);
             setChokoMsg(null);
             if(connected){
@@ -6484,8 +6539,8 @@ function App() {
         </div>
         <div className="tb-status">
           <PersonaPicker persona={persona} maxUrl={maxUrl} setMaxStatus={setMaxStatus} authHdrs={authHdrs}
-            onCompanion={()=>{ setMuseMode(true); setMuseExiting(false); }}
-            onLeaveCompanion={()=>{ setMuseExiting(true); setTimeout(()=>{ setMuseMode(false); setMuseExiting(false); },420); }}
+            onMuse={enterMuseMode}
+            onLeaveMuse={exitMuseMode}
           />
 
           <div className="tb-sep"/>
@@ -6514,7 +6569,7 @@ function App() {
                 <div className="fw-messages">
                   {messages.slice(-8).map(msg=>{
                     const isUser=msg.role==='user';
-                    const p2=PERSONAS[msg.persona]||PERSONAS.companion;
+                    const p2=PERSONAS[msg.persona]||PERSONAS.muse;
                     const preview=msg.text.replace(/```[\s\S]*?```/g,'[code]').slice(0,220);
                     return (
                       <div key={msg.id} style={{display:'flex',flexDirection:isUser?'row-reverse':'row',gap:6,alignItems:'flex-start'}}>
@@ -6949,9 +7004,12 @@ function App() {
           isThinking={isThinking}
           onSend={sendMessage}
           onSwitchRoom={(r)=>{ setMuseRoom(r); localStorage.setItem('mx_muse_room',r); }}
-          onExit={()=>{
-            setMuseExiting(true);
-            setTimeout(()=>{ setMuseMode(false); setMuseExiting(false); }, 420);
+          onExit={async ()=>{
+            exitMuseMode();
+            try {
+              await fetch(`${maxUrl}/api/persona`, { method:'POST', headers:authHdrs(), body:JSON.stringify({ persona: 'grinder' }) });
+              setMaxStatus(s => ({ ...s, persona: 'grinder' }));
+            } catch {}
           }}
         />
       )}

@@ -43,7 +43,9 @@
       "Bash(node --check server/server.js)",
       "Bash(Select-String -Path \"server/server.js\" -Pattern \"api/debate|api/inspect|inspect.*scan\")",
       "Bash(Start-Sleep -Seconds 18)",
-      "Bash(Get-Content \"C:\\\\Users\\\\barry\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-barry-Desktop-MAX\\\\fa7fc7cf-2f99-4837-85ea-7935d8c8512d\\\\tasks\\\\bshd7yr3b.output\")"
+      "Bash(Get-Content \"C:\\\\Users\\\\barry\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-barry-Desktop-MAX\\\\fa7fc7cf-2f99-4837-85ea-7935d8c8512d\\\\tasks\\\\bshd7yr3b.output\")",
+      "Bash(echo \"exit: $?\")",
+      "Bash(echo \"EXIT: $?\")"
     ]
   }
 }

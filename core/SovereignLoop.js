@@ -15,6 +15,7 @@ export class SovereignLoop extends EventEmitter {
         this.intervalMs = config.intervalMs || 60000; // Check every minute
         this.isRunning = false;
         this.lastFaultCount = 0;
+        this._timer = null;
     }
 
     async start() {
@@ -22,8 +23,18 @@ export class SovereignLoop extends EventEmitter {
         this.isRunning = true;
         // Run first cycle after 15 minutes to avoid startup contention, then every 20 minutes.
         // Previous 60s interval was calling smart-tier LLM every minute competing with chat.
-        setTimeout(() => this._cycle(), 15 * 60 * 1000);
+        this._schedule(15 * 60 * 1000);
         console.log('🔱 [Sovereign] Instinct Loop active — first pulse in 15m.');
+    }
+
+    _schedule(delayMs) {
+        if (!this.isRunning) return;
+        if (this._timer) clearTimeout(this._timer);
+        this._timer = setTimeout(() => {
+            this._timer = null;
+            this._cycle();
+        }, delayMs);
+        this._timer.unref?.();
     }
 
     async _cycle() {
@@ -31,7 +42,7 @@ export class SovereignLoop extends EventEmitter {
 
         // Guard: don't run while user is actively chatting
         if (this.max._chatBusy) {
-            setTimeout(() => this._cycle(), 5 * 60 * 1000);
+            this._schedule(5 * 60 * 1000);
             return;
         }
 
@@ -62,10 +73,14 @@ export class SovereignLoop extends EventEmitter {
             console.error('[Sovereign] Cycle error:', err.message);
         }
 
-        setTimeout(() => this._cycle(), 20 * 60 * 1000); // 20-minute cadence
+        this._schedule(20 * 60 * 1000); // 20-minute cadence
     }
 
     stop() {
         this.isRunning = false;
+        if (this._timer) {
+            clearTimeout(this._timer);
+            this._timer = null;
+        }
     }
 }

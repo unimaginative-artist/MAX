@@ -349,8 +349,10 @@ export async function createServer(max, port = 3100, host = process.env.MAX_HOST
         signalConnected: max.soma?._signalConnected ?? false,
         url:             max.soma?.baseUrl          ?? null,
     });
-    setTimeout(broadcastSomaStatus, 3000);
-    setInterval(broadcastSomaStatus, 30_000);
+    const _initialSomaStatusTimer = setTimeout(broadcastSomaStatus, 3000);
+    const _somaStatusInterval = setInterval(broadcastSomaStatus, 30_000);
+    _initialSomaStatusTimer.unref?.();
+    _somaStatusInterval.unref?.();
     max.workspaceEdits?.on('editProposed', (proposal) => broadcast({ type: 'edit_proposed', proposal }));
     max.workspaceEdits?.on('editApplied', (event) => broadcast({ type: 'edit_applied', ...event }));
     max.workspaceEdits?.on('editRejected', (event) => broadcast({ type: 'edit_rejected', ...event }));
@@ -1601,6 +1603,8 @@ if (${isLocal}) {
     return {
         app,
         close: () => {
+            clearTimeout(_initialSomaStatusTimer);
+            clearInterval(_somaStatusInterval);
             clearInterval(_statusInterval);
             clearInterval(_somaInterval);
             wss.close();

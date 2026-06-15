@@ -256,6 +256,23 @@ async function chatMode(max, opts = {}) {
                     for (const g of active) console.log(`  [${g.id.slice(0,8)}] ${g.title} (${g.status})`);
                     console.log();
                     break;
+                case 'directives':
+                    if (argStr?.trim() === 'clear') {
+                        max.reflection?.clearDirectives();
+                        console.log('[MAX] 🧹 Behavioral directives cleared.');
+                    } else {
+                        const directives = max.reflection?._selfModel?.behaviorDirectives || [];
+                        console.log(`\n[MAX] Active Behavioral Directives (${directives.length}):`);
+                        if (directives.length === 0) {
+                            console.log('  No active directives. MAX learns style rules from user corrections.');
+                        } else {
+                            for (const d of directives) {
+                                console.log(`  • ${d}`);
+                            }
+                        }
+                        console.log();
+                    }
+                    break;
                 case 'run':
                     try { await max.tools.execute('shell', 'run', { command: argStr }); } catch (e) { console.log(`Error: ${e.message}`); }
                     break;

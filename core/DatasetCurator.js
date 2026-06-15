@@ -12,6 +12,7 @@
 
 import fs   from 'fs';
 import path from 'path';
+import { hasStageDirectionLeak, stripLeakedPromptContext, stripStageDirections } from './TextSanitizer.js';
 
 const DATASET_DIR  = path.join(process.cwd(), '.max', 'dataset');
 const CONVOS_FILE  = path.join(DATASET_DIR, 'conversations.jsonl');
@@ -19,6 +20,12 @@ const TAGGED_FILE  = path.join(DATASET_DIR, 'tagged.jsonl');
 const META_FILE    = path.join(DATASET_DIR, 'meta.json');
 
 const QUALITY_THRESHOLD = 7.0;   // reflection score (out of 10) to auto-save
+const QUALITY_BAN_PATTERNS = [
+    /\bsingle biggest bottleneck\b/i,
+    /\bsingle biggest technical constraint\b/i,
+    /\blet'?s establish parameters\b/i,
+    /\btime operates differently for an autonomous agent\b/i,
+];
 
 export class DatasetCurator {
     constructor(max) {
@@ -73,9 +80,15 @@ export class DatasetCurator {
     async save(userMessage, maxResponse, meta = {}) {
         if (!this._ready) return false;
 
+        if (hasStageDirectionLeak(maxResponse) || QUALITY_BAN_PATTERNS.some(pattern => pattern.test(maxResponse))) {
+            this.meta.totalSkipped++;
+            this._saveMeta();
+            return false;
+        }
+
         // Clean up the response (strip internal state markers)
         const instruction = userMessage.trim();
-        const output      = maxResponse
+        const output      = stripStageDirections(stripLeakedPromptContext(maxResponse))
             .replace(/^MAX:\s*/i, '')
             .replace(/\nSystem State:[\s\S]*?(?=\n\n|\n[A-Z]|$)/, '')
             .trim();
@@ -145,6 +158,7 @@ export class DatasetCurator {
         const prompt = `Generate ${count} high-quality instruction/response training pairs about: "${topic}"
 
 Each pair should be something MAX (an autonomous AI engineering agent) would genuinely say.
+Do not include stage directions, parenthetical actions, internal monologue, scripted pauses, or theatrical tone notes.
 Format as JSON array:
 [
   { "instruction": "...", "output": "..." },
@@ -163,10 +177,11 @@ Make them specific and technical. Avoid generic advice. Draw on real knowledge.`
             let saved = 0;
             for (const pair of pairs) {
                 if (!pair.instruction || !pair.output) continue;
+                if (hasStageDirectionLeak(pair.output) || QUALITY_BAN_PATTERNS.some(pattern => pattern.test(pair.output))) continue;
                 const example = {
                     instruction: pair.instruction,
                     input: '',
-                    output: pair.output,
+                    output: stripStageDirections(stripLeakedPromptContext(pair.output)).trim(),
                     metadata: { ts: Date.now(), source: 'synthetic', topic },
                 };
                 fs.appendFileSync(CONVOS_FILE, JSON.stringify(example) + '\n');

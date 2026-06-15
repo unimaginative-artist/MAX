@@ -1,7 +1,7 @@
 import { jest } from '@jest/globals';
 import { WorkspaceEditArbiter } from '../../../core/WorkspaceEditArbiter.js';
 
-function makeArbiter({ autoApplyMs = 20 } = {}) {
+function makeArbiter({ autoApplyMs = 0 } = {}) {
     const mockTools = { execute: jest.fn(async () => ({ success: true, content: 'written' })) };
     const mockMax   = { tools: mockTools };
     const arbiter   = new WorkspaceEditArbiter(mockMax, { autoApplyMs });

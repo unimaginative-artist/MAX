@@ -137,29 +137,57 @@ The output must be valid JavaScript that can directly replace the original file.
         const origLines  = original.split('\n');
         const stageLines = entry.newCode.split('\n');
 
-        const hunks   = [];
         const maxLen  = Math.max(origLines.length, stageLines.length);
-        let   changes = 0;
-        let   hunk    = [];
-
-        const flushHunk = () => {
-            if (hunk.length > 0) { hunks.push(hunk.join('\n')); hunk = []; }
-        };
-
+        const changedIndices = [];
         for (let i = 0; i < maxLen; i++) {
-            const o = origLines[i];
-            const s = stageLines[i];
-            if (o === undefined)    { hunk.push(`+ ${s}`);  changes++; }
-            else if (s === undefined) { hunk.push(`- ${o}`); changes++; }
-            else if (o !== s)       { hunk.push(`- ${o}`); hunk.push(`+ ${s}`); changes++; }
-            else if (hunk.length > 0) {
-                hunk.push(`  ${o}`);
-                if (hunk.filter(l => !l.startsWith('  ')).length === 0) flushHunk();
+            if (origLines[i] !== stageLines[i]) {
+                changedIndices.push(i);
             }
         }
-        flushHunk();
 
-        return { diff: hunks.join('\n---\n'), changes, addedLines: stageLines.length - origLines.length };
+        const changes = changedIndices.length;
+        if (changes === 0) {
+            return { diff: '', changes: 0, addedLines: 0 };
+        }
+
+        const CONTEXT_LINES = 3;
+        const hunks = [];
+        let currentHunk = null;
+
+        for (const idx of changedIndices) {
+            if (!currentHunk) {
+                currentHunk = { start: idx, end: idx };
+            } else if (idx - currentHunk.end <= 2 * CONTEXT_LINES) {
+                currentHunk.end = idx;
+            } else {
+                hunks.push(currentHunk);
+                currentHunk = { start: idx, end: idx };
+            }
+        }
+        if (currentHunk) hunks.push(currentHunk);
+
+        const hunkStrings = [];
+        for (const h of hunks) {
+            const hStart = Math.max(0, h.start - CONTEXT_LINES);
+            const hEnd = Math.min(maxLen - 1, h.end + CONTEXT_LINES);
+            const hunkLines = [];
+
+            hunkLines.push(`@@ -${hStart + 1},${hEnd - hStart + 1} +${hStart + 1},${hEnd - hStart + 1} @@`);
+
+            for (let i = hStart; i <= hEnd; i++) {
+                const o = origLines[i];
+                const s = stageLines[i];
+                if (o === s) {
+                    hunkLines.push(`  ${o}`);
+                } else {
+                    if (o !== undefined) hunkLines.push(`- ${o}`);
+                    if (s !== undefined) hunkLines.push(`+ ${s}`);
+                }
+            }
+            hunkStrings.push(hunkLines.join('\n'));
+        }
+
+        return { diff: hunkStrings.join('\n---\n'), changes, addedLines: stageLines.length - origLines.length };
     }
 
     // ─── Open VS Code diff view ───────────────────────────────────────────

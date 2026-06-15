@@ -38,8 +38,11 @@ export class ContextPagerArbiter extends EventEmitter {
             for (const [filePath, bufVal] of this.max._ghostBuffers) {
                 // server.js stores { content, updatedAt } objects — extract the string
                 const rawContent = typeof bufVal === 'object' ? (bufVal.content ?? '') : (bufVal ?? '');
-                const block = `\n### [ACTIVE BUFFER] Source: ${filePath} (Unsaved)\n${rawContent.slice(0, 2000)}`;
-                if (used + block.length > budget) break;
+                const remaining = budget - used;
+                if (remaining <= 200) break; // Not enough remaining budget
+                const sliceLen = Math.min(4000, remaining - 100);
+                if (sliceLen <= 0) break;
+                const block = `\n### [ACTIVE BUFFER] Source: ${filePath} (Unsaved)\n${rawContent.slice(0, sliceLen)}`;
                 parts.push(block);
                 used += block.length;
                 telemetry.buffers.push(filePath);

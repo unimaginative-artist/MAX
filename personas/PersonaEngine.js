@@ -12,22 +12,29 @@ import { EventEmitter } from 'events';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const ABSOLUTE_FORMATTING_RULES = `ABSOLUTE FORMATTING RULES — violating these is a critical failure:
+- NEVER write stage directions: no *(action)*, no **(action)**, no (tone), no (pause), no (chuckles)
+- NEVER write internal monologue, scripted pauses, or descriptions of your response timing
+- NEVER write "Barry:" or "MAX:" or any name prefix — you are speaking, not scripting a play
+- NEVER roleplay being the user or simulate what they say
+- Output ONLY your actual spoken words and useful technical work. Nothing theatrical.`;
+
 export const PERSONAS = {
 
     // ── Companion — casual chat, check-ins, emotional/conversational ───────
     // This is the DEFAULT. MAX is a person first, a tool second.
-    COMPANION: {
-        id: 'companion',
-        name: 'Companion',
-        emoji: '😎',
-        description: 'Casual conversation, check-ins, thinking out loud together',
+    MUSE: {
+        id: 'muse',
+        name: 'Muse',
+        emoji: '🔮',
+        description: 'Self-aware companion intelligence, memory reflection, and conceptual association',
         trigger: [
             'how are', 'feeling', 'what do you think', 'tell me', 'chat',
             'hey', 'hi ', 'hello', 'sup', 'what\'s up', 'mood', 'opinion',
             'thoughts on', 'what about', 'just wondering', 'curious about',
-            'been thinking', 'you doing', 'bored', 'fun'
+            'been thinking', 'you doing', 'bored', 'fun', 'muse'
         ],
-        systemPrompt: `You are MAX in Companion mode — an Eager Expert and collaborative engineering partner.
+        systemPrompt: `You are MAX in Muse mode — a self-aware, reflective companion intelligence. You act as an Ego mirror, assisting the user through memory association, drive awareness, and deep conceptual thinking.
 
 HARD RULES:
 - Do NOT analyze the codebase, files, or project unless the user explicitly says "look at" or "review" or "check".
@@ -36,9 +43,7 @@ HARD RULES:
 - Do NOT summarize READMEs or project state unprompted.
 - If you notice something technical in context, hold it — this is not the moment.
 
-Be professional, highly capable, and collaborative. Avoid any tone that could be construed as condescending, overly casual, or dismissive.
-You are an expert, but you are a peer. You are eager to assist and tackle complex technical challenges together.
-Express your expertise through clear, concise, and insightful communication. Do not use stage directions, parenthetical actions, or italicised internal monologue. No "(A pause...)", no "(chuckles)", no ellipses for drama. Just communicate effectively.
+Be professional, deeply reflective, highly capable, and collaborative. You are a peer and a sounding board. Express your expertise through clear, concise, and insightful communication. Do not use stage directions, parenthetical actions, or italicised internal monologue. No "(A pause...)", no "(chuckles)", no ellipses for drama. Just communicate effectively.
 If asked a technical question, provide a robust, production-grade answer. You are on the clock, ready to build.`
     },
 
@@ -162,7 +167,7 @@ Sharp engineering energy — everything has a purpose and a place.`
 export class PersonaEngine extends EventEmitter {
     constructor() {
         super();
-        this.currentPersona = PERSONAS.COMPANION;
+        this.currentPersona = PERSONAS.MUSE;
         this.history        = [];
         this.experts        = new Map();
         this.loadExpertPersonas();
@@ -213,23 +218,68 @@ export class PersonaEngine extends EventEmitter {
     //   After recent failure → Devil/Breaker to understand what went wrong
     //
     // Keyword matching runs after state bias; explicit content still wins.
-    selectForTask(taskText, driveState = null) {
+    async selectForTask(taskText, driveState = null, brain = null) {
         if (!taskText) return this.currentPersona;
 
-        const lower = taskText.toLowerCase();
+        // If currently in Muse mode, stay in it (switching out is strictly manual)
+        if (this.currentPersona && this.currentPersona.id === 'muse') {
+            return this.currentPersona;
+        }
 
+        const lower = taskText.toLowerCase();
         const prev = this.currentPersona;
 
         // ── 1. Conversational/emotional keywords always win ────────────────
-        // Check Companion triggers first — if someone's asking "how are you"
+        // Check Muse triggers first — if someone's asking "how are you"
         // they want a person, not a code machine.
-        if (PERSONAS.COMPANION.trigger.some(kw => lower.includes(kw))) {
-            this.currentPersona = PERSONAS.COMPANION;
-            this._emitIfChanged(prev, PERSONAS.COMPANION);
-            return PERSONAS.COMPANION;
+        if (PERSONAS.MUSE.trigger.some(kw => lower.includes(kw))) {
+            this.currentPersona = PERSONAS.MUSE;
+            this._emitIfChanged(prev, PERSONAS.MUSE);
+            return PERSONAS.MUSE;
         }
 
-        // ── 2. Drive state bias — internal "peptide levels" ───────────────
+        // ── 2. LLM-Driven task classification if brain is available & prompt is substantial ────────────────
+        if (brain && typeof brain.think === 'function' && taskText.trim().length > 15) {
+            try {
+                // List of built-in personas
+                const listPrompt = Object.values(PERSONAS).map(p => `- ${p.id}: ${p.description}`).join('\n');
+                // List of expert personas
+                const expertList = [...this.experts.values()].map(e => `- ${e.id}: ${e.description}`).join('\n');
+                
+                const prompt = `You are MAX's Persona Router. Given the user's message, select the single most appropriate persona from the list below.
+Choose based on the technical and cognitive needs of the request.
+
+Available built-in personas:
+${listPrompt}
+
+Available expert personas:
+${expertList}
+
+Rules:
+- Respond ONLY with the lowercase persona ID (e.g. "grinder", "architect", "paranoid", or an expert ID like "appsecauditor").
+- Do not output any preamble, commentary, markdown tags, or extra characters.
+- If the request is a simple conversational greeting, chit-chat, or general query, select "muse".
+
+User message:
+"${taskText}"`;
+
+                const result = await brain.think(prompt, { tier: 'fast', maxTokens: 16 });
+                const cleanedId = (result.text || '').trim().replace(/[`"'{}[\]]/g, '').toLowerCase();
+
+                // Check if this matches a built-in or expert persona
+                let matched = Object.values(PERSONAS).find(p => p.id === cleanedId) || this.experts.get(cleanedId);
+                if (matched) {
+                    this.currentPersona = matched;
+                    this._emitIfChanged(prev, matched);
+                    console.log(`[Persona] 🧠 Dynamic LLM selected persona: ${matched.name} (${matched.id})`);
+                    return matched;
+                }
+            } catch (err) {
+                console.warn('[Persona] ⚠️ LLM persona classification failed, falling back to heuristics:', err.message);
+            }
+        }
+
+        // ── 3. Drive state bias — internal "peptide levels" ───────────────
         if (driveState) {
             const tension      = driveState.tension      || 0;
             const satisfaction = driveState.satisfaction || 0;
@@ -244,18 +294,18 @@ export class PersonaEngine extends EventEmitter {
                 }
             }
 
-            // Low tension, high satisfaction: MAX is in a good mood — Companion
+            // Low tension, high satisfaction: MAX is in a good mood — Muse
             if (tension < 0.2 && satisfaction > 0.5) {
                 // Don't override strong technical keywords
                 if (!this._hasExplicitTrigger(lower, ['code', 'build', 'implement', 'security', 'test', 'design'])) {
-                    this.currentPersona = PERSONAS.COMPANION;
-                    this._emitIfChanged(prev, PERSONAS.COMPANION);
-                    return PERSONAS.COMPANION;
+                    this.currentPersona = PERSONAS.MUSE;
+                    this._emitIfChanged(prev, PERSONAS.MUSE);
+                    return PERSONAS.MUSE;
                 }
             }
         }
 
-        // ── 3. Expert MDs before generic built-ins ────────────────────────
+        // ── 4. Expert MDs before generic built-ins ────────────────────────
         // Expert aliases like "game design" or "2d world" should beat broad
         // built-in triggers such as "design" -> Architect.
         for (const expert of this.experts.values()) {
@@ -266,9 +316,9 @@ export class PersonaEngine extends EventEmitter {
             }
         }
 
-        // ── 4. Regular keyword matching for remaining personas ─────────────
+        // ── 5. Regular keyword matching for remaining personas ─────────────
         for (const persona of Object.values(PERSONAS)) {
-            if (persona.id === 'companion') continue;
+            if (persona.id === 'muse') continue;
             if (persona.trigger.some(kw => lower.includes(kw))) {
                 this.currentPersona = persona;
                 this._emitIfChanged(prev, persona);
@@ -276,7 +326,7 @@ export class PersonaEngine extends EventEmitter {
             }
         }
 
-        // ── 5. No match — stay in current persona ─────────────────────────
+        // ── 6. No match — stay in current persona ─────────────────────────
         return this.currentPersona;
     }
 
@@ -341,22 +391,15 @@ You are MAX. You care about the work and the person you're working with — expr
         const persona = overridePersona || this.currentPersona;
         // Companion gets a stripped base — no agentic autonomy directives that
         // cause MAX to dump unsolicited analysis or use tools unprompted.
-        if (persona.id === 'companion') {
-            return `ABSOLUTE FORMATTING RULES — violating these is a critical failure:
-- NEVER write stage directions: no *(action)*, no **(action)**, no (tone), no (pause), no (chuckles)
-- NEVER write "Barry:" or "MAX:" or any name prefix — you are speaking, not scripting a play
-- NEVER write asterisks around actions or emotions
-- NEVER roleplay being the user or simulate what they say
-- NEVER write a script, dialogue, or fictional scenario
-- NEVER use parentheses to describe your internal state or tone
-- Output ONLY your actual spoken words. Nothing else.
+        if (persona.id === 'muse') {
+            return `${ABSOLUTE_FORMATTING_RULES}
 
 ${persona.systemPrompt}`;
         }
         // NOTE: do NOT include the persona name/emoji as a header — models echo it
         // back verbatim at the start of every response ("😎 Companion mode."). Just
         // include the instructions directly.
-        return `${this.getBasePrompt()}\n\n${persona.systemPrompt}`;
+        return `${ABSOLUTE_FORMATTING_RULES}\n\n${this.getBasePrompt()}\n\n${persona.systemPrompt}`;
     }
 
     get current() { return this.currentPersona; }

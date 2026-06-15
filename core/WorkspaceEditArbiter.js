@@ -43,6 +43,7 @@ export class WorkspaceEditArbiter extends EventEmitter {
         if (this._autoApplyMs > 0) {
             // If IDE doesn't accept within 30s, apply directly so the edit isn't lost.
             const timer = setTimeout(async () => {
+                this._pendingTimers.delete(editId);
                 if (!this.pendingEdits.has(editId)) return; // already accepted/rejected
                 console.log(`[WorkspaceEdit] ⏱️  No IDE response for ${filePath} — applying directly.`);
                 this.pendingEdits.delete(editId);

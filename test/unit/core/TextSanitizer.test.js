@@ -1,4 +1,4 @@
-import { stripLeakedPromptContext } from '../../../core/TextSanitizer.js';
+import { hasStageDirectionLeak, stripLeakedPromptContext, stripStageDirections } from '../../../core/TextSanitizer.js';
 
 describe('stripLeakedPromptContext', () => {
     it('returns input unchanged when no markers present', () => {
@@ -54,5 +54,27 @@ describe('stripLeakedPromptContext', () => {
     it('preserves legitimate content that contains partial marker words', () => {
         const text = 'The system state is healthy. Active goals are being tracked.';
         expect(stripLeakedPromptContext(text)).toBe(text);
+    });
+});
+
+describe('stripStageDirections', () => {
+    it('strips bare parenthetical mood/action lines', () => {
+        const text = '(Processing… slight pause, a subtle shift in tone)\n\n“Cool is… a subjective assessment.';
+        expect(stripStageDirections(text)).toBe('“Cool is… a subjective assessment.');
+    });
+
+    it('strips bold and italic asterisk stage directions', () => {
+        const text = 'Hello **(smiles)** world *chuckles*.';
+        expect(stripStageDirections(text)).toBe('Hello  world .');
+    });
+
+    it('preserves regular parentheses', () => {
+        const text = 'This is normal text (with some extra details).';
+        expect(stripStageDirections(text)).toBe(text);
+    });
+
+    it('detects stage direction and internal monologue leaks', () => {
+        expect(hasStageDirectionLeak('(Slightly delayed response, a subtle processing pause)')).toBe(true);
+        expect(hasStageDirectionLeak('Normal useful response.')).toBe(false);
     });
 });

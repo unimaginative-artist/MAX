@@ -90,6 +90,7 @@ import { AutonomyPolicy }       from './AutonomyPolicy.js';
 import { SecurityExpertisePack } from './SecurityExpertisePack.js';
 import { stripLeakedPromptContext, stripStageDirections } from './TextSanitizer.js';
 import fs                         from 'fs';
+import { AttentionEngine, ATTENTION_PRIORITY, ATTENTION_COST } from './AttentionEngine.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -406,6 +407,7 @@ export class MAX {
         this.toolCreator = new ToolCreator(this.brain, this.tools, path.join(__dirname, '..', 'tools', 'generated'));
         this.selfInspector = new SelfCodeInspector(this.goals);
         this.reflection = new ReflectionEngine(this.brain, this.goals, this.outcomes, this.kb, this);
+        this.attention  = new AttentionEngine({ debug: false });
 
         // Initialize long-horizon planner (loads persisted DAG maps from disk)
         await this.odyssey.initialize();
@@ -863,6 +865,7 @@ Actions:
         this.scheduler.addJob({ id: 'universal_ingestion', label: 'Ingestion: SOTA research harvester', every: '12h', handler: () => this.ingestion.pulse() });
         this.scheduler.addJob({ id: 'sentinel_scan', label: 'Sentinel: project health scan', every: '15m', type: 'custom', handler: () => this.agentLoop?._loops?.watch?.run({ title: 'Sentinel Scan' }, this, this.agentLoop) });
         this.scheduler.addJob({ id: 'diagnostics_audit', label: 'Diagnostics: architectural audit', every: '1h', type: 'custom', handler: () => this.diagnostics.runAll() });
+        this.scheduler.addJob({ id: 'attention_decay', label: 'Decay attention tensions', every: '5m', handler: () => this.attention?.decayTensions() });
         this.scheduler.addJob({ id: 'social_scan', label: 'Social: user profiling', every: '10m', type: 'custom', handler: () => this.social.scan() });
         this.scheduler.addJob({ id: 'skill_evolution', label: 'Evolution: codify winning paths', every: '6h', type: 'custom', handler: () => this.skillEvolution.analyzeWinningPaths() });
         this.scheduler.addJob({
@@ -904,14 +907,17 @@ Actions:
         this._backgroundStarted = true;
         this._backgroundTimer = null;
 
-        // Wire MuseEngine — activates/deactivates with companion persona
+        // Wire MuseEngine — activates/deactivates with muse persona
         this.persona.on('persona_changed', ({ id }) => {
-            if (id === 'companion') {
+            if (id === 'muse') {
                 this.muse.activate(this.heartbeat);
             } else {
                 this.muse.deactivate();
             }
         });
+        if (this.persona.current?.id === 'muse') {
+            this.muse.activate(this.heartbeat);
+        }
 
         // Muse insight generation — fast LLM call every 4 turns in companion mode
         this.muse.on('needs_insight', async ({ messages }) => {
@@ -934,7 +940,7 @@ Actions:
                 if (result?.text) this.muse.publishInsight(result.text);
             } catch (err) {
                 console.error('[MuseEngine] insight generation failed:', err.message);
-                this.muse.markInsightPending(); // reset so next turn can retry
+                this.muse.clearInsightPending(); // reset so next turn can retry
             }
         });
 
@@ -1091,8 +1097,49 @@ Actions:
             // keyword matching pull MAX out of companion mid-conversation.
             const selectedPersona = this.muse?.isActive()
                 ? this.persona.current
-                : this.persona.selectForTask(userMessage, this.drive.getStatus());
-            const tier = options.tier || 'smart';
+                : await this.persona.selectForTask(userMessage, this.drive.getStatus(), this.brain);
+
+            const attentionResult = this.attention
+                ? this.attention.evaluate(userMessage, {
+                    activeGoals: this.goals.listActive().map(g => g.title),
+                    currentProject: this._projectContext
+                  })
+                : null;
+
+            // Determine LLM tier and budget dynamically from Attention Engine
+            let tier = options.tier;
+            let memCount = 6;
+            let kbCount = 6;
+            let isTrivial = userMessage.trim().length < 12;
+
+            if (attentionResult) {
+                const { allowedCost } = attentionResult;
+                if (allowedCost === 'REFLEX') {
+                    tier = tier || 'fast';
+                    isTrivial = true;
+                } else if (allowedCost === 'LOCAL') {
+                    tier = tier || 'fast';
+                    memCount = 3;
+                    kbCount = 3;
+                } else if (allowedCost === 'MEMORY') {
+                    tier = tier || 'smart';
+                    memCount = 6;
+                    kbCount = 6;
+                } else if (allowedCost === 'BRIDGE' || allowedCost === 'INTERRUPT') {
+                    tier = tier || 'smart';
+                    memCount = 10;
+                    kbCount = 12;
+                }
+            } else {
+                tier = tier || 'smart';
+                if (tier === 'smart') {
+                    memCount = 10;
+                    kbCount = 12;
+                } else {
+                    memCount = 3;
+                    kbCount = 3;
+                }
+            }
 
             // Store user message in context immediately so next turn sees it in history
             this._context.push({ role: 'user', content: userMessage });
@@ -1109,10 +1156,7 @@ Actions:
             }
 
             // ── Parallel: memory recall + KB query simultaneously ─────────────
-            const budget   = tier === 'smart' ? 30000 : 8000;
-            const memCount = tier === 'smart' ? 10 : 3;
-            const kbCount  = tier === 'smart' ? 12 : 3;
-            const isTrivial = userMessage.trim().length < 12;
+            const budget = tier === 'smart' ? 30000 : 8000;
 
             const [memoryResults, kbResults] = isTrivial
                 ? [[], []]
@@ -1174,13 +1218,49 @@ Actions:
             // tool results inline. We silently get the plan, execute real tools, then
             // stream only the clean follow-up. If no tools needed we replay via onToken.
             const SKIP_INLINE = new Set(['mcp']);
-            const _extractToolLines = (text) => text.split('\n')
-                .map(l => l.trim())
-                .filter(l => {
-                    if (l.startsWith('TOOL_BLOCKED')) { console.log(`[MAX] 🛡️ Skipping blocked tool: ${l}`); return false; }
-                    return /^TOOL\s*:[a-zA-Z_\s]+:[a-zA-Z_\s]+/.test(l);
-                })
-                .filter(l => !SKIP_INLINE.has(l.replace(/^TOOL\s*:\s*/i, '').split(/\s*:\s*/)[0]));
+            const _extractToolLines = (text) => {
+                const lines = [];
+                // 1. Extract legacy TOOL: lines
+                const rawLines = text.split('\n').map(l => l.trim());
+                for (const l of rawLines) {
+                    if (l.startsWith('TOOL_BLOCKED')) {
+                        console.log(`[MAX] 🛡️ Skipping blocked tool: ${l}`);
+                        continue;
+                    }
+                    if (/^TOOL\s*:[a-zA-Z_\s]+:[a-zA-Z_\s]+/.test(l)) {
+                        const toolName = l.replace(/^TOOL\s*:\s*/i, '').split(/\s*:\s*/)[0];
+                        if (!SKIP_INLINE.has(toolName)) {
+                            lines.push(l);
+                        }
+                    }
+                }
+
+                // 2. Extract <function> XML JSON blocks
+                const functionRegex = /<function>([\s\S]*?)<\/function>/g;
+                let match;
+                while ((match = functionRegex.exec(text)) !== null) {
+                    try {
+                        const json = JSON.parse(match[1].trim());
+                        if (json.tool && json.action) {
+                            const paramsStr = JSON.stringify(json.params || {});
+                            const legacyLine = `TOOL:${json.tool}:${json.action}:${paramsStr}`;
+                            if (!SKIP_INLINE.has(json.tool)) {
+                                lines.push(legacyLine);
+                            }
+                        } else if (json.name && json.arguments) {
+                            const [tool, action] = json.name.includes('.') ? json.name.split('.') : [json.name, 'run'];
+                            const paramsStr = JSON.stringify(json.arguments || {});
+                            const legacyLine = `TOOL:${tool}:${action}:${paramsStr}`;
+                            if (!SKIP_INLINE.has(tool)) {
+                                lines.push(legacyLine);
+                            }
+                        }
+                    } catch (e) {
+                        // ignore parse errors
+                    }
+                }
+                return lines;
+            };
 
             let result = await this.brain.think(userMessage, {
                 systemPrompt,
@@ -1276,10 +1356,7 @@ Actions:
                 } catch { /* skip */ }
             }
 
-            response = stripLeakedPromptContext(response);
-            if (selectedPersona.id === 'companion') {
-                response = stripStageDirections(response);
-            }
+            response = stripStageDirections(stripLeakedPromptContext(response));
 
             this._context.push({ role: 'assistant', content: response });
             this._maybeCompressContext();
@@ -1297,7 +1374,7 @@ Actions:
                 response,
                 persona:     selectedPersona.id,
                 drive:       this.drive.getStatus(),
-                telemetry:   result.metadata,
+                telemetry:   { ...result.metadata, attention: attentionResult },
                 wasStreamed: !!onToken
             };
 
@@ -1313,12 +1390,20 @@ Actions:
                 this.dataset?.evaluate?.(userMessage, response).catch(() => {});
             }
 
+            // Self-reflection loop
+            if (this.reflection) {
+                this.reflection.reflectOnTurn(userMessage, response, {
+                    persona: selectedPersona.id,
+                    drive: this.drive.getStatus()
+                }).catch(err => console.error('[MAX] Reflection error:', err.message));
+            }
+
             return finalResult;
 
         } catch (err) {
             if (err.name === 'AbortError' || signal.aborted) {
                 console.log('[MAX] 🛑 Chat execution aborted.');
-                return { response: '[Aborted by user]', persona: ' companion', aborted: true };
+                return { response: '[Aborted by user]', persona: ' muse', aborted: true };
             }
             this._lastError = { message: err.message, ts: Date.now() };
             throw err;
@@ -1373,8 +1458,8 @@ Actions:
     async _buildStateContext(userQuery = '') {
         const drive = this.drive.getStatus();
         const personaId = this.persona?.current?.id;
-        // Don't inject internal state metrics in companion mode — MAX echoes them literally
-        let ctx = personaId === 'companion' ? '' :
+        // Don't inject internal state metrics in muse mode — MAX echoes them literally
+        let ctx = personaId === 'muse' ? '' :
             `\n\n## System State\nTension: ${Math.round(drive.tension*100)}% | Satisfaction: ${Math.round(drive.satisfaction*100)}%`;
 
         // Dynamic Context Paging (Virtual Memory)
@@ -1546,6 +1631,7 @@ Skip TODOs and style issues — focus on things that can actually break.`,
             ready:      this._ready,
             brain:      this.brain.getStatus(),
             drive:      this.drive.getStatus(),
+            persona:    this.persona?.getStatus(),
             memory:     this.memory.getStats(),
             goals:      this.goals?.getStatus(),
             agents:     this.agentManager?.getStatus(),
@@ -1584,6 +1670,7 @@ Skip TODOs and style issues — focus on things that can actually break.`,
             ready:      this._ready,
             brain:      this.brain.getStatus(),
             drive:      this.drive.getStatus(),
+            persona:    this.persona?.getStatus(),
             memory:     memoryStats,
             goals:      this.goals ? {
                 active:    this.goals._active?.size || 0,
