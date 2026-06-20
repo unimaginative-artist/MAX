@@ -27,6 +27,7 @@ import { PersonaEngine }      from '../personas/PersonaEngine.js';
 import { ToolRegistry }       from '../tools/ToolRegistry.js';
 import { FileTools }          from '../tools/FileTools.js';
 import { ShellTool, getRunningProcesses } from '../tools/ShellTool.js';
+import { SomaTool }           from '../tools/SomaTool.js';
 import { WebTool }            from '../tools/WebTool.js';
 import { GitTool }            from '../tools/GitTool.js';
 import { ApiTool }            from '../tools/ApiTool.js';
@@ -232,6 +233,7 @@ export class MAX {
         console.log('[MAX] 🛠️ Registering tools...');
         this.tools.register(FileTools);
         this.tools.register(ShellTool);
+        this.tools.register(SomaTool);
         this.tools.register(WebTool);
         this.tools.register(GitTool);
         this.tools.register(ApiTool);
