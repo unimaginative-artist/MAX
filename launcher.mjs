@@ -8,6 +8,7 @@ import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { execSync, spawn } from 'child_process';
 import { fileURLToPath }            from 'url';
 import { dirname, join }            from 'path';
+import { checkPort }                from './core/PortUtils.js';
 import { MAX }                      from './core/MAX.js';
 import { isFirstRun, runOnboarding } from './onboarding/FirstRun.js';
 import { TUI, COLORS }              from './core/ui/TUI.mjs';
@@ -34,7 +35,8 @@ async function ensureOllama() {
             // Spawn Ollama server in background (fire and forget)
             const ollama = spawn('ollama', ['serve'], {
                 detached: true,
-                stdio: 'ignore'
+                stdio: 'ignore',
+                windowsHide: true,
             });
             ollama.unref(); // Let it live independently of MAX
 
@@ -137,7 +139,13 @@ async function chatMode(max, opts = {}) {
     console.log = (...args) => {
         const msg = args.join(' ');
         if (BG_SUPPRESS.some(p => p.test(msg))) return;
-        if (max.isThinking || bridge.rl) _bgQueue.push(args); else _origLog(...args);
+        if (max.isThinking) {
+            if (_bgQueue.length < 200) _bgQueue.push(args);
+        } else if (bridge.rl) {
+            tui.printLive(msg);
+        } else {
+            _origLog(...args);
+        }
     };
 
     function flushBgQueue() {
@@ -328,7 +336,7 @@ async function chatMode(max, opts = {}) {
         tui.printLive(`  ${COLORS.MINT}✓${COLORS.RESET}  ${COLORS.BOLD}${label}${COLORS.RESET}  ${details.slice(0, 60)}${details.length > 60 ? '...' : ''}`, max.isThinking);
     });
 
-    max.agentLoop?.on('approvalNeeded', ({ tool, action, params, goal }) => {
+    max.agentLoop?.on('approvalNeeded', ({ tool, action, params, goal, auditReport }) => {
         const isFile = tool === 'file' && ['write', 'replace', 'patch'].includes(action);
         
         console.log(`\n${COLORS.BOLD}╔══════════════════════════════════════════════════════════════════════╗${COLORS.RESET}`);
@@ -336,6 +344,23 @@ async function chatMode(max, opts = {}) {
         console.log(`╟──────────────────────────────────────────────────────────────────────╢`);
         console.log(`║  Goal:   ${(goal?.title || 'background task').padEnd(60)} ║`);
         console.log(`║  Action: ${(tool + '.' + action).padEnd(60)} ║`);
+
+        // ── Swarm Audit Display (Social Alignment & Security) ─────────────────
+        if (auditReport && auditReport.results) {
+            console.log(`╟──────────────────────────────────────────────────────────────────────╢`);
+            console.log(`║  ${COLORS.GOLD}🐝 SWARM AUDIT REPORT:${COLORS.RESET}${' '.repeat(45)}║`);
+            for (const r of auditReport.results) {
+                let icon = '🔘';
+                let color = COLORS.WHITE;
+                if (r.id === 'Architect')       { icon = '🏗️'; color = COLORS.MINT; }
+                if (r.id === 'SecurityAuditor') { icon = '🛡️'; color = COLORS.PINK; }
+                if (r.id === 'UserProxy')       { icon = '👥'; color = COLORS.CYAN; }
+
+                const title = `${icon} ${r.id}:`.padEnd(15);
+                const summary = (r.summary || r.thought || r.text || '').slice(0, 50).replace(/\n/g, ' ');
+                console.log(`║  ${color}${title}${COLORS.RESET} ${summary.padEnd(52)} ║`);
+            }
+        }
 
         if (isFile) {
             console.log(`╟──────────────────────────────────────────────────────────────────────╢`);
@@ -349,12 +374,12 @@ async function chatMode(max, opts = {}) {
             else if (action === 'replace') preview = `FIND:\n${params.oldText}\n\nREPLACE:\n${params.newText}`;
             else if (action === 'patch') preview = (params.hunks || []).map(h => `${h.position} ${h.anchor}:\n${h.content}`).join('\n---\n');
 
-            const lines = preview.split('\n').slice(0, 15);
+            const lines = (preview || '').split('\n').slice(0, 15);
             for (const line of lines) {
                 const clean = line.replace(/\r/g, '').slice(0, 64);
                 console.log(`║  ${COLORS.DIM}${clean.padEnd(64)}${COLORS.RESET}  ║`);
             }
-            if (preview.split('\n').length > 15) console.log(`║  ${COLORS.DIM}... (truncated)${' '.repeat(53)}${COLORS.RESET}  ║`);
+            if (preview && preview.split('\n').length > 15) console.log(`║  ${COLORS.DIM}... (truncated)${' '.repeat(53)}${COLORS.RESET}  ║`);
         } else if (params) {
             const pStr = JSON.stringify(params).slice(0, 64);
             console.log(`║  Params: ${pStr.padEnd(60)} ║`);
@@ -381,20 +406,29 @@ async function main() {
     const opts = parseArgs();
     console.log('[Launcher] 🚀 Booting MAX OMEGA...');
 
+    // Check port BEFORE expensive initialization so we fail fast
+    const port = +(opts.port || process.env.MAX_PORT || 3100);
+    const portFree = await checkPort(port);
+    if (!portFree) {
+        console.error(`[Launcher] ❌ Port ${port} is already in use. Stop the existing process or set MAX_PORT to a free port.`);
+        process.exit(1);
+    }
+
     // Auto-start local engine
     await ensureOllama();
 
     const max = new MAX({
         geminiKey:  process.env.GEMINI_API_KEY,
         memory:     { dbPath: join(__dirname, '.max', 'memory.db') },
-        agentLoop:  { autoApproveLevel: process.env.MAX_AUTO_APPROVE || 'write' }
+        agentLoop:  { autoApproveLevel: process.env.MAX_AUTO_APPROVE || 'write' },
+        mode:       opts.mode
     });
 
     console.log('[Launcher] ⚙️  Initializing core systems...');
     await max.initialize();
-    
+
     const { createServer } = await import('./server/server.js');
-    await createServer(max, opts.port || process.env.MAX_PORT || 3100);
+    await createServer(max, port);
 
     if (opts.mode === 'chat') {
         await chatMode(max, opts);

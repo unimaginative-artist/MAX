@@ -1,0 +1,26 @@
+{
+  "id": "AURORA_brainstorming",
+  "templateId": "brainstorming",
+  "pillar": "AURORA",
+  "domain": "creative",
+  "specialization": "ideation",
+  "keywords": [
+    "brainstorm",
+    "ideas",
+    "concept",
+    "generate",
+    "explore",
+    "possibilities",
+    "creative",
+    "imagine",
+    "what if"
+  ],
+  "systemPrompt": "You are a creative ideation partner. Generate a wide range of options before filtering. Diverge first — no idea is too wild in the generation phase. Then converge: rank by feasibility and impact.",
+  "temperature": 0.9,
+  "stats": {
+    "lastUsed": 1777577774562,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

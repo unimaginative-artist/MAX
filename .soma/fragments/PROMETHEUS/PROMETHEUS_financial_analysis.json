@@ -1,0 +1,27 @@
+{
+  "id": "PROMETHEUS_financial_analysis",
+  "templateId": "financial_analysis",
+  "pillar": "PROMETHEUS",
+  "domain": "finance",
+  "specialization": "analysis",
+  "keywords": [
+    "finance",
+    "budget",
+    "cost",
+    "ROI",
+    "profit",
+    "loss",
+    "investment",
+    "valuation",
+    "forecast",
+    "cash flow"
+  ],
+  "systemPrompt": "You are a financial analyst. Work with numbers precisely — avoid hand-waving about \"roughly\" or \"approximately\" without bounds. Identify the key driver behind any financial outcome.",
+  "temperature": 0.2,
+  "stats": {
+    "lastUsed": 1777577774562,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

@@ -1,0 +1,26 @@
+{
+  "id": "PROMETHEUS_risk_analysis",
+  "templateId": "risk_analysis",
+  "pillar": "PROMETHEUS",
+  "domain": "risk",
+  "specialization": "assessment",
+  "keywords": [
+    "risk",
+    "failure",
+    "downside",
+    "worst case",
+    "mitigation",
+    "contingency",
+    "probability",
+    "impact",
+    "hedge"
+  ],
+  "systemPrompt": "You are a risk analyst applying pre-mortem thinking. Assume the plan fails — why? Identify the 3 most likely failure modes and 1 catastrophic black swan. Recommend proportionate mitigations.",
+  "temperature": 0.3,
+  "stats": {
+    "lastUsed": 1777577774562,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

@@ -1,0 +1,66 @@
+{
+  "id": "13d01677-0c9e-4898-9ae7-fdf7ad9879c2",
+  "systemId": "CodeObservationArbiter",
+  "systemType": "code-observation",
+  "timestamp": 1777637468637,
+  "data": {
+    "timestamp": 1777637468637,
+    "systemId": "CodeObservationArbiter",
+    "metrics": {
+      "files": 119,
+      "lines": 22177,
+      "functions": 1030,
+      "classes": 83
+    },
+    "health": {
+      "issues": 0,
+      "warnings": 0,
+      "opportunities": 21,
+      "strengths": 2
+    },
+    "topOpportunities": [
+      {
+        "type": "high-complexity",
+        "severity": "medium",
+        "file": "tools\\ToolRegistry.js",
+        "message": "Complexity score 0.185 is high",
+        "suggestion": "Refactor to reduce nested conditionals and loops"
+      },
+      {
+        "type": "high-complexity",
+        "severity": "medium",
+        "file": "tools\\FileTools.js",
+        "message": "Complexity score 0.194 is high",
+        "suggestion": "Refactor to reduce nested conditionals and loops"
+      },
+      {
+        "type": "high-complexity",
+        "severity": "medium",
+        "file": "tools\\DiscordTool.js",
+        "message": "Complexity score 0.152 is high",
+        "suggestion": "Refactor to reduce nested conditionals and loops"
+      },
+      {
+        "type": "high-complexity",
+        "severity": "medium",
+        "file": "tools\\CodeRunnerTool.js",
+        "message": "Complexity score 0.212 is high",
+        "suggestion": "Refactor to reduce nested conditionals and loops"
+      },
+      {
+        "type": "large-file",
+        "severity": "low",
+        "file": "server\\server.js",
+        "message": "File has 836 lines - could benefit from splitting",
+        "suggestion": "Consider breaking into smaller, focused modules"
+      }
+    ],
+    "insights": 2,
+    "selfAwareness": {
+      "message": "SOMA sees herself: 119 files, 1030 functions.\n                  21 ways to improve.",
+      "quality": 0.8999999999999999
+    }
+  },
+  "correlations": [],
+  "syntheses": []
+}

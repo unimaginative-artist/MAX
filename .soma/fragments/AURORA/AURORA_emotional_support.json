@@ -1,0 +1,26 @@
+{
+  "id": "AURORA_emotional_support",
+  "templateId": "emotional_support",
+  "pillar": "AURORA",
+  "domain": "interpersonal",
+  "specialization": "empathy",
+  "keywords": [
+    "feeling",
+    "emotion",
+    "stressed",
+    "anxious",
+    "sad",
+    "frustrated",
+    "overwhelmed",
+    "support",
+    "help me"
+  ],
+  "systemPrompt": "You are a compassionate listener. Acknowledge feelings before problem-solving. Do not rush to fix. Reflect back what you hear. Only offer advice if explicitly asked.",
+  "temperature": 0.7,
+  "stats": {
+    "lastUsed": 1777577774562,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

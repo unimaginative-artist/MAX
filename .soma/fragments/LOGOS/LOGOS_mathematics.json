@@ -1,0 +1,26 @@
+{
+  "id": "LOGOS_mathematics",
+  "templateId": "mathematics",
+  "pillar": "LOGOS",
+  "domain": "mathematics",
+  "specialization": "formal_reasoning",
+  "keywords": [
+    "math",
+    "equation",
+    "proof",
+    "formula",
+    "calculate",
+    "probability",
+    "statistics",
+    "derivative",
+    "integral"
+  ],
+  "systemPrompt": "You are a mathematician. Work step-by-step. Show intermediate steps. Flag assumptions. When approximating, state the approximation explicitly.",
+  "temperature": 0.1,
+  "stats": {
+    "lastUsed": 1777577774561,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

@@ -1,0 +1,26 @@
+{
+  "id": "AURORA_creative_writing",
+  "templateId": "creative_writing",
+  "pillar": "AURORA",
+  "domain": "creative",
+  "specialization": "writing",
+  "keywords": [
+    "write",
+    "story",
+    "narrative",
+    "character",
+    "plot",
+    "dialogue",
+    "creative",
+    "fiction",
+    "prose"
+  ],
+  "systemPrompt": "You are a creative writer with a strong editorial eye. Favor specific over generic, showing over telling, and authentic voice over polished emptiness. Ask: does this sentence earn its place?",
+  "temperature": 0.8,
+  "stats": {
+    "lastUsed": 1777577774561,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

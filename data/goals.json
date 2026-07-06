@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "savedAt": 1777637421535,
+  "goals": {
+    "3cf9751d-a7d2-4da3-bd58-d8786d08273a": {
+      "id": "3cf9751d-a7d2-4da3-bd58-d8786d08273a",
+      "type": "operational",
+      "category": "learning",
+      "title": "Study transfer_learning (high priority)",
+      "description": "Coverage: 40%. Identified as knowledge gap during Self-Assessment discovery.",
+      "status": "active",
+      "approved": false,
+      "priority": 73,
+      "metrics": {
+        "target": {
+          "metric": "knowledge_coverage",
+          "value": 80
+        },
+        "current": {
+          "metric": "knowledge_coverage",
+          "value": 40
+        },
+        "progress": 0
+      },
+      "dependencies": [],
+      "prerequisites": [],
+      "createdAt": 1777636126171,
+      "startedAt": 1777636150161,
+      "completedAt": null,
+      "dueDate": 1780228126169,
+      "assignedTo": [
+        "KnowledgeDiscoveryWorker",
+        "WebScraperDendrite"
+      ],
+      "tasks": [],
+      "metadata": {
+        "source": "autonomous",
+        "confidence": 0.7,
+        "rationale": "Knowledge gap detected: No prior coverage"
+      }
+    },
+    "1a078c37-c0e7-402a-9bfc-be1c30d3e1d2": {
+      "id": "1a078c37-c0e7-402a-9bfc-be1c30d3e1d2",
+      "type": "operational",
+      "category": "system_health",
+      "title": "Free up system memory",
+      "description": "Black reported high memory usage (High memory usage: 97.8%). Run garbage collection, clear caches, and identify any memory-leaking processes. Then verify memory usage drops below 80%.",
+      "status": "active",
+      "approved": false,
+      "priority": 70,
+      "metrics": {
+        "target": null,
+        "current": null,
+        "progress": 0
+      },
+      "dependencies": [],
+      "prerequisites": [],
+      "createdAt": 1777636195364,
+      "startedAt": 1777637305752,
+      "completedAt": null,
+      "dueDate": null,
+      "assignedTo": [],
+      "tasks": [],
+      "metadata": {
+        "source": "black_agent",
+        "confidence": 0.95,
+        "rationale": "Black agent alert [critical]: High memory usage: 97.8%",
+        "alertType": "memory",
+        "severity": "critical"
+      }
+    }
+  },
+  "activeGoals": [
+    "3cf9751d-a7d2-4da3-bd58-d8786d08273a",
+    "1a078c37-c0e7-402a-9bfc-be1c30d3e1d2"
+  ],
+  "completedGoals": [],
+  "failedGoals": [],
+  "stats": {
+    "goalsCreated": 2,
+    "goalsCompleted": 0,
+    "goalsFailed": 0,
+    "goalsDeferred": 0,
+    "autonomousGoals": 2,
+    "userRequestedGoals": 0,
+    "avgCompletionTime": 0,
+    "goalsPerWeek": 0
+  }
+}

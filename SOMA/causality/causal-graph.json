@@ -1,0 +1,12 @@
+{
+  "graph": [],
+  "observations": [],
+  "interventions": [],
+  "stats": {
+    "totalObservations": 0,
+    "totalInterventions": 0,
+    "causalLinksDiscovered": 0,
+    "hypothesesTested": 0
+  },
+  "savedAt": "2026-05-01T18:25:50.178Z"
+}

@@ -32,49 +32,120 @@ function saveCreds(update) {
 // ── Singleton client ──────────────────────────────────────────────────────
 let _client    = null;
 let _connected = false;
+let _connecting = null;
+let _reconnectTimer = null;
+let _lastError = null;
+let _lastConnectedAt = null;
+let _reconnectAttempts = 0;
 
 // Channels where MAX auto-reads and replies { channelId -> { guildName, channelName } }
 const _monitored = new Map();
 
+function allowedDmUserIds() {
+    return new Set(
+        (loadCreds().discord?.allowedDmUserIds || [])
+            .map(id => String(id).trim())
+            .filter(id => /^\d{17,20}$/.test(id))
+    );
+}
+
+export function isAuthorizedDiscordOperator(userId) {
+    return allowedDmUserIds().has(String(userId || ''));
+}
+
+export function shouldIgnoreForeignMention({ guildId, mentionedUserIds = [], selfId }) {
+    if (!guildId || !mentionedUserIds.length || !selfId) return false;
+    return !mentionedUserIds.map(String).includes(String(selfId));
+}
+
+export function canProcessDiscordMessage({ authorId, guildId, channelId }, creds = loadCreds()) {
+    if (guildId) return _monitored.has(channelId);
+    const allowed = new Set(
+        (creds.discord?.allowedDmUserIds || [])
+            .map(id => String(id).trim())
+            .filter(id => /^\d{17,20}$/.test(id))
+    );
+    return allowed.has(String(authorId || ''));
+}
+
 async function connectClient(token) {
     if (_connected && _client) return _client;
+    if (_connecting) return _connecting;
 
-    _client = new Client({
-        intents: [
-            GatewayIntentBits.Guilds,
-            GatewayIntentBits.GuildMessages,
-            GatewayIntentBits.MessageContent,
-            GatewayIntentBits.DirectMessages
-        ],
-        partials: [Partials.Channel, Partials.Message]
-    });
+    _connecting = new Promise((resolve, reject) => {
+        try { _client?.destroy(); } catch {}
+        _client = new Client({
+            intents: [
+                GatewayIntentBits.Guilds,
+                GatewayIntentBits.GuildMessages,
+                GatewayIntentBits.MessageContent,
+                GatewayIntentBits.DirectMessages
+            ],
+            partials: [Partials.Channel, Partials.Message]
+        });
 
-    return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Discord login timed out after 15s')), 15_000);
+        let settled = false;
+        const fail = (error) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            _connected = false;
+            _lastError = error?.message || String(error);
+            try { _client?.destroy(); } catch {}
+            reject(error);
+        };
+        const timeout = setTimeout(() => fail(new Error('Discord login timed out after 15s')), 15_000);
 
         _client.once('ready', () => {
+            if (settled) return;
+            settled = true;
             clearTimeout(timeout);
             _connected = true;
+            _lastError = null;
+            _lastConnectedAt = Date.now();
+            _reconnectAttempts = 0;
             console.log(`[Discord] ✅ Connected as ${_client.user.tag}`);
 
             _client.on('messageCreate', async (msg) => {
-                if (msg.author.bot) return;
+                // Ignore bots unless they specifically mention us (Bot-to-Bot collaboration)
+                if (msg.author.bot && !msg.mentions.has(_client.user.id)) return;
+                if (msg.author.id === _client.user.id) return; // Never reply to ourselves
+                if (shouldIgnoreForeignMention({
+                    guildId: msg.guildId,
+                    mentionedUserIds: [...(msg.mentions?.users?.keys?.() || [])],
+                    selfId: _client.user.id
+                })) return;
+
+                const isDirectMessage = !msg.guildId;
+                const authorized = canProcessDiscordMessage({
+                    authorId: msg.author.id,
+                    guildId: msg.guildId,
+                    channelId: msg.channelId
+                });
+                // Private messages are deny-by-default and never enter MAX's cognition.
+                if (isDirectMessage && !authorized) return;
 
                 const payload = {
                     author:    msg.author.username,
+                    authorId:  msg.author.id,
                     channel:   msg.channel?.name || 'DM',
                     channelId: msg.channelId,
                     content:   msg.content,
                     messageId: msg.id,
                     guildId:   msg.guildId,
+                    isDirectMessage,
                     ts:        msg.createdTimestamp
                 };
 
-                // Always surface to terminal via onMessage
-                DiscordTool.onMessage?.(payload);
+                // Observability must never block cognition or message delivery.
+                try {
+                    DiscordTool.onMessage?.(payload);
+                } catch (err) {
+                    console.warn('[Discord] Message observer failed:', err.message);
+                }
 
                 // Auto-respond if this channel is monitored
-                if (_monitored.has(msg.channelId) && DiscordTool.onRespond) {
+                if (authorized && DiscordTool.onRespond) {
                     try {
                         const reply = await DiscordTool.onRespond(payload);
                         if (reply) {
@@ -89,14 +160,45 @@ async function connectClient(token) {
             resolve(_client);
         });
 
-        _client.once('error', (err) => {
-            clearTimeout(timeout);
-            _connected = false;
-            reject(err);
+        _client.on('shardReady', () => {
+            _connected = true;
+            _lastError = null;
+            _lastConnectedAt = Date.now();
         });
 
-        _client.login(token).catch(reject);
+        _client.on('shardDisconnect', (_event, shardId) => {
+            _connected = false;
+            _lastError = `Discord shard ${shardId} disconnected`;
+            scheduleReconnect();
+        });
+
+        _client.on('invalidated', () => {
+            _connected = false;
+            _lastError = 'Discord session invalidated';
+            scheduleReconnect(5_000);
+        });
+
+        _client.once('error', (err) => {
+            _connected = false;
+            _lastError = err.message;
+            if (!settled) fail(err);
+        });
+
+        _client.login(token).catch(fail);
+    }).finally(() => {
+        _connecting = null;
     });
+    return _connecting;
+}
+
+function scheduleReconnect(delayMs = 30_000) {
+    if (_reconnectTimer || _connected || !loadCreds().discord?.token) return;
+    _reconnectTimer = setTimeout(async () => {
+        _reconnectTimer = null;
+        _reconnectAttempts += 1;
+        await autoConnectDiscord();
+    }, delayMs);
+    _reconnectTimer.unref?.();
 }
 
 // ── Tool definition ───────────────────────────────────────────────────────
@@ -113,7 +215,11 @@ Actions:
   monitor      → enable auto-respond in a channel (MAX will read and reply autonomously):
                  TOOL:discord:monitor:{"channelName":"general","enable":true}
                  TOOL:discord:monitor:{"channelName":"general","enable":false}
+  configureDm  → allow or revoke private replies for one Discord user ID:
+                 TOOL:discord:configureDm:{"userId":"123456789012345678","enable":true}
   react        → add emoji reaction: TOOL:discord:react:{"messageId":"123","channelId":"456","emoji":"👍"}
+  reconnect    → reconnect using saved credentials: TOOL:discord:reconnect:{}
+  askApproval  → POST an interactive PR embed and wait for user ✅/❌: TOOL:discord:askApproval:{"channelName":"general","title":"My Patch","description":"Here is the fix","diff":"-old\n+new"}
   listChannels → list all text channels: TOOL:discord:listChannels:{}
   status       → connection status: TOOL:discord:status:{}`,
 
@@ -132,7 +238,8 @@ Actions:
 
             try {
                 const client = await connectClient(cleanToken);
-                saveCreds({ discord: { token: cleanToken, channelId } });
+                const existing = loadCreds().discord || {};
+                saveCreds({ discord: { ...existing, token: cleanToken, channelId } });
 
                 let helloSent = false;
                 if (channelId) {
@@ -235,6 +342,51 @@ Actions:
             }
         },
 
+        // ── Interactive Approval PR ───────────────────────────────────────
+        async askApproval({ channelId, channelName, title, description, diff }) {
+            if (!_connected || !_client) return { success: false, error: 'Not connected' };
+            try {
+                const ch = await resolveChannel(channelId, channelName);
+
+                const { EmbedBuilder } = await import('discord.js');
+                const embed = new EmbedBuilder()
+                    .setTitle(title || 'Code Change Approval Request')
+                    .setDescription(description || 'Please review the following changes.')
+                    .setColor(0x00FF00);
+
+                if (diff) {
+                    const safeDiff = diff.length > 3900 ? diff.slice(0, 3900) + '\n... (truncated)' : diff;
+                    embed.addFields({ name: 'Changes', value: '```diff\n' + safeDiff + '\n```' });
+                }
+
+                const msg = await ch.send({ embeds: [embed] });
+                await msg.react('✅');
+                await msg.react('❌');
+
+                // Wait for reaction for up to 15 minutes
+                const filter = (reaction, user) => {
+                    return ['✅', '❌'].includes(reaction.emoji.name) && !user.bot;
+                };
+
+                const collected = await msg.awaitReactions({ filter, max: 1, time: 15 * 60 * 1000, errors: ['time'] })
+                    .catch(() => null); // If time expires, returns null
+
+                if (!collected || collected.size === 0) {
+                    await msg.reply('Approval request timed out after 15 minutes. Aborting.');
+                    return { success: true, approved: false, reason: 'timeout' };
+                }
+
+                const reaction = collected.first();
+                const approved = reaction.emoji.name === '✅';
+
+                await msg.reply(approved ? '✅ Approved! Applying changes...' : '❌ Rejected! Aborting changes.');
+
+                return { success: true, approved };
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
+        },
+
         // ── Add emoji reaction ────────────────────────────────────────────
         async react({ messageId, channelId, channelName, emoji }) {
             if (!_connected || !_client) return { success: false, error: 'Not connected' };
@@ -270,13 +422,59 @@ Actions:
 
         // ── Status ────────────────────────────────────────────────────────
         async status() {
+            const allowedDmUsers = allowedDmUserIds().size;
             return {
                 success:   true,
                 connected: _connected,
                 bot:       _client?.user?.tag || null,
                 guilds:    _client?.guilds?.cache?.size || 0,
-                monitored: [..._monitored.entries()].map(([id, info]) => ({ id, ...info }))
+                monitored: [..._monitored.entries()].map(([id, info]) => ({ id, ...info })),
+                connecting: Boolean(_connecting),
+                reconnectScheduled: Boolean(_reconnectTimer),
+                reconnectAttempts: _reconnectAttempts,
+                lastConnectedAt: _lastConnectedAt,
+                lastError: _lastError,
+                responderWired: typeof DiscordTool.onRespond === 'function',
+                dmEnabled: allowedDmUsers > 0,
+                allowedDmUsers,
             };
+        },
+
+        async configureDm({ userId, enable = true }) {
+            const normalized = String(userId || '').trim();
+            if (!/^\d{17,20}$/.test(normalized)) {
+                return { success: false, error: 'A valid Discord user ID is required' };
+            }
+            const creds = loadCreds();
+            const allowed = allowedDmUserIds();
+            if (enable) allowed.add(normalized);
+            else allowed.delete(normalized);
+            saveCreds({
+                discord: {
+                    ...(creds.discord || {}),
+                    allowedDmUserIds: [...allowed]
+                }
+            });
+            return {
+                success: true,
+                dmEnabled: allowed.size > 0,
+                allowedDmUsers: allowed.size,
+                message: enable ? 'Private replies enabled for that user.' : 'Private replies revoked for that user.'
+            };
+        },
+
+        async reconnect() {
+            const creds = loadCreds();
+            if (!creds.discord?.token) return { success: false, error: 'No saved Discord token' };
+            if (_reconnectTimer) {
+                clearTimeout(_reconnectTimer);
+                _reconnectTimer = null;
+            }
+            _connected = false;
+            try { _client?.destroy(); } catch {}
+            _client = null;
+            const connected = await autoConnectDiscord();
+            return { ...(await this.status()), success: connected };
         }
     }
 };
@@ -309,7 +507,9 @@ export async function autoConnectDiscord() {
         console.log(`[Discord] ♻️  Auto-connected as ${_client?.user?.tag} (${_monitored.size} channels monitored)`);
         return true;
     } catch (err) {
+        _lastError = err.message;
         console.warn('[Discord] Auto-connect failed:', err.message);
+        scheduleReconnect(Math.min(120_000, 15_000 * Math.max(1, _reconnectAttempts + 1)));
         return false;
     }
 }

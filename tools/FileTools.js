@@ -10,6 +10,79 @@ export const FileTools = {
     name: 'file',
     description: 'Read, write, list, and search files on disk',
 
+    actionDocs: {
+        read: {
+            description: "Read the contents of a file (optional line range/limits).",
+            params: {
+                filePath: { type: "string", required: true, description: "Absolute or relative path to the file." },
+                startLine: { type: "number", required: false, description: "1-indexed line number to start reading from." },
+                endLine: { type: "number", required: false, description: "1-indexed line number to stop reading (inclusive)." },
+                maxLines: { type: "number", required: false, default: 500, description: "Max lines to return if not choosing a line range." }
+            }
+        },
+        write: {
+            description: "Create or overwrite a file. Use ONLY when creating a new file.",
+            params: {
+                filePath: { type: "string", required: true, description: "Path to write the file." },
+                content: { type: "string", required: true, description: "Complete file contents." },
+                append: { type: "boolean", required: false, default: false, description: "If true, appends content instead of overwriting." },
+                aegisOverride: { type: "boolean", required: false, default: false, description: "Force write even if it deletes code signatures." }
+            }
+        },
+        replace: {
+            description: "Surgically replace a block of text in an existing file. Use instead of file:write for edits.",
+            params: {
+                filePath: { type: "string", required: true, description: "Path to the file." },
+                oldText: { type: "string", required: true, description: "Exact string in the file to replace (must match exactly including indentation/newlines)." },
+                newText: { type: "string", required: true, description: "Replacement text." },
+                all: { type: "boolean", required: false, default: false, description: "If true, replace all occurrences. Otherwise, replace first occurrence." }
+            }
+        },
+        patch: {
+            description: "Apply a list of surgical block edits (hunks) relative to an anchor line.",
+            params: {
+                filePath: { type: "string", required: true, description: "Path to the file." },
+                hunks: {
+                    type: "array",
+                    required: true,
+                    description: "List of hunk objects: [{\"anchor\": \"string matching line in file\", \"position\": \"before|after|replace|append\", \"content\": \"new text\", \"range\": 1}]"
+                },
+                createIfMissing: { type: "boolean", required: false, default: false, description: "Create file if it doesn't exist." }
+            }
+        },
+        list: {
+            description: "List files in a directory.",
+            params: {
+                dir: { type: "string", required: false, default: ".", description: "Directory to list." },
+                pattern: { type: "string", required: false, description: "Substring filter for file names." },
+                recursive: { type: "boolean", required: false, default: false, description: "If true, lists files recursively (depth limit 3)." }
+            }
+        },
+        search: {
+            description: "Search file contents for a substring query.",
+            params: {
+                dir: { type: "string", required: false, default: ".", description: "Base directory to search." },
+                query: { type: "string", required: true, description: "Substring to search for." },
+                filePattern: { type: "string", required: false, description: "Only search files matching this extension/substring." }
+            }
+        },
+        grep: {
+            description: "Search file contents using a regular expression pattern.",
+            params: {
+                dir: { type: "string", required: false, default: ".", description: "Base directory to search." },
+                pattern: { type: "string", required: true, description: "Regular expression pattern." },
+                filePattern: { type: "string", required: false, description: "Only search files matching this extension/substring." },
+                ignoreCase: { type: "boolean", required: false, default: false, description: "If true, performs case-insensitive regex search." }
+            }
+        },
+        delete: {
+            description: "Delete a file from disk.",
+            params: {
+                filePath: { type: "string", required: true, description: "Path to the file." }
+            }
+        }
+    },
+
     actions: {
         async read({ filePath, maxLines = 500, maxBytes = 10 * 1024 * 1024, startLine = null, endLine = null }) {
             const stat = await fs.stat(filePath).catch(() => null);

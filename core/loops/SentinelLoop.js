@@ -101,7 +101,7 @@ export class SentinelLoop {
         try {
             // node --check is great for detecting broken imports in ESM
             const res = await max.tools.execute('shell', 'run', { command: `node --check ${filePath}` });
-            return { success: res.exitCode === 0, error: res.stderr };
+            return { success: res.success, error: res.stderr };
         } catch (err) {
             return { success: false, error: err.message };
         }

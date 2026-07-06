@@ -6,7 +6,7 @@
 <title>Maxwell</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..500;1,9..144,300..500&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
@@ -87,6 +87,10 @@ html,body,#root { height:100%; background:var(--bg); color:var(--text); font-fam
 .conn-dot.live { background:var(--green); box-shadow:0 0 6px rgba(16,185,129,.6); animation:pulse 2.5s infinite; }
 .conn-dot.err  { background:var(--red); }
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.soma-pill { display:flex; align-items:center; gap:5px; font-size:11px; padding:3px 8px; border-radius:4px; background:var(--s3); border:1px solid var(--border); color:var(--muted); cursor:default; }
+.soma-pill.live { border-color:rgba(16,185,129,.35); color:var(--green); }
+.soma-pill .soma-dot { width:6px; height:6px; border-radius:50%; background:var(--muted2); flex-shrink:0; }
+.soma-pill.live .soma-dot { background:var(--green); box-shadow:0 0 5px rgba(16,185,129,.7); animation:pulse 2.5s infinite; }
 
 /* ── Main body ── */
 .ide-body { display:flex; flex:1; overflow:hidden; }
@@ -237,6 +241,16 @@ html,body,#root { height:100%; background:var(--bg); color:var(--text); font-fam
 .term-info{ color:var(--blue); }
 .term-cursor { display:inline-block; width:8px; height:14px; background:var(--accent); vertical-align:middle; animation:blink 1s infinite; }
 @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+.term-explain { display:block; margin:4px 0 6px 0; padding:6px 10px; background:rgba(96,165,250,.08); border-left:2px solid var(--blue); border-radius:0 4px 4px 0; color:var(--blue); font-size:11.5px; line-height:1.55; white-space:pre-wrap; }
+/* @mention picker */
+.at-picker { position:absolute; bottom:100%; left:0; right:0; background:var(--s2); border:1px solid var(--border); border-radius:8px 8px 0 0; max-height:180px; overflow-y:auto; z-index:100; }
+.at-item { display:flex; align-items:center; gap:8px; padding:6px 12px; cursor:pointer; font-size:12px; transition:background .1s; }
+.at-item:hover,.at-item.active { background:var(--aglow); }
+.at-item-icon { color:var(--muted); font-size:13px; }
+.at-item-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.at-item-hint { font-size:10.5px; color:var(--muted2); }
+.mention-badge { display:inline-flex; align-items:center; gap:3px; background:rgba(124,58,237,.18); border:1px solid rgba(124,58,237,.35); border-radius:4px; padding:0 5px; font-size:11px; color:var(--accent2); margin:0 2px; }
+.mention-chips { display:flex; flex-wrap:wrap; gap:4px; padding:4px 12px 0; }
 
 /* ── MAX chat panel ── */
 .max-panel {
@@ -720,6 +734,32 @@ html,body,#root { height:100%; background:var(--bg); color:var(--text); font-fam
 
 
 
+/* ── Terminal tabs ── */
+.term-tab-bar {
+  display:flex; align-items:center; background:var(--s2);
+  border-bottom:1px solid var(--border); height:28px; padding:0 4px; gap:0; flex-shrink:0;
+}
+.term-tab {
+  display:flex; align-items:center; gap:5px; padding:0 10px; height:28px;
+  font-size:11px; cursor:pointer; color:var(--muted); border-right:1px solid var(--border);
+  white-space:nowrap; transition:background .1s; position:relative; flex-shrink:0;
+}
+.term-tab:hover { background:var(--s3); color:var(--text); }
+.term-tab.active { background:var(--bg); color:var(--text); }
+.term-tab.active::after { content:''; position:absolute; bottom:0; left:0; right:0; height:1px; background:var(--accent); }
+.term-tab-close { width:14px; height:14px; border-radius:2px; display:flex; align-items:center; justify-content:center; font-size:10px; color:transparent; transition:all .1s; }
+.term-tab:hover .term-tab-close { color:var(--muted); }
+.term-tab-close:hover { background:var(--s4); color:var(--text) !important; }
+.term-tab-add { padding:0 8px; height:28px; display:flex; align-items:center; color:var(--muted); cursor:pointer; font-size:16px; transition:color .1s; flex-shrink:0; }
+.term-tab-add:hover { color:var(--text); }
+
+/* ── Pane resize handle (horizontal, between split panes) ── */
+.pane-resize-h {
+  width:4px; cursor:col-resize; background:transparent; flex-shrink:0;
+  transition:background .15s; z-index:10; position:relative;
+}
+.pane-resize-h:hover, .pane-resize-h.dragging { background:var(--accent); opacity:.6; }
+
 /* ── Real terminal ── */
 .term-input-row {
   display:flex; align-items:center; gap:8px; padding:4px 12px 8px;
@@ -997,12 +1037,312 @@ html,body,#root { height:100%; background:var(--bg); color:var(--text); font-fam
   color:#fff; font-size:12px; font-weight:600; cursor:pointer; transition:opacity .15s;
 }
 .preview-reload-btn:hover { opacity:.85; }
+
+/* Observability Matrix */
+.obs-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.swarm-node {
+  transition: all 0.2s ease;
+}
+.split-grid {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  gap: 1px;
+  background: var(--border);
+}
+.pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  min-width: 0;
+  position: relative;
+}
+.pane.active {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.pane-header {
+  height: 34px;
+  background: var(--s1);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  gap: 8px;
+  flex-shrink: 0;
+}
+/* ── Muse Mode ── */
+@keyframes museBreathe {
+  0%,100% { transform:translate(0,0) scale(1); opacity:.55; }
+  50%      { transform:translate(2%,-1%) scale(1.08); opacity:.85; }
+}
+@keyframes museSigPulse {
+  0%,100% { transform:scale(1);    opacity:.85; }
+  50%      { transform:scale(1.08); opacity:1; }
+}
+@keyframes museFadeUp {
+  from { opacity:0; transform:translateY(8px); filter:blur(4px); }
+  to   { opacity:1; transform:translateY(0);   filter:blur(0); }
+}
+@keyframes museDrift {
+  0%,100% { transform:translate(-50%,-50%) translate(0,0); }
+  50%      { transform:translate(-50%,-50%) translate(var(--mdx,6px),var(--mdy,-4px)); }
+}
+@keyframes museCaret {
+  0%,49%  { opacity:1; }
+  50%,100%{ opacity:0; }
+}
+@keyframes museShift {
+  from { opacity:0; filter:blur(8px); }
+  to   { opacity:1; filter:blur(0); }
+}
+@keyframes museExit {
+  from { opacity:1; filter:blur(0); }
+  to   { opacity:0; filter:blur(12px); }
+}
+.muse-overlay {
+  position:fixed; inset:0; z-index:9000;
+  animation: museShift .5s ease-out;
+}
+.muse-overlay.exiting {
+  animation: museExit .4s ease-in forwards;
+  pointer-events:none;
+}
 </style>
 </head>
 <body>
 <div id="root"></div>
 
 <script type="text/babel">
+
+// ── Observability View Component ──────────────────────────────────────────
+function ObservabilityView({ pagingLog, groundingLog, evolutionLog, swarmState }) {
+  const [impactFile, setImpactFile] = useState('');
+  const [impactData, setImpactData] = useState(null);
+
+  const checkImpact = async () => {
+    if (!impactFile) return;
+    try {
+      const res = await fetch(`${MAX_BASE}/api/tools/graph/impact`, {
+        method: 'POST',
+        headers: authHdrs(),
+        body: JSON.stringify({ path: impactFile })
+      });
+      const data = await res.json();
+      setImpactData(data.impact || []);
+    } catch {}
+  };
+
+  return (
+    <div className="obs-matrix" style={{display:'flex',flexDirection:'column',height:'100%',overflow:'hidden',background:'var(--bg2)'}}>
+      <div className="sb-header">
+        <span>Observability Matrix</span>
+        <span style={{fontSize:10,color:'var(--muted)',fontWeight:700}}>OMEGA V2.11</span>
+      </div>
+      
+      <div className="sb-scroll" style={{padding:8}}>
+        {/* Real-time Swarm Status */}
+        <div className="obs-section">
+          <div className="obs-section-label">{ICONS.bolt} Distributed Swarm</div>
+          <div className="swarm-grid" style={{display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(80px, 1fr))',gap:6,marginTop:8}}>
+            {['Architect', 'SecurityAuditor', 'Researcher', 'UserProxy'].map(w => {
+              const isActive = swarmState.workers?.includes(w) || (swarmState.activeJobs && swarmState.activeJobs.some(j => j.subtasks?.some(s => s.id === w && s.status === 'running')));
+              return (
+                <div key={w} className="swarm-node" style={{
+                  background:'var(--s3)',border:'1px solid var(--border)',borderRadius:6,padding:6,textAlign:'center',
+                  opacity: isActive ? 1 : 0.4,
+                  boxShadow: isActive ? '0 0 4px var(--accent)' : 'none',
+                  border: isActive ? '1px solid var(--accent)' : '1px solid var(--border)',
+                  color: 'var(--text)'
+                }}>
+                  <div style={{display:'flex', justifyContent:'center', marginBottom:4}}>
+                    {w === 'Architect' ? ICONS.code : w === 'SecurityAuditor' ? ICONS.warning : w === 'Researcher' ? ICONS.search : ICONS.settings}
+                  </div>
+                  <div style={{fontSize:8,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{w}</div>
+                  <div style={{fontSize:7,color:'var(--muted)'}}>{isActive ? 'WORKING' : 'IDLE'}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Real-time Context Paging (The Page Table) */}
+        <div className="obs-section" style={{marginTop:16}}>
+          <div className="obs-section-label">{ICONS.file} Virtual Memory (Context Pager)</div>
+          <div className="page-table" style={{marginTop:8,fontSize:10,fontFamily:'var(--mono)'}}>
+            {pagingLog.slice(0, 3).map((p, i) => (
+              <div key={i} style={{marginBottom:10,padding:6,background:'var(--s1)',borderRadius:4,borderLeft:'2px solid var(--accent)'}}>
+                <div style={{color:'var(--accent)',fontWeight:'bold',fontSize:9, marginBottom:4}}>QUERY: {p.query.slice(0, 30)}...</div>
+                <div style={{display:'flex',flexDirection:'column',gap:2}}>
+                  {p.buffers?.map(b => <div key={b} style={{color:'var(--amber)',fontSize:8}}>• [HOT] {b}</div>)}
+                  {p.semantic?.slice(0, 5).map((s, j) => <div key={j} style={{color:'var(--text)',fontSize:8}}>• {s.source} (Hunk {s.hunk})</div>)}
+                  {p.semantic?.length > 5 && <div style={{color:'var(--muted)',fontSize:8, paddingLeft:8}}>... {p.semantic.length - 5} more</div>}
+                </div>
+                <div style={{marginTop:4, fontSize:8, color:'var(--muted)'}}>Context Budget Used: {Math.round(p.used/p.budget*100)}%</div>
+              </div>
+            ))}
+            {pagingLog.length === 0 && <div style={{color:'var(--muted)',padding:10,textAlign:'center',fontSize:10}}>Waiting for reasoning cycle...</div>}
+          </div>
+        </div>
+
+        {/* Truth-Seeking Grounding Log */}
+        <div className="obs-section" style={{marginTop:16}}>
+          <div className="obs-section-label">{ICONS.target} Truth-Seeking (Grounding)</div>
+          <div className="grounding-list" style={{marginTop:8,fontSize:9,fontFamily:'var(--mono)'}}>
+            {groundingLog.map((g, i) => (
+              <div key={i} style={{marginBottom:6,padding:'4px 6px',borderLeft:'1px solid var(--border)', background:'var(--s1)'}}>
+                <div style={{fontWeight:'bold', color: g.status === 'done' ? 'var(--green)' : g.status === 'failed' ? 'var(--red)' : 'var(--accent)'}}>
+                  [{g.status.toUpperCase()}]
+                </div>
+                <div style={{marginTop:2, color:'var(--text)'}}>{g.query || g.task?.tool || g.originalResponse?.slice(0, 50) || 'Action started'}</div>
+                {g.findings && <div style={{fontSize:8, color:'var(--muted)', marginTop:2, fontStyle:'italic'}}>Evidence: {g.findings.slice(0, 100)}...</div>}
+              </div>
+            ))}
+            {groundingLog.length === 0 && <div style={{color:'var(--muted)',padding:10,textAlign:'center',fontSize:10}}>Monitoring for uncertainty...</div>}
+          </div>
+        </div>
+
+        {/* Actionable Architecture Intelligence */}
+        <div className="obs-section" style={{marginTop:16}}>
+          <div className="obs-section-label">{ICONS.graph} Impact Analysis</div>
+          <div style={{display:'flex', gap:4, marginTop:8}}>
+            <input 
+              className="sb-input" 
+              placeholder="Enter file path..." 
+              value={impactFile} 
+              onChange={e => setImpactFile(e.target.value)}
+              style={{flex:1, fontSize:10, height:22}}
+            />
+            <button className="sb-btn" onClick={checkImpact} style={{padding:'0 6px', height:22, fontSize:10}}>Analyze</button>
+          </div>
+          {impactData && (
+            <div style={{marginTop:8, fontSize:9, background:'var(--s3)', padding:6, borderRadius:4}}>
+              <div style={{fontWeight:'bold', color:'var(--red)', marginBottom:4}}>Blast Radius: {impactData.length} files</div>
+              {impactData.slice(0, 10).map(f => <div key={f} style={{color:'var(--muted)'}}>↳ {f}</div>)}
+              {impactData.length > 10 && <div style={{color:'var(--muted)', paddingLeft:8}}>... {impactData.length - 10} more</div>}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Split-Pane Components ───────────────────────────────────────────────
+function Pane({ pane, isActive, onClick, children, onClose,
+                showTabBar, openTabs, paneTab, onTabSelect, onTabClose, unsaved, fileIcon, style }) {
+  return (
+    <div className={`pane ${isActive ? 'active' : ''}`} onClick={onClick} style={style}>
+      {showTabBar && (
+        <div className="tabs-bar" style={{borderBottom:'1px solid var(--border)',flexShrink:0}}>
+          {(openTabs||[]).map(t=>(
+            <div key={t.name} className={`tab ${paneTab===t.name?'active':''}`}
+                 onClick={e=>{e.stopPropagation();onTabSelect(t.name);}}>
+              <span className="tab-icon">{fileIcon(t.name)}</span>
+              {t.name}
+              {(unsaved||{})[t.name]
+                ? <span className="tab-dot" title="Unsaved changes"/>
+                : <span className="tab-close" onClick={e=>{e.stopPropagation();onTabClose(t.name);}}
+                        style={{display:'flex',alignItems:'center',justifyContent:'center'}}>{ICONS.close}</span>
+              }
+            </div>
+          ))}
+          {(!openTabs||openTabs.length===0)&&<span className="tab-welcome">Open a file</span>}
+          {onClose && (
+            <div style={{marginLeft:'auto',display:'flex',alignItems:'center',padding:'0 4px',borderLeft:'1px solid var(--border)'}}>
+              <button className="sb-icon-btn" title="Close pane"
+                      onClick={e=>{e.stopPropagation();onClose();}}
+                      style={{fontSize:11,color:'var(--muted)'}}>✕</button>
+            </div>
+          )}
+        </div>
+      )}
+      <div style={{flex:1, display:'flex', flexDirection:'column', overflow:'hidden'}}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function SplitGrid({ panes, activePaneId, onPaneClick, renderPaneContent, onClosePane,
+                     openTabs, unsaved, fileIcon, onTabSelect, onTabClose }) {
+  const [paneWidths, setPaneWidths] = React.useState(null);
+  const [draggingIdx, setDraggingIdx] = React.useState(null);
+  const containerRef = React.useRef(null);
+  const splitEnabled = panes.length > 1;
+
+  const startResize = (e, idx) => {
+    e.preventDefault();
+    setDraggingIdx(idx);
+    const startX = e.clientX;
+    const containerW = containerRef.current?.offsetWidth || 1;
+    const n = panes.length;
+    const snap = paneWidths || panes.map(() => 100/n);
+    const onMove = ev => {
+      const dPct = ((ev.clientX - startX) / containerW) * 100;
+      setPaneWidths(ws => {
+        const base = ws || snap;
+        const next = [...base];
+        next[idx]   = Math.max(15, base[idx]   + dPct);
+        next[idx+1] = Math.max(15, base[idx+1] - dPct);
+        // normalize so sum = 100
+        const sum = next.reduce((a,b)=>a+b,0);
+        return next.map(w=>w/sum*100);
+      });
+    };
+    const onUp = () => { setDraggingIdx(null); window.removeEventListener('mousemove',onMove); window.removeEventListener('mouseup',onUp); };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  React.useEffect(()=>{
+    if(!splitEnabled) setPaneWidths(null);
+  },[panes.length]);
+
+  const widths = paneWidths || panes.map(()=>100/panes.length);
+
+  return (
+    <div className="split-grid" ref={containerRef}>
+      {panes.map((pane, i) => (
+        <React.Fragment key={pane.id}>
+          <Pane
+            pane={pane}
+            isActive={pane.id === activePaneId}
+            onClick={() => onPaneClick(pane.id)}
+            onClose={splitEnabled ? () => onClosePane(pane.id) : null}
+            showTabBar={splitEnabled}
+            openTabs={openTabs}
+            paneTab={pane.activeTab}
+            onTabSelect={name => onTabSelect(pane.id, name)}
+            onTabClose={onTabClose}
+            unsaved={unsaved}
+            fileIcon={fileIcon}
+            style={{width: splitEnabled ? widths[i]+'%' : '100%', flex: splitEnabled ? 'none' : 1}}
+          >
+            {renderPaneContent(pane)}
+          </Pane>
+          {i < panes.length - 1 && (
+            <div className={`pane-resize-h${draggingIdx===i?' dragging':''}`}
+                 onMouseDown={e=>startResize(e,i)} />
+          )}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
 const { useState, useEffect, useRef, useCallback } = React;
 const MAX_BASE = window.__MAX_BASE_URL || localStorage.getItem('maxwell_url') || 'http://localhost:3100';
 
@@ -1058,6 +1398,7 @@ const ICONS = {
   logDown:  <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6l5 5 5-5"/></svg>,
   logUp:    <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 10l5-5 5 5"/></svg>,
   bridge:   <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M2 12 Q8 4 14 12"/><path d="M5 12V9M11 12V9"/><path d="M2 12h12"/></svg>,
+  observability: <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><path d="M9 9l5 5M14 9l-5 5"/></svg>,
   graph:    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="3" cy="8" r="2"/><circle cx="13" cy="3" r="2"/><circle cx="13" cy="13" r="2"/><circle cx="8" cy="8" r="1.5"/><path d="M4.8 7.2L6.5 8M9.5 8L11.2 3.5M9.5 8.5L11.2 12.5"/></svg>,
   ts:       <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><rect width="16" height="16" rx="2" fill="#3178C6"/><text x="2" y="13" fill="white" fontSize="10" fontFamily="monospace" fontWeight="bold">TS</text></svg>,
   json:     <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><rect width="16" height="16" rx="2" fill="#e8b000"/><text x="1" y="12" fill="white" fontSize="7" fontFamily="monospace" fontWeight="bold">JSON</text></svg>,
@@ -1104,8 +1445,9 @@ const SLASH_CMDS = [
   { cmd:'/reason',  desc:'Multi-strategy analysis'   },
   { cmd:'/inspect', desc:'Scan for TODOs/FIXMEs'     },
   { cmd:'/run',     desc:'Run a shell command'       },
-];
-
+  { cmd:'/split',   desc:'Bifurcate active editor'   },
+  { cmd:'/close',   desc:'Close active pane'         },
+  ];
 // ── Demo data ─────────────────────────────────────────────────
 const DEMO_FILES = [
   { id:'f1', name:'src', type:'dir', children:[
@@ -1385,6 +1727,81 @@ const AAM_META = {
   'brain':        { icon:'◈',  verb:'reasoning', color:'#7c3aed' },
 };
 
+function ClarificationCard({ msg, maxUrl, onAnswered }) {
+  const [answers, setAnswers] = React.useState(msg.questions.map(()=>''));
+  const [submitted, setSubmitted] = React.useState(msg.answered);
+  const [sending, setSending] = React.useState(false);
+
+  const submit = async () => {
+    const combined = msg.questions.map((q, i) => `Q: ${q}\nA: ${answers[i]||'(no answer)'}`).join('\n\n');
+    setSending(true);
+    try {
+      await fetch(`${maxUrl}/api/goals/${msg.goalId}/clarify`, {
+        method: 'POST',
+        headers: { ...authHdrs(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answers: combined }),
+      });
+      setSubmitted(true);
+      onAnswered?.(msg.id);
+    } catch { /* silent */ }
+    setSending(false);
+  };
+
+  return (
+    <div style={{
+      margin:'8px 0', borderRadius:8,
+      border:'1px solid var(--accent2)', background:'rgba(99,102,241,0.06)', overflow:'hidden',
+    }}>
+      <div style={{padding:'8px 12px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',gap:8}}>
+        <span style={{fontSize:13}}>❓</span>
+        <span style={{fontSize:12,fontWeight:600,color:'var(--accent2)'}}>MAX needs clarification</span>
+        <span style={{fontSize:10,color:'var(--muted)',flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{msg.goalTitle}</span>
+      </div>
+      <div style={{padding:'10px 12px'}}>
+        {msg.questions.map((q, i) => (
+          <div key={i} style={{marginBottom: i < msg.questions.length-1 ? 10 : 0}}>
+            <div style={{fontSize:11,color:'var(--fg)',marginBottom:4,fontWeight:500}}>{i+1}. {q}</div>
+            {!submitted
+              ? <textarea
+                  rows={2}
+                  value={answers[i]}
+                  onChange={e => setAnswers(a => { const n=[...a]; n[i]=e.target.value; return n; })}
+                  placeholder="Your answer…"
+                  style={{
+                    width:'100%', boxSizing:'border-box', resize:'vertical',
+                    background:'var(--bg)', border:'1px solid var(--border)',
+                    borderRadius:4, color:'var(--fg)', fontSize:11, padding:'5px 7px',
+                    fontFamily:'inherit', outline:'none',
+                  }}
+                />
+              : <div style={{fontSize:11,color:'var(--muted)',fontStyle:'italic'}}>{answers[i]||'(no answer)'}</div>
+            }
+          </div>
+        ))}
+        {!submitted && (
+          <div style={{marginTop:10,display:'flex',gap:8}}>
+            <button
+              onClick={submit} disabled={sending}
+              style={{
+                background:'var(--accent2)', border:'none', borderRadius:4,
+                color:'#fff', padding:'4px 12px', fontSize:11, cursor:'pointer', fontWeight:600,
+                opacity: sending ? 0.6 : 1,
+              }}>
+              {sending ? 'Sending…' : 'Submit'}
+            </button>
+            <button
+              onClick={() => { setSubmitted(true); onAnswered?.(msg.id); }}
+              style={{ background:'none', border:'1px solid var(--border)', borderRadius:4, color:'var(--muted)', padding:'4px 10px', fontSize:11, cursor:'pointer' }}>
+              Skip
+            </button>
+          </div>
+        )}
+        {submitted && <div style={{marginTop:8,fontSize:10,color:'var(--green)'}}>✓ Answers submitted — MAX will continue with context.</div>}
+      </div>
+    </div>
+  );
+}
+
 function AgentActivityMessage({ msg }) {
   const isRunning = msg.status === 'running';
   const isDone    = msg.status === 'done';
@@ -1617,10 +2034,17 @@ function ToolChip({ t, pendingChanges, setPendingChanges, setActiveTab }) {
     const fname = t.label.split('/').pop();
     try {
       const content = pending.content || '';
-      const r = await fetch(window.MAX_URL + '/api/tools/file/write', {
-        method: 'POST', headers: authHdrs(),
-        body: JSON.stringify({ filePath: t.label, content })
-      });
+      if (pending.editId) {
+        await fetch(window.MAX_URL + `/api/workspace-edits/${encodeURIComponent(pending.editId)}/accept`, {
+          method: 'POST',
+          headers: authHdrs(true)
+        });
+      } else {
+        await fetch(window.MAX_URL + '/api/tools/file/write', {
+          method: 'POST', headers: authHdrs(),
+          body: JSON.stringify({ filePath: t.label, content })
+        });
+      }
       setPendingChanges(ps => ps.map(p => p.id === pending.id ? {...p, status:'accepted'} : p));
     } catch {
       setPendingChanges(ps => ps.map(p => p.id === pending.id ? {...p, status:'accepted'} : p));
@@ -1630,6 +2054,12 @@ function ToolChip({ t, pendingChanges, setPendingChanges, setActiveTab }) {
   const reject = (e) => {
     e.stopPropagation();
     playReject();
+    if (pending?.editId) {
+      fetch(window.MAX_URL + `/api/workspace-edits/${encodeURIComponent(pending.editId)}/reject`, {
+        method: 'POST',
+        headers: authHdrs(true)
+      }).catch(()=>{});
+    }
     setPendingChanges(ps => ps.map(p => p.id === pending.id ? {...p, status:'rejected'} : p));
   };
 
@@ -1664,9 +2094,41 @@ function ToolChip({ t, pendingChanges, setPendingChanges, setActiveTab }) {
 
 // ── Message time helper ───────────────────────────────────────
 function fmtTime(id) {
-  if (!id || id < 1000000000000) return '';
-  const d = new Date(id);
+  const raw = String(id || '');
+  const match = raw.match(/\d{13}/);
+  const ts = typeof id === 'number' ? id : match ? Number(match[0]) : 0;
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '';
   return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+}
+
+function stripInternalContext(text = '') {
+  if (typeof text !== 'string' || !text) return text || '';
+  const markers = [
+    '\n## Relevant Memories',
+    '\nRelevant Memories',
+    '\n## Knowledge Base',
+    '\nKnowledge Base — retrieved context',
+    '\nKnowledge Base â€” retrieved context',
+    '\n## System State',
+    '\nREADME summary:',
+    '\nStack: @',
+    '\nMAX — autonomous engineering agent',
+    '\nMAX â€” autonomous engineering agent'
+  ];
+  let cut = -1;
+  for (const marker of markers) {
+    const idx = text.indexOf(marker);
+    if (idx !== -1 && (cut === -1 || idx < cut)) cut = idx;
+  }
+  if (cut === -1) {
+    for (const marker of markers.map(m => m.trimStart())) {
+      if (text.startsWith(marker)) return '';
+    }
+    return text;
+  }
+  return text.slice(0, cut).trim();
 }
 
 // ── MAX message ───────────────────────────────────────────────
@@ -1679,7 +2141,7 @@ function MaxMsg({ msg, pendingChanges, setPendingChanges, setActiveTab }) {
       <div className="msg-avatar" style={{fontSize:10,fontWeight:700}}>YOU</div>
       <div className="msg-body">
         <div className="msg-meta">{fmtTime(msg.id)}</div>
-        <div className="bubble"><MdContent text={msg.text}/></div>
+        <div className="bubble"><MdContent text={stripInternalContext(msg.text)}/></div>
       </div>
     </div>
   );
@@ -1698,7 +2160,7 @@ function MaxMsg({ msg, pendingChanges, setPendingChanges, setActiveTab }) {
         </div>
         <div className="bubble">
           {msg.tools?.map((t,i)=><ToolChip key={i} t={t} pendingChanges={pendingChanges} setPendingChanges={setPendingChanges} setActiveTab={setActiveTab}/>)}
-          <MdContent text={msg.text} isStreaming={!!msg.streaming}/>
+          <MdContent text={stripInternalContext(msg.text)} isStreaming={!!msg.streaming}/>
         </div>
       </div>
     </div>
@@ -2830,6 +3292,187 @@ function playReject() {
 }
 
 
+// ── Monaco provider registration (LSP + AI ghost text) ──────
+// Called once after Monaco loads. All providers use window.MAX_URL lazily
+// so they work even though the URL is set in a later React effect.
+function _registerMaxwellProviders(monaco) {
+    // LSP completion kind → Monaco kind mapping
+    const CIK = monaco.languages.CompletionItemKind;
+    const LSP_KIND = {
+        1:CIK.Text, 2:CIK.Method, 3:CIK.Function, 4:CIK.Constructor,
+        5:CIK.Field, 6:CIK.Variable, 7:CIK.Class, 8:CIK.Interface,
+        9:CIK.Module, 10:CIK.Property, 11:CIK.Unit, 12:CIK.Value,
+        13:CIK.Enum, 14:CIK.Keyword, 15:CIK.Snippet, 16:CIK.Color,
+        17:CIK.File, 18:CIK.Reference, 19:CIK.Folder, 20:CIK.EnumMember,
+        21:CIK.Constant, 22:CIK.Struct, 23:CIK.Event, 24:CIK.Operator,
+        25:CIK.TypeParameter
+    };
+
+    // ── 1. LSP popup completions (dropdown) ────────────────────────────
+    monaco.languages.registerCompletionItemProvider({ pattern: '**' }, {
+        triggerCharacters: ['.', '(', '{', '[', '<', ' ', '"', "'", ':', '/'],
+        provideCompletionItems: async (model, position) => {
+            const baseUrl = window.MAX_URL;
+            if (!baseUrl) return { suggestions: [] };
+            try {
+                const r = await fetch(`${baseUrl}/api/lsp/complete`, {
+                    method: 'POST', headers: authHdrs(),
+                    body: JSON.stringify({
+                        uri:        model.uri.toString(),
+                        position:   { line: position.lineNumber - 1, character: position.column - 1 },
+                        languageId: model.getLanguageId(),
+                        content:    model.getValue()
+                    })
+                });
+                const data = await r.json();
+                const word = model.getWordUntilPosition(position);
+                const range = {
+                    startLineNumber: position.lineNumber, startColumn: word.startColumn,
+                    endLineNumber:   position.lineNumber, endColumn:   position.column
+                };
+                return {
+                    suggestions: (data.items || []).slice(0, 150).map(item => {
+                        const doc = item.documentation;
+                        return {
+                            label:      { label: item.label, detail: item.detail ? `  ${item.detail}` : '' },
+                            kind:       LSP_KIND[item.kind] ?? CIK.Text,
+                            documentation: doc ? (typeof doc === 'string' ? doc : doc.value) : undefined,
+                            insertText: item.insertText ?? item.textEdit?.newText ?? item.label,
+                            insertTextRules: item.insertTextFormat === 2
+                                ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : 0,
+                            range,
+                            sortText:   item.sortText,
+                            filterText: item.filterText ?? item.label
+                        };
+                    })
+                };
+            } catch { return { suggestions: [] }; }
+        }
+    });
+
+    // ── 2. Hover provider (type info + docs on mouse-over) ─────────────
+    monaco.languages.registerHoverProvider({ pattern: '**' }, {
+        provideHover: async (model, position) => {
+            const baseUrl = window.MAX_URL;
+            if (!baseUrl) return null;
+            try {
+                const r = await fetch(`${baseUrl}/api/lsp/hover`, {
+                    method: 'POST', headers: authHdrs(),
+                    body: JSON.stringify({
+                        uri:        model.uri.toString(),
+                        position:   { line: position.lineNumber - 1, character: position.column - 1 },
+                        languageId: model.getLanguageId()
+                    })
+                });
+                const data = await r.json();
+                if (!data?.contents) return null;
+                const contents = Array.isArray(data.contents)
+                    ? data.contents.map(c => typeof c === 'string' ? { value: c } : c)
+                    : [typeof data.contents === 'string' ? { value: data.contents } : data.contents];
+                return { contents };
+            } catch { return null; }
+        }
+    });
+
+    // ── 3. Go-to-definition provider (F12 / Ctrl+Click) ────────────────
+    monaco.languages.registerDefinitionProvider({ pattern: '**' }, {
+        provideDefinition: async (model, position) => {
+            const baseUrl = window.MAX_URL;
+            if (!baseUrl) return null;
+            try {
+                const r = await fetch(`${baseUrl}/api/lsp/definition`, {
+                    method: 'POST', headers: authHdrs(),
+                    body: JSON.stringify({
+                        uri:        model.uri.toString(),
+                        position:   { line: position.lineNumber - 1, character: position.column - 1 },
+                        languageId: model.getLanguageId()
+                    })
+                });
+                const data = await r.json();
+                if (!data) return null;
+                const locs = Array.isArray(data) ? data : [data];
+                return locs
+                    .filter(l => l?.uri && l?.range)
+                    .map(l => ({
+                        uri: monaco.Uri.parse(l.uri),
+                        range: {
+                            startLineNumber: (l.range.start.line ?? 0) + 1,
+                            startColumn:     (l.range.start.character ?? 0) + 1,
+                            endLineNumber:   (l.range.end.line ?? 0) + 1,
+                            endColumn:       (l.range.end.character ?? 0) + 1
+                        }
+                    }));
+            } catch { return null; }
+        }
+    });
+
+    // ── 4. AI inline ghost-text completions (Cursor-style Tab) ─────────
+    // Debounce: only fire after 600 ms of typing inactivity
+    let _ghostTimer  = null;
+    let _ghostCancel = null;
+    let _lastGhostText = '';
+
+    monaco.languages.registerInlineCompletionsProvider({ pattern: '**' }, {
+        provideInlineCompletions: (model, position, context, token) => {
+            return new Promise(resolve => {
+                if (_ghostTimer) clearTimeout(_ghostTimer);
+                if (_ghostCancel) _ghostCancel();
+
+                let cancelled = false;
+                _ghostCancel = () => { cancelled = true; resolve({ items: [] }); };
+
+                _ghostTimer = setTimeout(async () => {
+                    _ghostTimer  = null;
+                    _ghostCancel = null;
+
+                    const baseUrl = window.MAX_URL;
+                    if (!baseUrl || token.isCancellationRequested || cancelled) {
+                        return resolve({ items: [] });
+                    }
+
+                    const textBefore = model.getValueInRange({
+                        startLineNumber: 1, startColumn: 1,
+                        endLineNumber: position.lineNumber, endColumn: position.column
+                    });
+
+                    // Skip if too short or identical to last request
+                    if (textBefore.trim().length < 25 || textBefore === _lastGhostText) {
+                        return resolve({ items: [] });
+                    }
+                    _lastGhostText = textBefore;
+
+                    try {
+                        const r = await fetch(`${baseUrl}/api/lsp/ai-complete`, {
+                            method: 'POST', headers: authHdrs(),
+                            body: JSON.stringify({
+                                text:       textBefore.slice(-2000),
+                                languageId: model.getLanguageId(),
+                                fileName:   model.uri.path?.split('/').pop() ?? ''
+                            })
+                        });
+                        if (token.isCancellationRequested || cancelled) return resolve({ items: [] });
+                        const data = await r.json();
+                        if (!data.completion || data.completion.trim().length < 2) {
+                            return resolve({ items: [] });
+                        }
+                        resolve({
+                            items: [{
+                                insertText: data.completion,
+                                range: new monaco.Range(
+                                    position.lineNumber, position.column,
+                                    position.lineNumber, position.column
+                                )
+                            }],
+                            enableForwardStability: true
+                        });
+                    } catch { resolve({ items: [] }); }
+                }, 150);
+            });
+        },
+        freeInlineCompletions: () => {}
+    });
+}
+
 // ── Monaco Editor component ───────────────────────────────────
 let monacoReady = false;
 let monacoLoadCallbacks = [];
@@ -2880,6 +3523,8 @@ function ensureMonaco(cb) {
           'minimap.background':          '#0a0a0d',
         }
       });
+      // Register LSP + AI providers once Monaco is loaded
+      _registerMaxwellProviders(window.monaco);
       monacoReady = true;
       monacoLoadCallbacks.forEach(f => f());
       monacoLoadCallbacks = [];
@@ -3051,7 +3696,7 @@ function getMonacoLanguage(fileName) {
   return map[ext] || 'plaintext';
 }
 
-function MonacoEditor({ fileName, content, onChange, readOnly, langOverride }) {
+function MonacoEditor({ fileName, content, onChange, readOnly, langOverride, diagnostics = [] }) {
   const containerRef = React.useRef(null);
   const editorRef    = React.useRef(null);
   const modelRef     = React.useRef(null);
@@ -3109,6 +3754,22 @@ function MonacoEditor({ fileName, content, onChange, readOnly, langOverride }) {
       if (modelRef.current) { modelRef.current.dispose(); modelRef.current = null; }
     };
   }, [fileName]);
+
+  // Update diagnostics (squiggles)
+  React.useEffect(() => {
+    if (modelRef.current && window.monaco) {
+      window.monaco.editor.setModelMarkers(modelRef.current, 'maxwell-lsp', (diagnostics || []).map(d => ({
+        startLineNumber: d.range.start.line + 1,
+        startColumn: d.range.start.character + 1,
+        endLineNumber: d.range.end.line + 1,
+        endColumn: d.range.end.character + 1,
+        message: d.message,
+        severity: d.severity === 1 ? window.monaco.MarkerSeverity.Error : 
+                  d.severity === 2 ? window.monaco.MarkerSeverity.Warning : 
+                  window.monaco.MarkerSeverity.Info
+      })));
+    }
+  }, [diagnostics]);
 
   // Update content when it changes externally (file switch)
   React.useEffect(() => {
@@ -3336,7 +3997,7 @@ class ErrorBoundary extends React.Component {
 }
 
 // ── Persona picker dropdown ───────────────────────────────────────────────
-function PersonaPicker({ persona, maxUrl, setMaxStatus, authHdrs }) {
+function PersonaPicker({ persona, maxUrl, setMaxStatus, authHdrs, onCompanion, onLeaveCompanion }) {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef(null);
 
@@ -3351,6 +4012,8 @@ function PersonaPicker({ persona, maxUrl, setMaxStatus, authHdrs }) {
     try {
       await fetch(`${maxUrl}/api/persona`, { method:'POST', headers:authHdrs(), body:JSON.stringify({ persona: id }) });
       setMaxStatus(s => ({ ...s, persona: id }));
+      if (id === 'companion') onCompanion?.();
+      else onLeaveCompanion?.();
     } catch {}
   };
 
@@ -3391,146 +4054,786 @@ function PersonaPicker({ persona, maxUrl, setMaxStatus, authHdrs }) {
   );
 }
 
-// ── Dependency Graph panel ────────────────────────────────────────────────
-function DependencyGraph({ connected, maxUrl, onOpenFile }) {
-  const [data, setData] = React.useState(null);
-  const [loading, setLoading] = React.useState(false);
-  const [err, setErr] = React.useState(null);
-  const [selected, setSelected] = React.useState(null);
-  const svgRef = React.useRef(null);
-  const posRef = React.useRef({});
+// ── Agent Timeline panel ──────────────────────────────────────────────────
+const STEP_ICON = { pending:'○', running:'◉', done:'●', failed:'✕', skipped:'–' };
+const STEP_COLOR = { pending:'var(--muted)', running:'var(--accent)', done:'var(--green)', failed:'var(--red)', skipped:'var(--muted)' };
 
-  const load = async () => {
-    if (!connected) return;
-    setLoading(true); setErr(null);
-    try {
-      const r = await fetch(`${maxUrl}/api/graph`);
-      if (!r.ok) throw new Error(await r.text());
-      const d = await r.json();
-      // Assign initial positions (simple circle layout)
-      const positions = {};
-      d.nodes.forEach((n, i) => {
-        const angle = (i / d.nodes.length) * Math.PI * 2;
-        const r2 = Math.min(90, 20 + d.nodes.length * 4);
-        positions[n.id] = { x: 110 + Math.cos(angle) * r2, y: 110 + Math.sin(angle) * r2 };
-      });
-      posRef.current = positions;
-      setData(d);
-    } catch(e) { setErr(e.message); }
-    setLoading(false);
-  };
+function AgentTimeline({ connected, maxUrl, messages }) {
+  const [goals, setGoals] = React.useState([]);
+  const [expanded, setExpanded] = React.useState({});
 
-  React.useEffect(() => { load(); }, [connected]);
+  // Refresh goal list on connect + every 5s while connected
+  React.useEffect(() => {
+    if (!connected) { setGoals([]); return; }
+    const load = () => fetch(`${maxUrl}/api/goals`, { headers: authHdrs(true) })
+      .then(r => r.ok ? r.json() : [])
+      .then(g => setGoals(Array.isArray(g) ? g : []))
+      .catch(() => {});
+    load();
+    const id = setInterval(load, 5000);
+    return () => clearInterval(id);
+  }, [connected, maxUrl]);
 
-  const dragRef = React.useRef(null);
+  // Also refresh on agentTask messages (step updates)
+  React.useEffect(() => {
+    const last = messages?.[messages.length - 1];
+    if (!last || last.type !== 'agentTask') return;
+    fetch(`${maxUrl}/api/goals`, { headers: authHdrs(true) })
+      .then(r => r.ok ? r.json() : [])
+      .then(g => setGoals(Array.isArray(g) ? g : []))
+      .catch(() => {});
+  }, [messages]);
 
-  const handleMouseDown = (e, id) => {
-    e.stopPropagation();
-    const svg = svgRef.current;
-    const pt = svg.createSVGPoint();
-    pt.x = e.clientX; pt.y = e.clientY;
-    const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
-    dragRef.current = { id, ox: svgP.x - posRef.current[id].x, oy: svgP.y - posRef.current[id].y };
-  };
+  const toggle = id => setExpanded(p => ({ ...p, [id]: !p[id] }));
 
-  const handleMouseMove = (e) => {
-    if (!dragRef.current) return;
-    const svg = svgRef.current;
-    const pt = svg.createSVGPoint();
-    pt.x = e.clientX; pt.y = e.clientY;
-    const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
-    const { id, ox, oy } = dragRef.current;
-    posRef.current[id] = { x: svgP.x - ox, y: svgP.y - oy };
-    setData(d => d ? { ...d } : d); // force re-render
-  };
+  if (!connected) return (
+    <div style={{padding:'24px 12px',textAlign:'center',fontSize:12,color:'var(--muted)'}}>
+      Connect to MAX to view timeline.
+    </div>
+  );
 
-  const handleMouseUp = () => { dragRef.current = null; };
-
-  if (!connected) return <div style={{padding:'24px 12px',textAlign:'center',fontSize:12,color:'var(--muted)'}}>Connect to MAX to view graph.</div>;
-  if (loading) return <div style={{padding:'24px 12px',textAlign:'center',fontSize:12,color:'var(--muted)'}}>Scanning imports…</div>;
-  if (err) return <div style={{padding:'16px 12px',fontSize:11,color:'var(--red)'}}>{err}</div>;
-  if (!data) return <div style={{padding:'16px 12px',fontSize:12,color:'var(--muted)',textAlign:'center'}}>
-    <button onClick={load} style={{background:'var(--accent)',border:'none',borderRadius:4,color:'#fff',padding:'4px 10px',cursor:'pointer',fontSize:12}}>Build Graph</button>
-  </div>;
-
-  const nodeMap = {};
-  data.nodes.forEach(n => { nodeMap[n.id] = n; });
-  const selNode = selected ? nodeMap[selected] : null;
-  const selEdges = selected ? data.edges.filter(e => e.source===selected || e.target===selected) : [];
+  const active = goals.filter(g => g.status !== 'complete' && g.status !== 'failed');
+  const done   = goals.filter(g => g.status === 'complete' || g.status === 'failed').slice(0, 5);
 
   return (
     <div style={{display:'flex',flexDirection:'column',height:'100%',overflow:'hidden'}}>
       <div className="sb-header">
-        <span>Dependency Graph</span>
-        <div style={{display:'flex',gap:4}}>
-          <span style={{fontSize:10,color:'var(--muted)'}}>{data.nodes.length} files · {data.edges.length} links</span>
-          <button className="sb-icon-btn" onClick={load} title="Refresh">{ICONS.reload}</button>
+        <span>Agent Timeline</span>
+        <span style={{fontSize:10,color:'var(--muted)'}}>{active.length} active</span>
+      </div>
+      <div style={{flex:1,overflowY:'auto',padding:'6px 4px'}}>
+        {active.length === 0 && done.length === 0 && (
+          <div style={{padding:'20px 12px',textAlign:'center',fontSize:12,color:'var(--muted)'}}>
+            No active goals. Add one with /goals add "…"
+          </div>
+        )}
+        {active.map(goal => (
+          <div key={goal.id} style={{marginBottom:6,borderRadius:6,border:'1px solid var(--border)',overflow:'hidden'}}>
+            <div style={{padding:'6px 8px',background:'var(--bg2)',cursor:'pointer',display:'flex',alignItems:'center',gap:6}}
+              onClick={() => toggle(goal.id)}>
+              <span style={{fontSize:9,color:'var(--accent)',flexShrink:0}}>
+                {goal.status === 'running' ? '▶' : goal.status === 'planning' ? '◌' : '○'}
+              </span>
+              <span style={{fontSize:11,fontWeight:600,flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',color:'var(--fg)'}}>
+                {goal.title}
+              </span>
+              <span style={{fontSize:9,color:'var(--muted)',flexShrink:0}}>
+                {expanded[goal.id] ? '▲' : '▼'}
+              </span>
+            </div>
+            {expanded[goal.id] && goal.steps?.length > 0 && (
+              <div style={{padding:'4px 8px 6px',background:'var(--bg)',borderTop:'1px solid var(--border)'}}>
+                {goal.steps.map((step, i) => (
+                  <div key={i} style={{display:'flex',alignItems:'flex-start',gap:6,padding:'3px 0',borderBottom: i < goal.steps.length-1 ? '1px solid var(--border)' : 'none'}}>
+                    <span style={{fontSize:10,color:STEP_COLOR[step.status]||'var(--muted)',flexShrink:0,marginTop:1,fontFamily:'monospace'}}>
+                      {STEP_ICON[step.status]||'○'}
+                    </span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:10,color:'var(--fg)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                        {step.title || step.action_name || `Step ${i+1}`}
+                      </div>
+                      {step.result && step.status === 'done' && (
+                        <div style={{fontSize:9,color:'var(--muted)',marginTop:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                          {String(step.result).slice(0, 80)}
+                        </div>
+                      )}
+                      {step.error && (
+                        <div style={{fontSize:9,color:'var(--red)',marginTop:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                          {String(step.error).slice(0, 80)}
+                        </div>
+                      )}
+                    </div>
+                    <span style={{fontSize:9,color:'var(--muted)',flexShrink:0}}>
+                      {step.durationMs ? `${(step.durationMs/1000).toFixed(1)}s` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {expanded[goal.id] && (!goal.steps || goal.steps.length === 0) && (
+              <div style={{padding:'4px 8px 6px',background:'var(--bg)',borderTop:'1px solid var(--border)',fontSize:10,color:'var(--muted)'}}>
+                {goal.status === 'planning' ? 'Planning steps…' : 'Waiting to start…'}
+              </div>
+            )}
+          </div>
+        ))}
+        {done.length > 0 && (
+          <>
+            <div style={{fontSize:9,color:'var(--muted)',padding:'4px 4px 2px',textTransform:'uppercase',letterSpacing:'0.08em'}}>Recent</div>
+            {done.map(goal => (
+              <div key={goal.id} style={{marginBottom:4,borderRadius:4,border:'1px solid var(--border)',padding:'5px 8px',
+                display:'flex',alignItems:'center',gap:6,opacity:0.6}}>
+                <span style={{fontSize:10,color: goal.status==='complete' ? 'var(--green)' : 'var(--red)',flexShrink:0}}>
+                  {goal.status==='complete' ? '●' : '✕'}
+                </span>
+                <span style={{fontSize:10,flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',color:'var(--fg)'}}>
+                  {goal.title}
+                </span>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MUSE MODE — Companion UI
+// When MAX shifts to Companion persona the IDE softens into one of
+// three atmospheric rooms: Field, Constellation, Studio.
+// ═══════════════════════════════════════════════════════════════
+
+const MUSE = {
+  void:     "oklch(0.12 0.012 60)",
+  voidDeep: "oklch(0.08 0.010 50)",
+  surface:  "oklch(0.17 0.015 60)",
+  hair:     "oklch(0.28 0.012 60)",
+  text:     "oklch(0.94 0.012 80)",
+  textDim:  "oklch(0.68 0.012 70)",
+  textMute: "oklch(0.45 0.012 60)",
+  violet:   "oklch(0.68 0.16 295)",
+  violetDim:"oklch(0.50 0.14 290)",
+  ember:    "oklch(0.78 0.14 60)",
+  emberDim: "oklch(0.62 0.13 55)",
+  curious:  "oklch(0.78 0.10 200)",
+  tension:  "oklch(0.70 0.13 25)",
+};
+
+function MuseAmbientField({ intensity=0.5, warmth=0.5 }) {
+  return (
+    <div style={{position:'absolute',inset:0,overflow:'hidden',pointerEvents:'none',zIndex:0}}>
+      <div style={{position:'absolute',width:'70%',aspectRatio:'1',left:'-12%',top:'-18%',
+        background:`radial-gradient(circle at center,${MUSE.violet} 0%,transparent 62%)`,
+        opacity:0.35+intensity*0.25,filter:'blur(40px)',animation:'museBreathe 14s ease-in-out infinite'}}/>
+      <div style={{position:'absolute',width:'75%',aspectRatio:'1',right:'-18%',bottom:'-22%',
+        background:`radial-gradient(circle at center,${MUSE.ember} 0%,transparent 60%)`,
+        opacity:0.25+warmth*0.30,filter:'blur(48px)',animation:'museBreathe 18s ease-in-out infinite reverse'}}/>
+      <div style={{position:'absolute',inset:0,
+        background:`radial-gradient(ellipse at center,transparent 40%,${MUSE.voidDeep} 100%)`}}/>
+    </div>
+  );
+}
+
+function MuseWaveform({ width=800, height=48, state='listening', color=MUSE.ember }) {
+  const [t, setT] = React.useState(0);
+  React.useEffect(()=>{
+    let raf;
+    const tick=()=>{ setT(p=>p+(state==='speaking'?.04:state==='thinking'?.018:.008)); raf=requestAnimationFrame(tick); };
+    raf=requestAnimationFrame(tick);
+    return ()=>cancelAnimationFrame(raf);
+  },[state]);
+  const amp = state==='speaking'?14:state==='thinking'?6:3;
+  const freq = 0.012;
+  const pts=[];
+  for(let x=0;x<=width;x+=6){
+    const y=height/2+Math.sin(x*freq+t)*amp+Math.sin(x*freq*2.3+t*1.4)*amp*0.35;
+    pts.push(`${x},${y.toFixed(2)}`);
+  }
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{display:'block',overflow:'visible'}}>
+      <defs>
+        <linearGradient id="mwg" x1="0" x2="1">
+          <stop offset="0" stopColor={color} stopOpacity="0"/>
+          <stop offset="0.15" stopColor={color} stopOpacity="0.9"/>
+          <stop offset="0.85" stopColor={color} stopOpacity="0.9"/>
+          <stop offset="1" stopColor={color} stopOpacity="0"/>
+        </linearGradient>
+      </defs>
+      <polyline points={pts.join(' ')} fill="none" stroke="url(#mwg)" strokeWidth="1.2" strokeLinecap="round"/>
+    </svg>
+  );
+}
+
+function MuseSigMark({ size=20 }) {
+  return (
+    <div style={{width:size,height:size,position:'relative',flexShrink:0,animation:'museSigPulse 5s ease-in-out infinite'}}>
+      <div style={{position:'absolute',inset:0,borderRadius:'50%',border:`1px solid ${MUSE.ember}`,opacity:.55}}/>
+      <div style={{position:'absolute',inset:size*.18,borderRadius:'50%',border:`1px solid ${MUSE.violet}`,opacity:.8}}/>
+      <div style={{position:'absolute',inset:size*.38,borderRadius:'50%',background:MUSE.ember,opacity:.85}}/>
+    </div>
+  );
+}
+
+function MuseRoomSwitcher({ current, onSwitch }) {
+  const rooms=[
+    {id:'field',label:'field',shape:'circle'},
+    {id:'constellation',label:'constellation',shape:'triangle'},
+    {id:'studio',label:'studio',shape:'square'},
+  ];
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:8,fontSize:10,letterSpacing:'.25em',textTransform:'uppercase',color:MUSE.textMute,fontFamily:"'JetBrains Mono',monospace"}}>
+      <span style={{opacity:.55}}>room</span>
+      <div style={{display:'flex',gap:3}}>
+        {rooms.map(r=>{
+          const active=r.id===current;
+          return (
+            <button key={r.id} onClick={()=>onSwitch(r.id)} title={r.label}
+              style={{padding:'4px 8px',background:active?MUSE.ember:'transparent',border:'none',
+                color:active?'#1a0f00':MUSE.textDim,opacity:active?1:.55,fontSize:10,letterSpacing:'.2em',
+                textTransform:'uppercase',fontFamily:"'JetBrains Mono',monospace",cursor:'pointer',
+                borderRadius:3,display:'flex',alignItems:'center',gap:5,transition:'all .15s',fontWeight:active?600:400}}>
+              <svg width="8" height="8" viewBox="0 0 8 8">
+                {r.shape==='circle'   && <circle cx="4" cy="4" r="3" fill={active?'#1a0f00':'transparent'} stroke={active?'#1a0f00':MUSE.textMute} strokeWidth=".8"/>}
+                {r.shape==='triangle' && <polygon points="4,0.8 7.2,6.8 0.8,6.8" fill={active?'#1a0f00':'transparent'} stroke={active?'#1a0f00':MUSE.textMute} strokeWidth=".8" strokeLinejoin="round"/>}
+                {r.shape==='square'   && <rect x=".8" y=".8" width="6.4" height="6.4" fill={active?'#1a0f00':'transparent'} stroke={active?'#1a0f00':MUSE.textMute} strokeWidth=".8"/>}
+              </svg>
+              {r.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function MuseExitBtn({ onExit }) {
+  const [hov,setHov]=React.useState(false);
+  return (
+    <button onClick={onExit}
+      onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
+      style={{background:'transparent',border:'none',padding:'5px 8px 5px 3px',
+        color:hov?MUSE.text:MUSE.textMute,opacity:hov?1:.5,cursor:'pointer',
+        display:'flex',alignItems:'center',gap:7,fontFamily:"'JetBrains Mono',monospace",
+        fontSize:10,letterSpacing:'.25em',textTransform:'uppercase',borderRadius:2,transition:'all .2s'}}>
+      <svg width="13" height="9" viewBox="0 0 13 9">
+        <path d="M4.5 1 L1 4.5 L4.5 8 M1 4.5 L12 4.5" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+      back · build
+    </button>
+  );
+}
+
+// ── FIELD room ──────────────────────────────────────────────────
+function MuseRoomField({ messages, concepts, waveform='listening', ambient={intensity:.45,warmth:.45}, isThinking=false, onSwitch, onExit, onSend }) {
+  const [draft,setDraft]=React.useState('');
+  const inputRef=React.useRef(null);
+  const scrollRef=React.useRef(null);
+  const submit=()=>{
+    const t=draft.trim();
+    if(!t) return;
+    setDraft('');
+    if(onSend) onSend(t);
+  };
+  const onKey=(e)=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submit();}};
+  React.useEffect(()=>{ setTimeout(()=>inputRef.current?.focus(),300); },[]);
+  React.useEffect(()=>{ if(scrollRef.current) scrollRef.current.scrollTop=scrollRef.current.scrollHeight; },[messages]);
+  const conv = messages.slice(-8);
+  // Residue = short concept phrases only (≤3 words, ≤24 chars) — no full sentences
+  const residue = concepts
+    .filter(c => c.split(' ').length <= 3 && c.length <= 28)
+    .slice(0, 6)
+    .map((c,i)=>({
+      text: c,
+      x: .08 + (i * .155) % 0.82,
+      y: .18 + (i * .11)  % 0.52,
+      dim: .5 - i * .05,
+    }));
+  return (
+    <div style={{width:'100%',height:'100%',position:'relative',overflow:'hidden',background:MUSE.void,color:MUSE.text,fontFamily:"'Inter',system-ui,sans-serif",isolation:'isolate'}}>
+      <MuseAmbientField intensity={ambient.intensity} warmth={ambient.warmth}/>
+      {/* floating concept residue — purely decorative, behind everything */}
+      {residue.map((r,i)=>(
+        <div key={i} style={{position:'absolute',left:`${r.x*100}%`,top:`${r.y*100}%`,
+          transform:'translate(-50%,-50%)',color:MUSE.textMute,opacity:r.dim,
+          fontSize:11,letterSpacing:'.06em',fontStyle:'italic',maxWidth:140,textAlign:'center',
+          pointerEvents:'none',zIndex:0,userSelect:'none',
+          animation:`museDrift ${12+i*3}s ease-in-out infinite`,
+          '--mdx':`${(i%2?1:-1)*5}px`,'--mdy':`${(i%3-1)*4}px`}}>
+          <span style={{color:MUSE.ember,opacity:.4,marginRight:4,fontStyle:'normal'}}>·</span>
+          {r.text}
         </div>
+      ))}
+      {/* top bar */}
+      <div style={{position:'absolute',top:24,left:24,zIndex:5}}>
+        <MuseExitBtn onExit={onExit}/>
       </div>
-      <div style={{flex:1,overflow:'hidden',position:'relative',background:'var(--bg2)'}}>
-        <svg ref={svgRef} width="100%" height="100%" viewBox="0 0 220 220"
-          onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}
-          style={{cursor:'default'}}>
-          <defs>
-            <marker id="arrowhead" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
-              <polygon points="0 0, 6 2, 0 4" fill="var(--muted)" opacity="0.5"/>
-            </marker>
-          </defs>
-          {data.edges.map((e,i) => {
-            const s = posRef.current[e.source];
-            const t = posRef.current[e.target];
-            if (!s || !t) return null;
-            const isHighlit = selected && (e.source===selected || e.target===selected);
-            return <line key={i} x1={s.x} y1={s.y} x2={t.x} y2={t.y}
-              stroke={isHighlit?'var(--accent)':'var(--border)'} strokeWidth={isHighlit?1.5:0.8}
-              opacity={selected&&!isHighlit?0.2:0.8} markerEnd="url(#arrowhead)"/>;
-          })}
-          {data.nodes.map(n => {
-            const p = posRef.current[n.id];
-            if (!p) return null;
-            const isSel = selected===n.id;
-            const isConn = selected && selEdges.some(e=>e.source===n.id||e.target===n.id);
-            return (
-              <g key={n.id} transform={`translate(${p.x},${p.y})`}
-                onMouseDown={e=>handleMouseDown(e,n.id)}
-                onClick={()=>setSelected(selected===n.id?null:n.id)}
-                style={{cursor:'pointer'}}>
-                <circle r={isSel?6:isConn?5:4}
-                  fill={isSel?'var(--accent)':isConn?'var(--accent2)':'var(--fg)'}
-                  opacity={selected&&!isSel&&!isConn?0.3:1}/>
-                {(isSel||isConn||data.nodes.length<30) && (
-                  <text x="0" y={isSel?-8:-7} textAnchor="middle"
-                    fill={isSel?'var(--accent)':'var(--muted)'}
-                    fontSize={isSel?7:5.5} opacity={selected&&!isSel&&!isConn?0.3:1}
-                    style={{pointerEvents:'none',userSelect:'none'}}>
-                    {n.label}
-                  </text>
-                )}
-              </g>
-            );
-          })}
-        </svg>
+      <div style={{position:'absolute',top:20,left:'50%',transform:'translateX(-50%)',display:'flex',alignItems:'center',gap:10,fontSize:10,letterSpacing:'.3em',textTransform:'uppercase',color:MUSE.textMute,zIndex:5}}>
+        <MuseSigMark size={13}/>
+        <span>MAX · Companion</span>
       </div>
-      {selNode && (
-        <div style={{borderTop:'1px solid var(--border)',padding:'8px 10px',fontSize:11,flexShrink:0}}>
-          <div style={{fontWeight:600,color:'var(--fg)',marginBottom:4,cursor:'pointer',textDecoration:'underline'}}
-            onClick={()=>onOpenFile(selected)}>{selNode.label}</div>
-          <div style={{color:'var(--muted)',fontSize:10,marginBottom:4,wordBreak:'break-all'}}>{selected}</div>
-          {selEdges.length>0&&<div style={{color:'var(--muted)',fontSize:10}}>
-            {selEdges.filter(e=>e.source===selected).length} outgoing · {selEdges.filter(e=>e.target===selected).length} incoming
-          </div>}
-          <div style={{marginTop:6,display:'flex',flexDirection:'column',gap:2,maxHeight:80,overflowY:'auto'}}>
-            {selEdges.map((e,i)=>{
-              const other = e.source===selected ? e.target : e.source;
-              const dir = e.source===selected ? '→' : '←';
-              return <div key={i} style={{fontSize:10,color:'var(--accent)',cursor:'pointer'}}
-                onClick={()=>setSelected(other)}>
-                {dir} {nodeMap[other]?.label || other}
-              </div>;
+      <div style={{position:'absolute',top:20,right:24,zIndex:5}}>
+        <MuseRoomSwitcher current="field" onSwitch={onSwitch}/>
+      </div>
+      {/* conversation */}
+      <div ref={scrollRef} style={{position:'absolute',top:0,left:0,right:0,bottom:64,padding:'100px 220px 24px',display:'flex',flexDirection:'column',gap:0,zIndex:3,overflowY:'auto',scrollbarWidth:'none'}}>
+        <div style={{flex:1}}/>{/* spacer — pushes messages to bottom when short */}
+        {conv.length===0 && (
+          <div style={{textAlign:'center',fontFamily:"'Fraunces',Georgia,serif",fontSize:28,fontWeight:350,color:MUSE.textDim,fontStyle:'italic',opacity:.6}}>
+            say something
+            <span style={{display:'inline-block',width:6,height:24,marginLeft:8,verticalAlign:'-4px',background:MUSE.ember,animation:'museCaret 1.1s steps(1,end) infinite'}}/>
+          </div>
+        )}
+        {conv.map((m,i)=>{
+          const isMax=m.role==='assistant'||m.role==='max';
+          const opacity=1-(conv.length-1-i)*.12;
+          return (
+            <div key={i} style={{marginTop:i===0?0:isMax?32:16,textAlign:isMax?'left':'right',opacity,animation:`museFadeUp ${.5+i*.08}s ease-out`}}>
+              <div style={{fontSize:10,letterSpacing:'.25em',textTransform:'uppercase',color:isMax?MUSE.ember:MUSE.textMute,opacity:.6,marginBottom:5}}>
+                {isMax?'max':'you'}
+              </div>
+              <div style={{fontSize:isMax?24:20,lineHeight:1.35,color:isMax?MUSE.text:MUSE.textDim,
+                fontFamily:isMax?"'Fraunces',Georgia,serif":"'Inter',system-ui,sans-serif",
+                fontWeight:isMax?350:400,letterSpacing:isMax?'-.005em':'0',textWrap:'pretty'}}>
+                {typeof m.content==='string'?m.content:(m.text||m.content?.[0]?.text||'')}
+                {i===conv.length-1&&isMax&&<span style={{display:'inline-block',width:6,height:20,marginLeft:7,verticalAlign:'-3px',background:MUSE.ember,animation:'museCaret 1.1s steps(1,end) infinite'}}/>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {/* waveform floor */}
+      <div style={{position:'absolute',bottom:70,left:0,right:0,display:'flex',justifyContent:'center',zIndex:4,opacity:.6,pointerEvents:'none'}}>
+        <MuseWaveform width={700} height={40} state={waveform} color={MUSE.ember}/>
+      </div>
+      {/* chat input */}
+      <div style={{position:'absolute',bottom:0,left:0,right:0,zIndex:6,display:'flex',alignItems:'center',gap:12,padding:'18px 80px',borderTop:`1px solid ${MUSE.hair}22`,background:`${MUSE.voidDeep}cc`,backdropFilter:'blur(12px)'}}>
+        <span style={{fontSize:12,letterSpacing:'.3em',textTransform:'uppercase',color:isThinking?MUSE.ember:MUSE.textMute,flexShrink:0}}>
+          {isThinking ? '…' : '→'}
+        </span>
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={e=>setDraft(e.target.value)}
+          onKeyDown={onKey}
+          placeholder={isThinking ? 'MAX is thinking…' : 'speak freely…'}
+          disabled={isThinking}
+          style={{flex:1,background:'transparent',border:'none',outline:'none',
+            fontFamily:"'Fraunces',Georgia,serif",fontSize:20,fontWeight:350,
+            color:isThinking?MUSE.textMute:MUSE.text,fontStyle:'italic',caretColor:MUSE.ember,
+            opacity:isThinking?.5:1}}
+        />
+        {draft.trim() && !isThinking && (
+          <button onClick={submit} style={{background:'transparent',border:`1px solid ${MUSE.ember}55`,color:MUSE.ember,padding:'4px 10px',borderRadius:3,fontSize:10,letterSpacing:'.2em',textTransform:'uppercase',fontFamily:"'JetBrains Mono',monospace",cursor:'pointer',flexShrink:0,transition:'all .15s'}}
+            onMouseEnter={e=>{e.currentTarget.style.background=`${MUSE.ember}20`;}}
+            onMouseLeave={e=>{e.currentTarget.style.background='transparent';}}>
+            ⏎
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── CONSTELLATION room ───────────────────────────────────────────
+// Deterministic jitter from a string — same concept always lands in the same spot
+function strHash(s){ return s.split('').reduce((h,c)=>(Math.imul(31,h)+c.charCodeAt(0))|0,0); }
+function conceptJitter(s, scale=0.04){ const h=strHash(s); return { dx:((h&0xff)/255-.5)*scale, dy:(((h>>8)&0xff)/255-.5)*scale }; }
+
+function MuseRoomConstellation({ messages, concepts, waveform='listening', ambient={intensity:.4,warmth:.35}, arc='opening', isThinking=false, onSwitch, onExit, onSend }) {
+  const [tick,setTick]=React.useState(0);
+  const [draft,setDraft]=React.useState('');
+  const inputRef=React.useRef(null);
+  React.useEffect(()=>{
+    let raf; const loop=()=>{setTick(p=>p+1);raf=requestAnimationFrame(loop);}; raf=requestAnimationFrame(loop); return ()=>cancelAnimationFrame(raf);
+  },[]);
+  React.useEffect(()=>{ setTimeout(()=>inputRef.current?.focus(),300); },[]);
+
+  const submit=()=>{ const t=draft.trim(); if(!t) return; setDraft(''); if(onSend) onSend(t); };
+  const onKey=(e)=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submit();} };
+
+  // Use full viewport — the overlay is position:fixed inset:0
+  const w=window.innerWidth, h=window.innerHeight;
+
+  // Build nodes — radial layout + per-concept deterministic jitter
+  const margin = 0.10;
+  const cx = 0.50, cy = 0.40;
+  const rawNodes = concepts.slice(0,12).map((c,i)=>{
+    const tier   = i<2?0:i<5?1:i<8?2:3;
+    const radii  = [0, .20, .33, .44];
+    const angle  = (i/Math.max(concepts.length,1))*Math.PI*2 + tier*0.4;
+    const r      = radii[tier];
+    const aspect = Math.min(w/h, 1.6);
+    const { dx, dy } = conceptJitter(c, 0.05); // seeded per-concept offset
+    const nx = cx + Math.cos(angle)*r*aspect + dx;
+    const ny = cy + Math.sin(angle)*r + dy;
+    return { id:c, label:c, tier,
+      x: Math.max(margin, Math.min(1-margin, nx)),
+      y: Math.max(margin, Math.min(.72, ny)),
+    };
+  });
+  const nodes = rawNodes.length>0 ? rawNodes : [{id:'listening',label:'listening…',x:cx,y:cy,tier:0,pulse:true}];
+
+  // MAX traveling light — moves between focal tier nodes
+  const focal=nodes.filter(n=>n.tier<=1);
+  const tFrac=(tick/280)%Math.max(focal.length,1);
+  const i0=Math.floor(tFrac);
+  const frac=tFrac-i0;
+  const ease=frac<.5?2*frac*frac:1-Math.pow(-2*frac+2,2)/2;
+  const na=focal[i0%focal.length]||{x:cx,y:cy};
+  const nb=focal[(i0+1)%focal.length]||na;
+  const mxX=(na.x+(nb.x-na.x)*ease)*w;
+  const mxY=(na.y+(nb.y-na.y)*ease)*h;
+
+  const tierStyle=(t)=>[
+    {fs:17,fw:500,op:1.0,r:7, color:MUSE.text,    font:"'Fraunces',Georgia,serif",   italic:true },
+    {fs:14,fw:400,op:0.9,r:5, color:MUSE.text,    font:"'Inter',system-ui,sans-serif",italic:false},
+    {fs:12,fw:400,op:0.65,r:4,color:MUSE.textDim, font:"'Inter',system-ui,sans-serif",italic:false},
+    {fs:10,fw:400,op:0.40,r:3,color:MUSE.textMute,font:"'Inter',system-ui,sans-serif",italic:false},
+  ][t]||{fs:10,fw:400,op:.4,r:3,color:MUSE.textMute,font:"'Inter',system-ui,sans-serif",italic:false};
+
+  return (
+    <div style={{width:'100%',height:'100%',position:'relative',overflow:'hidden',background:MUSE.void,color:MUSE.text,fontFamily:"'Inter',system-ui,sans-serif",isolation:'isolate'}}>
+      <MuseAmbientField intensity={ambient.intensity} warmth={ambient.warmth}/>
+
+      {/* top bar */}
+      <div style={{position:'absolute',top:20,left:24,display:'flex',alignItems:'center',gap:14,zIndex:5}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,fontSize:10,letterSpacing:'.3em',textTransform:'uppercase',color:MUSE.textMute}}>
+          <MuseSigMark size={13}/><span>MAX · Constellation</span>
+        </div>
+        <div style={{width:1,height:12,background:MUSE.hair}}/>
+        <MuseExitBtn onExit={onExit}/>
+      </div>
+      <div style={{position:'absolute',top:20,right:24,zIndex:5,display:'flex',alignItems:'center',gap:16}}>
+        <div style={{fontSize:10,letterSpacing:'.18em',textTransform:'uppercase',color:MUSE.textMute,display:'flex',gap:12,fontFamily:"'JetBrains Mono',monospace",opacity:.75}}>
+          <span><span style={{color:MUSE.ember}}>●</span> focal</span>
+          <span><span style={{color:MUSE.violet}}>○</span> emerging</span>
+          <span style={{opacity:.5}}>arc: {arc}</span>
+        </div>
+        <div style={{width:1,height:12,background:MUSE.hair}}/>
+        <MuseRoomSwitcher current="constellation" onSwitch={onSwitch}/>
+      </div>
+
+      {/* concept graph — SVG edges */}
+      <svg width="100%" height="100%" viewBox={`0 0 ${w} ${h}`}
+        style={{position:'absolute',inset:0,zIndex:2,pointerEvents:'none'}}>
+        {nodes.map((a,ai)=>nodes.slice(ai+1).filter(b=>Math.abs(a.tier-b.tier)<=1).map((b,bi)=>{
+          const isPrimary=a.tier===0&&b.tier===0;
+          const isEmerging=a.tier<=1&&b.tier<=1&&!isPrimary;
+          const stroke=isPrimary?MUSE.ember:isEmerging?MUSE.violet:MUSE.textMute;
+          const op=isPrimary?.55:isEmerging?.35:.18;
+          return <line key={`${ai}-${bi}`}
+            x1={a.x*w} y1={a.y*h} x2={b.x*w} y2={b.y*h}
+            stroke={stroke} strokeOpacity={op} strokeWidth={isPrimary?1:.7}
+            strokeDasharray={isPrimary?undefined:isEmerging?"4 5":"2 7"}/>;
+        }))}
+        {nodes.map(n=>{
+          const ts=tierStyle(n.tier);
+          return (
+            <g key={n.id} transform={`translate(${n.x*w},${n.y*h})`}>
+              {(n.pulse||n.tier===0)&&(
+                <circle r={ts.r+7} fill="none" stroke={MUSE.ember} strokeOpacity=".18" strokeWidth=".6">
+                  <animate attributeName="r" values={`${ts.r+4};${ts.r+16};${ts.r+4}`} dur="3.4s" repeatCount="indefinite"/>
+                  <animate attributeName="stroke-opacity" values=".25;0;.25" dur="3.4s" repeatCount="indefinite"/>
+                </circle>
+              )}
+              <circle r={ts.r} fill={n.tier===0?MUSE.ember:MUSE.surface}
+                stroke={n.tier===0?MUSE.ember:n.tier===1?MUSE.violet:MUSE.textMute}
+                strokeWidth=".8" opacity={ts.op}/>
+              {n.tier<=1&&<circle r={Math.max(ts.r-2,1)} fill={n.tier===0?'#000':MUSE.violetDim} opacity=".45"/>}
+            </g>
+          );
+        })}
+        {/* MAX traveling light */}
+        <g transform={`translate(${mxX},${mxY})`}>
+          <circle r="22" fill={MUSE.ember} opacity=".06"/>
+          <circle r="12" fill={MUSE.ember} opacity=".14"/>
+          <circle r="4" fill={MUSE.ember}/>
+          <circle r="1.8" fill={MUSE.text}/>
+        </g>
+      </svg>
+
+      {/* node labels — clickable, pre-fill input with concept */}
+      {nodes.map(n=>{
+        const ts=tierStyle(n.tier);
+        const above=n.y<.46;
+        const clickable = n.id !== 'listening' && onSend;
+        return (
+          <div key={n.id}
+            onClick={clickable ? ()=>{ setDraft(n.label); inputRef.current?.focus(); } : undefined}
+            title={clickable ? `explore "${n.label}"` : undefined}
+            style={{
+              position:'absolute',
+              left:`${n.x*100}%`,
+              top:`calc(${n.y*100}% + ${above?-(ts.r+10):ts.r+8}px)`,
+              transform:above?'translate(-50%,-100%)':'translate(-50%,0)',
+              fontSize:ts.fs,fontWeight:ts.fw,color:ts.color,opacity:ts.op,
+              letterSpacing:n.tier===0?'-.01em':'.01em',
+              maxWidth:180,textAlign:'center',lineHeight:1.2,
+              fontFamily:ts.font,fontStyle:ts.italic?'italic':'normal',
+              zIndex:3,userSelect:'none',
+              cursor: clickable ? 'pointer' : 'default',
+              transition:'opacity .15s',
+            }}
+            onMouseEnter={clickable?e=>{e.currentTarget.style.opacity='1';e.currentTarget.style.color=MUSE.ember;}:undefined}
+            onMouseLeave={clickable?e=>{e.currentTarget.style.opacity=String(ts.op);e.currentTarget.style.color=ts.color;}:undefined}
+          >
+            {n.label}
+          </div>
+        );
+      })}
+
+      {/* arc indicator — subtle bottom-center */}
+      <div style={{position:'absolute',bottom:76,left:0,right:0,display:'flex',justifyContent:'center',zIndex:4}}>
+        <MuseWaveform width={Math.min(w-200,800)} height={32} state={waveform} color={MUSE.violet}/>
+      </div>
+
+      {/* input bar */}
+      <div style={{position:'absolute',left:0,right:0,bottom:0,zIndex:6,
+        display:'flex',alignItems:'center',gap:12,padding:'16px 48px',
+        borderTop:`1px solid ${MUSE.hair}22`,
+        background:`${MUSE.voidDeep}cc`,backdropFilter:'blur(12px)'}}>
+        <span style={{fontSize:10,letterSpacing:'.3em',textTransform:'uppercase',color:isThinking?MUSE.ember:MUSE.textMute,flexShrink:0,fontFamily:"'JetBrains Mono',monospace"}}>
+          {isThinking ? '…' : '→'}
+        </span>
+        <input ref={inputRef} value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={onKey}
+          placeholder={isThinking ? 'MAX is thinking…' : 'pull on any thread… or click a node'}
+          disabled={isThinking}
+          style={{flex:1,background:'transparent',border:'none',outline:'none',
+            fontFamily:"'Fraunces',Georgia,serif",fontSize:19,fontWeight:350,
+            color:isThinking?MUSE.textMute:MUSE.text,fontStyle:'italic',caretColor:MUSE.ember,
+            opacity:isThinking?.55:1}}/>
+        {draft.trim()&&!isThinking&&(
+          <button onClick={submit}
+            style={{background:'transparent',border:`1px solid ${MUSE.ember}55`,color:MUSE.ember,
+              padding:'4px 10px',borderRadius:3,fontSize:10,letterSpacing:'.2em',
+              textTransform:'uppercase',fontFamily:"'JetBrains Mono',monospace",cursor:'pointer',flexShrink:0}}
+            onMouseEnter={e=>{e.currentTarget.style.background=`${MUSE.ember}20`;}}
+            onMouseLeave={e=>{e.currentTarget.style.background='transparent';}}>⏎</button>
+        )}
+        <span style={{fontSize:10,letterSpacing:'.2em',color:MUSE.textMute,opacity:.4,fontFamily:"'JetBrains Mono',monospace",flexShrink:0}}>
+          {nodes.length} concepts · {arc}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ── STUDIO room ──────────────────────────────────────────────────
+function MuseRoomStudio({ messages, concepts, notices, waveform='listening', ambient={intensity:.45,warmth:.45}, onSwitch, onExit, onSend }) {
+  const [draft, setDraft] = React.useState('');
+  const inputRef  = React.useRef(null);
+  const scrollRef = React.useRef(null);
+
+  React.useEffect(()=>{ setTimeout(()=>inputRef.current?.focus(), 300); },[]);
+  React.useEffect(()=>{ if(scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; },[messages]);
+
+  const submit = () => { const t=draft.trim(); if(!t) return; setDraft(''); if(onSend) onSend(t); };
+  const onKey  = (e) => { if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); submit(); } };
+
+  const getText = (m) => typeof m.content==='string' ? m.content : (m.text || m.content?.[0]?.text || '');
+  const isMax   = (m) => m.role==='assistant' || m.role==='max';
+
+  const conv = messages.slice(-12);
+  const noticeColor = (k) => k==='pattern'?MUSE.violet : k==='connection'?MUSE.curious : k==='challenge'?MUSE.tension : MUSE.ember;
+
+  return (
+    <div style={{width:'100%',height:'100%',position:'relative',overflow:'hidden',
+      background:`linear-gradient(180deg,oklch(0.13 0.020 50) 0%,oklch(0.10 0.015 45) 100%)`,
+      color:MUSE.text,fontFamily:"'Inter',system-ui,sans-serif",isolation:'isolate',
+      display:'grid',gridTemplateColumns:'176px 1fr 300px'}}>
+
+      {/* ambient */}
+      <div style={{position:'absolute',inset:0,pointerEvents:'none',zIndex:0}}>
+        <div style={{position:'absolute',right:'-20%',top:'-30%',width:'80%',aspectRatio:'1',background:`radial-gradient(circle,${MUSE.ember} 0%,transparent 55%)`,opacity:ambient.warmth*.3,filter:'blur(40px)'}}/>
+        <div style={{position:'absolute',left:'-20%',bottom:'-30%',width:'70%',aspectRatio:'1',background:`radial-gradient(circle,${MUSE.violet} 0%,transparent 55%)`,opacity:ambient.intensity*.22,filter:'blur(50px)'}}/>
+      </div>
+      <div style={{position:'absolute',top:24,right:24,zIndex:6}}><MuseRoomSwitcher current="studio" onSwitch={onSwitch}/></div>
+
+      {/* LEFT — thread timeline */}
+      <div style={{position:'relative',zIndex:2,padding:'28px 18px 24px 24px',borderRight:`1px solid ${MUSE.hair}`,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+          <MuseSigMark size={13}/>
+          <span style={{fontSize:10,letterSpacing:'.3em',textTransform:'uppercase',color:MUSE.textMute}}>MAX · Studio</span>
+        </div>
+        <div style={{marginBottom:18,marginLeft:-2}}><MuseExitBtn onExit={onExit}/></div>
+        <div style={{fontSize:9,letterSpacing:'.25em',textTransform:'uppercase',color:MUSE.textMute,opacity:.7,marginBottom:12}}>thread</div>
+        <div style={{flex:1,overflowY:'auto',scrollbarWidth:'none',position:'relative'}}>
+          {/* fade indicator at bottom of thread when overflowing */}
+          <div style={{position:'sticky',bottom:0,height:32,background:`linear-gradient(to top, oklch(0.13 0.020 50), transparent)`,pointerEvents:'none',zIndex:1}}/>
+          <div style={{display:'flex',flexDirection:'column',gap:10,position:'relative',paddingLeft:14}}>
+            <div style={{position:'absolute',left:3,top:4,bottom:4,width:1,background:`linear-gradient(180deg,${MUSE.textMute}44 0%,${MUSE.ember}88 100%)`}}/>
+            {conv.map((m,i)=>{
+              const last=i===conv.length-1;
+              const dotColor=last?MUSE.ember:isMax(m)?MUSE.violet:MUSE.textMute;
+              return (
+                <div key={i} style={{position:'relative'}}>
+                  <div style={{position:'absolute',left:-14,top:5,width:7,height:7,borderRadius:'50%',background:dotColor,boxShadow:last?`0 0 0 3px ${MUSE.ember}33`:'none'}}/>
+                  <div style={{fontSize:11,color:last?MUSE.text:MUSE.textMute,fontStyle:isMax(m)?'italic':'normal',fontWeight:last?500:400,lineHeight:1.35,opacity:last?1:.65}}>
+                    {getText(m).slice(0,55)}{getText(m).length>55&&'…'}
+                  </div>
+                </div>
+              );
             })}
           </div>
         </div>
-      )}
+        <div style={{fontSize:9,letterSpacing:'.2em',textTransform:'uppercase',color:MUSE.textMute,opacity:.45,fontFamily:"'JetBrains Mono',monospace",lineHeight:1.8,paddingTop:12}}>
+          <div>{messages.length} turns</div>
+          <div style={{color:MUSE.ember,opacity:.7}}>● present</div>
+        </div>
+      </div>
+
+      {/* CENTER — conversation + input */}
+      <div style={{position:'relative',zIndex:2,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        {/* header */}
+        <div style={{padding:'48px 64px 20px',flexShrink:0}}>
+          <div style={{fontSize:10,letterSpacing:'.3em',textTransform:'uppercase',color:MUSE.ember,opacity:.8,marginBottom:6}}>companion mode</div>
+          <div style={{fontFamily:"'Fraunces',Georgia,serif",fontSize:26,fontWeight:350,color:MUSE.text,letterSpacing:'-.015em',fontStyle:'italic',lineHeight:1.15}}>
+            {concepts[0] || 'thinking together'}
+          </div>
+        </div>
+        {/* scrollable messages */}
+        <div ref={scrollRef} style={{flex:1,overflowY:'auto',scrollbarWidth:'none',padding:'0 64px 12px'}}>
+          <div style={{flex:1}}/>{/* bottom-push spacer */}
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            {conv.map((m,i)=>{
+              const last=i===conv.length-1;
+              const mx=isMax(m);
+              return (
+                <div key={i} style={{opacity:last?1:.5+i*(0.5/Math.max(conv.length,1)),display:'flex',gap:14,alignItems:'flex-start'}}>
+                  <div style={{width:30,fontSize:9,letterSpacing:'.25em',textTransform:'uppercase',color:mx?MUSE.ember:MUSE.textMute,opacity:.65,paddingTop:6,fontFamily:"'JetBrains Mono',monospace",flexShrink:0}}>
+                    {mx?'max':'you'}
+                  </div>
+                  <div style={{fontFamily:mx?"'Fraunces',Georgia,serif":"'Inter',system-ui,sans-serif",fontSize:mx?17:14,fontWeight:mx?350:400,color:mx?MUSE.text:MUSE.textDim,lineHeight:1.55,flex:1,textWrap:'pretty'}}>
+                    {getText(m)}
+                    {last&&mx&&<span style={{display:'inline-block',width:4,height:14,marginLeft:5,verticalAlign:'-2px',background:MUSE.ember,animation:'museCaret 1.1s steps(1,end) infinite'}}/>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {/* waveform + input */}
+        <div style={{flexShrink:0,padding:'8px 64px 28px',borderTop:`1px solid ${MUSE.hair}22`}}>
+          <div style={{marginBottom:8,opacity:.4}}>
+            <MuseWaveform width={480} height={22} state={waveform} color={MUSE.ember}/>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <span style={{fontSize:10,letterSpacing:'.3em',textTransform:'uppercase',color:isThinking?MUSE.ember:MUSE.textMute,fontFamily:"'JetBrains Mono',monospace",flexShrink:0}}>
+              {isThinking?'…':'→'}
+            </span>
+            <input ref={inputRef} value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={onKey}
+              placeholder={isThinking?'MAX is thinking…':'say something…'}
+              disabled={isThinking}
+              style={{flex:1,background:'transparent',border:'none',outline:'none',
+                fontFamily:"'Fraunces',Georgia,serif",fontSize:17,fontWeight:350,
+                color:isThinking?MUSE.textMute:MUSE.text,fontStyle:'italic',caretColor:MUSE.ember,
+                opacity:isThinking?.5:1}}/>
+            {draft.trim()&&!isThinking&&(
+              <button onClick={submit}
+                style={{background:'transparent',border:`1px solid ${MUSE.ember}55`,color:MUSE.ember,
+                  padding:'3px 9px',borderRadius:3,fontSize:10,letterSpacing:'.2em',
+                  textTransform:'uppercase',fontFamily:"'JetBrains Mono',monospace",cursor:'pointer',flexShrink:0}}
+                onMouseEnter={e=>{e.currentTarget.style.background=`${MUSE.ember}20`;}}
+                onMouseLeave={e=>{e.currentTarget.style.background='transparent';}}>⏎</button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* RIGHT — what MAX is noticing */}
+      <div style={{position:'relative',zIndex:2,padding:'58px 24px 28px 20px',borderLeft:`1px solid ${MUSE.hair}`,display:'flex',flexDirection:'column',gap:12,overflow:'hidden'}}>
+        <div style={{fontSize:10,letterSpacing:'.3em',textTransform:'uppercase',color:MUSE.textMute,marginBottom:4,display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
+          <span style={{width:5,height:5,borderRadius:'50%',background:MUSE.ember,opacity:.8,animation:'museSigPulse 2.5s ease-in-out infinite',display:'inline-block'}}/>
+          <span>what max is noticing</span>
+        </div>
+        <div style={{flex:1,overflowY:'auto',scrollbarWidth:'none',display:'flex',flexDirection:'column',gap:10}}>
+          {notices.length===0&&(
+            <div style={{fontSize:13,color:MUSE.textMute,opacity:.5,fontStyle:'italic',fontFamily:"'Fraunces',Georgia,serif",lineHeight:1.5}}>
+              patterns will surface here as we talk
+            </div>
+          )}
+          {notices.map((n,i)=>{
+            const c=noticeColor(n.kind);
+            return (
+              <div key={i} style={{padding:'11px 13px 13px',background:'oklch(0.16 0.012 60 / 0.45)',border:`1px solid ${MUSE.hair}`,borderLeft:`2px solid ${c}`,borderRadius:4,flexShrink:0}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                  <div style={{fontSize:9,letterSpacing:'.22em',textTransform:'uppercase',color:c,fontFamily:"'JetBrains Mono',monospace"}}>{n.kind}</div>
+                  <div style={{flex:1}}/>
+                  <div style={{display:'flex',gap:2}}>
+                    {[0,1,2,3,4].map(k=><div key={k} style={{width:3,height:3,borderRadius:1,background:k/4<n.strength?c:MUSE.hair,opacity:k/4<n.strength?.85:.3}}/>)}
+                  </div>
+                </div>
+                <div style={{fontSize:11,fontWeight:600,color:c,opacity:.85,letterSpacing:'.01em',marginBottom:5}}>{n.title}</div>
+                <div style={{fontFamily:"'Fraunces',Georgia,serif",fontSize:13,fontWeight:350,color:MUSE.text,lineHeight:1.45,textWrap:'pretty'}}>{n.body}</div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{fontSize:9,letterSpacing:'.2em',textTransform:'uppercase',color:MUSE.textMute,opacity:.35,fontFamily:"'JetBrains Mono',monospace",textAlign:'right',flexShrink:0,paddingTop:8}}>
+          from reflection engine
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── MuseOverlay — top-level muse shell ──────────────────────────
+function MuseOverlay({ messages, insights, museState={}, room, onSwitchRoom, onExit, onSend, isThinking=false, exiting=false }) {
+  // Crossfade state — switching rooms fades out then in
+  const [displayRoom, setDisplayRoom] = React.useState(room);
+  const [roomVisible, setRoomVisible] = React.useState(true);
+  React.useEffect(()=>{
+    if (room === displayRoom) return;
+    setRoomVisible(false);
+    const t = setTimeout(()=>{ setDisplayRoom(room); setRoomVisible(true); }, 200);
+    return ()=>clearTimeout(t);
+  },[room]);
+
+  // Live concepts — prefer MuseEngine, persist to sessionStorage as fallback
+  const concepts = React.useMemo(()=>{
+    if (museState.concepts && museState.concepts.length > 0) {
+      try { sessionStorage.setItem('mx_muse_concepts', JSON.stringify(museState.concepts)); } catch {}
+      return museState.concepts;
+    }
+    // Restore from session if engine hasn't sent data yet
+    try {
+      const cached = JSON.parse(sessionStorage.getItem('mx_muse_concepts')||'[]');
+      if (cached.length > 0) return cached;
+    } catch {}
+    // Last-resort: derive short phrases from recent messages
+    const seen=new Set(), out=[];
+    messages.slice(-6).forEach(m=>{
+      const txt=typeof m.content==='string'?m.content:(m.text||m.content?.[0]?.text||'');
+      txt.split(/[,\.!?—]+/).slice(0,2).forEach(phrase=>{
+        const w=phrase.trim().toLowerCase().replace(/[^a-z0-9 ]/g,'').slice(0,30);
+        if(w.length>6 && w.split(' ').length<=3 && !seen.has(w)){ seen.add(w); out.push(w); }
+      });
+    });
+    return out.slice(0,10);
+  },[museState.concepts, messages]);
+
+  // Notices — use MuseEngine-generated insights (already classified), fall back to derivation
+  const notices = React.useMemo(()=>{
+    // muse_insight events have kind/title/body/strength already set by MuseEngine
+    const museInsights = insights.filter(i => i.kind && i.title && i.body);
+    if (museInsights.length > 0) return museInsights.slice(0,5);
+
+    // Derive from raw insight events using keyword classification
+    return insights.slice(0,5).map(ins=>{
+      const raw = (ins.result||ins.text||ins.body||ins.label||'').trim();
+      if (!raw) return null;
+      const t = raw.toLowerCase();
+      let kind='pattern', title='noticing something';
+      if (/pattern|repeat|recurring|again|always|tend|cycle/.test(t))  { kind='pattern';    title='a pattern is repeating'; }
+      else if (/connect|link|between|relate|bridge|similar|analog/.test(t)) { kind='connection'; title='strange connection'; }
+      else if (/risk|problem|issue|challenge|concern|warn|fail/.test(t)) { kind='challenge';  title='worth pushing back on'; }
+      else if (/discover|novel|new|unexpected|surprise|interesting/.test(t)) { kind='connection'; title='something unexpected'; }
+      else if (ins.source==='curiosity')  { kind='connection'; title='curiosity surfaced this'; }
+      else if (ins.source==='reflection') { kind='pattern';    title='reflected on this'; }
+      return { kind, title, body: raw.slice(0,200), strength: Math.min(1, Math.max(0.4, raw.length/280)) };
+    }).filter(Boolean);
+  },[insights]);
+
+  const waveform = isThinking ? 'thinking' : (museState.waveform || 'listening');
+  const ambient  = museState.ambient || { intensity: .45, warmth: .45 };
+
+  const roomProps = {
+    messages, concepts, waveform, ambient,
+    arc: museState.arc || 'opening',
+    isThinking,
+    onSwitch: onSwitchRoom,
+    onExit,
+    onSend: isThinking ? null : onSend, // disable input while MAX is responding
+  };
+
+  return (
+    <div className={`muse-overlay${exiting?' exiting':''}`}>
+      <div style={{width:'100%',height:'100%',transition:'opacity 0.2s ease',opacity:roomVisible?1:0}}>
+        {displayRoom==='field'         && <MuseRoomField         {...roomProps}/>}
+        {displayRoom==='constellation' && <MuseRoomConstellation {...roomProps}/>}
+        {displayRoom==='studio'        && <MuseRoomStudio        {...roomProps} notices={notices}/>}
+      </div>
     </div>
   );
 }
@@ -3546,16 +4849,31 @@ function App() {
   const [draggingBottom, setDraggingBottom] = useState(false);
   const [showBottom, setShowBottom] = useState(true);
   const [bottomTab, setBottomTab]   = useState('terminal');
-  const [termLines, setTermLines]     = useState([]);
+  const [terminals, setTerminals]     = useState([{id:'t1',name:'1',lines:[],input:'',running:false,interactive:false,history:[],histIdx:-1}]);
+  const [activeTermId, setActiveTermId] = useState('t1');
   const [outputLines, setOutputLines] = useState([]);
   const [problemLines, setProblemLines] = useState(null); // null=unchecked, []+=results
   const [problemCount, setProblemCount] = useState(0);
-  const [termInput, setTermInput]     = useState('');
-  const [termRunning, setTermRunning] = useState(false);
-  const [termHistory, setTermHistory] = useState([]);
-  const [termHistIdx, setTermHistIdx] = useState(-1);
   const termBodyRef = useRef(null);
   const termInputRef = useRef(null);
+
+  // Terminal helpers
+  const getActiveTerm = () => terminals.find(t=>t.id===activeTermId)||terminals[0];
+  const updateTerm = (id, fn) => setTerminals(ts=>ts.map(t=>t.id===id?{...t,...fn(t)}:t));
+  const addTerminal = () => {
+    const id = `t${Date.now()}`;
+    const name = String(terminals.length+1);
+    setTerminals(ts=>[...ts,{id,name,lines:[],input:'',running:false,interactive:false,history:[],histIdx:-1}]);
+    setActiveTermId(id);
+  };
+  const closeTerminal = (id) => {
+    if(terminals.length<=1) return;
+    setTerminals(ts=>{
+      const next=ts.filter(t=>t.id!==id);
+      if(activeTermId===id) setActiveTermId(next[next.length-1].id);
+      return next;
+    });
+  };
   const [showPreview, setShowPreview] = useState(false);
   const [bubbleOpen, setBubbleOpen] = useState(false);
   const [bubbleInput, setBubbleInput] = useState('');
@@ -3588,6 +4906,32 @@ function App() {
   const saveTimers = React.useRef({});
   const [gitStaged, setGitStaged]   = useState({});
 
+  // Omega Observability State
+  const [pagingLog, setPagingLog] = useState([]);
+  const [groundingLog, setGroundingLog] = useState([]);
+  const [evolutionLog, setEvolutionLog] = useState([]);
+  const [swarmState, setSwarmState] = useState({ workers: [] });
+  const [lspDiagnostics, setLspDiagnostics] = useState({}); // uri -> diagnostics[]
+  // Muse Mode
+  const [museMode, setMuseMode] = useState(false);
+  const [museRoom, setMuseRoom] = useState(()=>localStorage.getItem('mx_muse_room')||'field');
+  const [museExiting, setMuseExiting] = useState(false);
+  const [museInsights, setMuseInsights] = useState([]); // accumulates from insight events
+  const [museState, setMuseState] = useState({ concepts:[], arc:'opening', waveform:'listening', ambient:{intensity:.45,warmth:.45} });
+  const [somaStatus, setSomaStatus] = useState({ connected: false, signalConnected: false });
+
+  // Drive status bar problem count from live LSP diagnostics
+  useEffect(() => {
+    const errCount = Object.values(lspDiagnostics).reduce(
+      (sum, diags) => sum + (diags||[]).filter(d => d.severity === 1).length, 0
+    );
+    if (errCount > 0) setProblemCount(errCount);
+  }, [lspDiagnostics]);
+
+  // Omega Split-Pane State
+  const [panes, setPanes] = useState([{ id: 'p1', type: 'editor', activeTab: null }]);
+  const [activePaneId, setActivePaneId] = useState('p1');
+
   const socketRef = useRef(null);
 
   useEffect(() => {
@@ -3600,6 +4944,62 @@ function App() {
     ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
+        
+        // ── Omega Telemetry Handlers ──
+        if (msg.type === 'paging_update') {
+          setPagingLog(l => [msg.payload, ...l.slice(0, 49)]);
+        }
+        if (msg.type === 'grounding_update') {
+          setGroundingLog(l => [msg.payload, ...l.slice(0, 49)]);
+        }
+        if (msg.type === 'evolution_update') {
+          setEvolutionLog(l => [msg.payload, ...l.slice(0, 49)]);
+        }
+        if (msg.type === 'security_update') {
+          setGroundingLog(l => [{ status: 'security_audit', ...msg.payload }, ...l.slice(0, 49)]);
+        }
+        if (msg.type === 'swarm_update') {
+          setSwarmState(msg.payload);
+        }
+        if (msg.type === 'lsp_diagnostic') {
+          setLspDiagnostics(d => ({ ...d, [msg.payload.uri]: msg.payload.diagnostics }));
+        }
+        if (msg.type === 'persona_changed') {
+          setMaxStatus(s => ({ ...s, persona: msg.id }));
+          if (msg.id === 'companion') {
+            setMuseMode(true); setMuseExiting(false);
+          } else {
+            setMuseExiting(true);
+            setTimeout(()=>{ setMuseMode(false); setMuseExiting(false); }, 420);
+          }
+        }
+        if (msg.type === 'muse_state') {
+          setMuseState({ concepts: msg.concepts||[], arc: msg.arc||'opening', waveform: msg.waveform||'listening', ambient: msg.ambient||{intensity:.45,warmth:.45} });
+        }
+        if (msg.type === 'soma_status') {
+          setSomaStatus({ connected: msg.connected, signalConnected: msg.signalConnected });
+        }
+        if (msg.type === 'edit_proposed') {
+          const p = msg.proposal;
+          if (p?.id && p?.path) {
+            setPendingChanges(ps => ps.some(x => x.editId === p.id) ? ps : [...ps, {
+              id: p.id,
+              editId: p.id,
+              file: p.path,
+              content: p.params?.content || p.params?.newText || '',
+              action: p.type,
+              status: 'pending',
+              msgId: p.id
+            }]);
+          }
+        }
+        if (msg.type === 'edit_applied') {
+          setPendingChanges(ps => ps.map(p => p.editId === msg.id ? {...p, status:'accepted'} : p));
+        }
+        if (msg.type === 'edit_rejected') {
+          setPendingChanges(ps => ps.map(p => p.editId === msg.id ? {...p, status:'rejected'} : p));
+        }
+
         if (msg.type === 'token') {
           // Token streaming handled by find-and-append to the last message with that requestId
           setMessages(m => {
@@ -3620,8 +5020,10 @@ function App() {
             }
           }).catch(() => {});
         }
-        if (msg.type === 'insight') {
-          setInsight(msg.result || msg.text || (typeof msg.data === 'string' ? msg.data : JSON.stringify(msg)));
+        if (msg.type === 'insight' || msg.type === 'muse_insight') {
+          const insightText = msg.result || msg.text || msg.body || (typeof msg.data === 'string' ? msg.data : null);
+          if (insightText && msg.type === 'insight') setInsight(insightText);
+          setMuseInsights(prev=>[msg,...prev].slice(0,20));
         }
         if (msg.type === 'status') {
           setMaxStatus(s => ({ ...s, tension: msg.drive?.tension ?? s.tension }));
@@ -3629,16 +5031,120 @@ function App() {
         if (msg.type === 'agent_say') {
           setMessages(m => [...m, { id: nextMsgId(), role: 'max', persona: 'companion', text: msg.text, modelTier: 'fast', route: 'local' }]);
         }
-        if (msg.type === 'shell_output') {
-          setTermLines(l => {
-            const last = l[l.length - 1];
-            // Append to last line if it's the same type (streaming effect)
-            if (last && last.type === (msg.isError ? 'err' : 'out')) {
-              return [...l.slice(0, -1), { ...last, text: last.text + msg.text }];
+        if (msg.type === 'agent_activity') {
+          setMessages(m => {
+            const activityId = msg.activityId || 'agent_current';
+            const idx = m.findIndex(x => x.role === 'activity' && (x.activityId === activityId || x.goalId === msg.goalId || x.goalId === activityId));
+            const existing = idx >= 0 ? m[idx] : null;
+            const base = existing || {
+              id: 'activity-' + activityId,
+              role: 'activity',
+              activityId,
+              goalId: msg.goalId || activityId,
+              task: msg.task || 'MAX is working',
+              status: 'running',
+              steps: [],
+              summary: ''
+            };
+            let next = {
+              ...base,
+              activityId,
+              goalId: msg.goalId || base.goalId || activityId,
+              task: msg.task || base.task,
+              status: msg.status || base.status || 'running',
+              summary: msg.summary || base.summary || ''
+            };
+
+            if (msg.phase === 'goal_start') {
+              next = { ...next, status: 'running', steps: [], summary: msg.summary || '' };
             }
-            return [...l, { id: Math.random(), type: msg.isError ? 'err' : 'out', text: msg.text }];
+
+            if (msg.phase === 'step_start' || msg.phase === 'tool_start') {
+              const stepKey = msg.stepId || `${msg.tool || 'tool'}:${msg.toolAction || ''}:${msg.ts || Date.now()}`;
+              const step = {
+                key: stepKey,
+                step: msg.stepId,
+                status: 'running',
+                action: msg.action || msg.command || msg.query || msg.file || `${msg.tool || 'tool'}:${msg.toolAction || ''}`,
+                tool: msg.tool,
+                toolAction: msg.toolAction,
+                file: msg.file || msg.params?.filePath || null
+              };
+              const sidx = next.steps.findIndex(s => (s.key || s.step) === stepKey);
+              next.steps = sidx >= 0
+                ? next.steps.map((s, i) => i === sidx ? { ...s, ...step } : s)
+                : [...next.steps, step].slice(-12);
+              next.status = 'running';
+            }
+
+            if (msg.phase === 'step_done' || msg.phase === 'tool_done') {
+              const stepKey = msg.stepId || `${msg.tool || 'tool'}:${msg.toolAction || ''}:${msg.ts || Date.now()}`;
+              const status = msg.success === false || msg.status === 'failed' ? 'failed' : 'done';
+              const patch = {
+                key: stepKey,
+                step: msg.stepId,
+                status,
+                action: msg.action || msg.command || msg.query || msg.file || msg.summary || `${msg.tool || 'tool'}:${msg.toolAction || ''}`,
+                tool: msg.tool,
+                toolAction: msg.toolAction,
+                file: msg.file || msg.params?.filePath || null
+              };
+              const sidx = next.steps.findIndex(s => (s.key || s.step) === stepKey);
+              next.steps = sidx >= 0
+                ? next.steps.map((s, i) => i === sidx ? { ...s, ...patch } : s)
+                : [...next.steps, patch].slice(-12);
+              if (msg.phase === 'tool_done') next.status = status;
+            }
+
+            if (msg.phase === 'goal_done') {
+              next.status = msg.success === false || msg.status === 'failed' ? 'failed' : 'done';
+              next.summary = msg.summary || next.summary;
+              next.steps = next.steps.map(s => s.status === 'running' ? { ...s, status: next.status === 'done' ? 'done' : 'failed' } : s);
+            }
+
+            if (idx >= 0) return m.map((x, i) => i === idx ? next : x);
+            return [...m, next];
           });
-          setTermRunning(false);
+        }
+        if (msg.type === 'error_explain') {
+          updateTerm(activeTermId, t=>({lines:[...t.lines,{id:Date.now(),type:'explain',command:msg.command,text:msg.explanation}]}));
+        }
+        if (msg.type === 'shell_output') {
+          updateTerm(activeTermId, t => {
+            const last = t.lines[t.lines.length-1];
+            const type = msg.isError ? 'err' : 'out';
+            if (last && last.type === type) {
+              return {lines:[...t.lines.slice(0,-1),{...last,text:last.text+msg.text}]};
+            }
+            return {lines:[...t.lines,{id:Math.random(),type,text:msg.text}]};
+          });
+        }
+        if (msg.type === 'shell_interactive') {
+          updateTerm(activeTermId, ()=>({running:true,interactive:true}));
+        }
+        if (msg.type === 'shell_done') {
+          updateTerm(activeTermId, t=>({
+            running:false, interactive:false,
+            lines: (!msg.success&&msg.error) ? [...t.lines,{id:Math.random(),type:'err',text:msg.error}] : t.lines
+          }));
+        }
+        if (msg.type === 'file_changed') {
+          const fp=(msg.file||'').replace(/\\/g,'/'); if(!fp) return;
+          const name=fp.split('/').pop();
+          const tabs=openTabsRef.current||[];
+          const isOpen=tabs.some(t=>t.path===fp||t.path===msg.file||t.name===name);
+          if(isOpen) openFileRef.current?.({name,path:fp,forceReload:true});
+          setSentinelFiles(sf=>({...sf,[name]:Date.now()}));
+        }
+        if (msg.type === 'clarification_needed') {
+          setMessages(m => [...m, {
+            id: nextMsgId(),
+            role: 'clarification',
+            goalId: msg.goalId,
+            goalTitle: msg.goalTitle,
+            questions: msg.questions,
+            answered: false,
+          }]);
         }
       } catch (err) { console.warn('[WS] Message error:', err); }
     };
@@ -3676,6 +5182,9 @@ function App() {
   });
   const [contextMenu, setContextMenu] = useState(null); // {x,y,file}
   const [input, setInput]           = useState('');
+  const [mentions, setMentions]     = useState([]); // [{ type:'file', value:'core/Brain.js' }]
+  const [atPicker, setAtPicker]     = useState(null); // null | { query: string, matches: [] }
+  const [atPickerIdx, setAtPickerIdx] = useState(0);
   const [isThinking, setIsThinking] = useState(false);
   const [thinkLabel, setThinkLabel] = useState('thinking…');
   const [chatMode, setChatMode]     = useState(null);
@@ -3692,12 +5201,15 @@ function App() {
   const agentTaskTimer = useRef(null);
   const currentActivityGoalRef = useRef(null); // tracks goalId of the active activity message
   const openFileRef   = useRef(null);  // kept fresh each render — lets SSE handler call openFile
-  const messagesEndRef = useRef(null);
+  const openTabsRef   = useRef([]);    // kept fresh so file_changed handler can check open tabs
+  const messagesEndRef    = useRef(null);
+  const chatContainerRef  = useRef(null);
+  const userScrolledUpRef = useRef(false);
 
   // Auto-scroll terminal
   useEffect(()=>{
     if(termBodyRef.current) termBodyRef.current.scrollTop = termBodyRef.current.scrollHeight;
-  }, [termLines]);
+  }, [terminals, activeTermId]);
 
   // Global keyboard shortcuts
   useEffect(()=>{
@@ -3845,9 +5357,24 @@ function App() {
                 }));
                 if(brainState) setBrainState(brainState);
               }
-              if(d.type==='insight'){
-                setInsight(d.text||d.content||d.message);
+              if(d.type==='edit_proposed'){
+                const p=d.proposal;
+                if(p?.id&&p?.path){
+                  setPendingChanges(ps=>ps.some(x=>x.editId===p.id)?ps:[...ps,{
+                    id:p.id,editId:p.id,file:p.path,content:p.params?.content||p.params?.newText||'',action:p.type,status:'pending',msgId:p.id
+                  }]);
+                }
+              }
+              if(d.type==='edit_applied'){
+                setPendingChanges(ps=>ps.map(p=>p.editId===d.id?{...p,status:'accepted'}:p));
+              }
+              if(d.type==='edit_rejected'){
+                setPendingChanges(ps=>ps.map(p=>p.editId===d.id?{...p,status:'rejected'}:p));
+              }
+              if(d.type==='insight'||d.type==='muse_insight'){
+                if(d.type==='insight') setInsight(d.text||d.content||d.message);
                 setTimeout(()=>setInsight(null),8000);
+                setMuseInsights(prev=>[d,...prev].slice(0,20));
                 // Choko reacts to insights too
                 if(Math.random()<0.35){
                   const msg = "fresh insight from MAX: " + (d.text||d.content||'').slice(0,60);
@@ -3869,7 +5396,11 @@ function App() {
                 currentActivityGoalRef.current = d.goalId;
                 const actMsg = { id:'activity-'+d.goalId, role:'activity', goalId:d.goalId, task:d.task, steps:[], status:'running' };
                 setAgentTask({ task:d.task, goalId:d.goalId, steps:[], status:'running' });
-                setMessages(m=>[...m, actMsg]);
+                setMessages(m=>{
+                  const idx=m.findIndex(msg=>msg.role==='activity'&&(msg.goalId===d.goalId||msg.activityId===d.goalId));
+                  if(idx>=0) return m.map((msg,i)=>i===idx?{...msg,...actMsg,steps:msg.steps||[]}:msg);
+                  return [...m, actMsg];
+                });
               }
               if(d.type==='agent_step_start'){
                 const fp=(d.params?.filePath||d.params?.path||'').replace(/\\/g,'/');
@@ -3907,11 +5438,49 @@ function App() {
                   openFileRef.current?.({name,path:fp,forceReload:true});
                 }
               }
+              if(d.type==='file_changed'){
+                // External file change detected by Sentinel — reload if open in any pane
+                const fp=(d.file||'').replace(/\\/g,'/'); if(!fp) return;
+                const name=fp.split('/').pop();
+                const tabs=openTabsRef.current||[];
+                const isOpen=tabs.some(t=>t.path===fp||t.path===d.file||t.name===name);
+                if(isOpen) openFileRef.current?.({name,path:fp,forceReload:true});
+                // Pulse the tree item regardless so you see which file changed
+                setSentinelFiles(sf=>({...sf,[name]:Date.now()}));
+              }
+              if(d.type==='lsp_diagnostic'){
+                setLspDiagnostics(prev=>({...prev,[d.payload?.uri||'']: d.payload?.diagnostics||[]}));
+              }
+              if(d.type==='persona_changed'){
+                setMaxStatus(s=>({...s, persona: d.id}));
+                if(d.id==='companion'){
+                  setMuseMode(true); setMuseExiting(false);
+                } else {
+                  setMuseExiting(true);
+                  setTimeout(()=>{ setMuseMode(false); setMuseExiting(false); }, 420);
+                }
+              }
+              if(d.type==='muse_state'){
+                setMuseState({ concepts: d.concepts||[], arc: d.arc||'opening', waveform: d.waveform||'listening', ambient: d.ambient||{intensity:.45,warmth:.45} });
+              }
+              if(d.type==='soma_status'){
+                setSomaStatus({ connected: d.connected, signalConnected: d.signalConnected });
+              }
               if(d.type==='agent_free'){
                 const finalStatus=d.success?'done':'failed';
                 setAgentTask(t=>t?{...t,status:finalStatus}:null);
                 setMessages(m=>m.map(msg=>msg.goalId===d.goalId?{...msg,status:finalStatus}:msg));
                 agentTaskTimer.current = setTimeout(()=>{ setAgentTask(null); currentActivityGoalRef.current=null; }, 8000);
+              }
+              if(d.type==='clarification_needed'){
+                setMessages(m=>[...m,{
+                  id: nextMsgId(),
+                  role: 'clarification',
+                  goalId: d.goalId,
+                  goalTitle: d.goalTitle,
+                  questions: d.questions,
+                  answered: false,
+                }]);
               }
               // max.say() — attach completion summary to activity message instead of separate bubble
               if(d.type==='agent_say' && d.text){
@@ -3936,7 +5505,19 @@ function App() {
     return ()=>{mounted=false;clearInterval(iv);if(sseRef.current) sseRef.current.close();};
   },[maxUrl]);
 
-  useEffect(()=>{ messagesEndRef.current?.scrollIntoView({behavior:'smooth'}); },[messages,isThinking]);
+  // Only auto-scroll when the user is already at (or near) the bottom.
+  // If they scrolled up to read history, leave them there.
+  useEffect(()=>{
+    if(!userScrolledUpRef.current) messagesEndRef.current?.scrollIntoView({behavior:'smooth'});
+  },[messages,isThinking]);
+
+  const handleChatScroll = ()=>{
+    const el = chatContainerRef.current;
+    if(!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // Re-enable auto-scroll once user scrolls back within 80px of the bottom
+    userScrolledUpRef.current = distFromBottom > 80;
+  };
 
   const handleInputChange=e=>{
     const val=e.target.value; setInput(val);
@@ -3944,9 +5525,34 @@ function App() {
       setSlashSuggestions(SLASH_CMDS.filter((c,i,a)=>c.cmd.startsWith(val.toLowerCase())&&a.findIndex(x=>x.cmd===c.cmd)===i));
       setSlashIdx(0);
     } else setSlashSuggestions([]);
+
+    // @mention picker — trigger on @ anywhere in input
+    const atMatch = val.match(/@([\w./\-]*)$/);
+    if (atMatch) {
+      const query = atMatch[1].toLowerCase();
+      const allFiles = (realFiles || []).map(f => f.path || f.name).filter(Boolean);
+      const matches = allFiles.filter(f => f.toLowerCase().includes(query)).slice(0, 8);
+      setAtPicker({ query, matches });
+      setAtPickerIdx(0);
+    } else {
+      setAtPicker(null);
+    }
+  };
+
+  const selectAtMention = (filePath) => {
+    const newInput = input.replace(/@[\w./\-]*$/, '');
+    setInput(newInput);
+    setMentions(m => m.some(x=>x.value===filePath) ? m : [...m, { type:'file', value: filePath }]);
+    setAtPicker(null);
   };
 
   const handleKeyDown=e=>{
+    if(atPicker?.matches?.length > 0){
+      if(e.key==='ArrowDown'){e.preventDefault();setAtPickerIdx(i=>Math.min(i+1,atPicker.matches.length-1));return;}
+      if(e.key==='ArrowUp'){e.preventDefault();setAtPickerIdx(i=>Math.max(i-1,0));return;}
+      if(e.key==='Tab'||e.key==='Enter'){e.preventDefault();selectAtMention(atPicker.matches[atPickerIdx]);return;}
+      if(e.key==='Escape'){setAtPicker(null);return;}
+    }
     if(slashSuggestions.length>0){
       if(e.key==='ArrowDown'){e.preventDefault();setSlashIdx(i=>Math.min(i+1,slashSuggestions.length-1));return;}
       if(e.key==='ArrowUp'){e.preventDefault();setSlashIdx(i=>Math.max(i-1,0));return;}
@@ -3957,12 +5563,36 @@ function App() {
   };
 
   const sendMessage=async(overrideText)=>{
-    const text=(overrideText??input).trim();
+    let text=(overrideText??input).trim();
     if(!text||isThinking) return;
-    if(!overrideText) setInput('');
+    if(!overrideText) { setInput(''); }
     setSlashSuggestions([]);
+    setAtPicker(null);
+
+    // Resolve @mentions — prepend file contents as context
+    const activeMentions = overrideText ? [] : mentions;
+    if(activeMentions.length > 0 && connected){
+      try{
+        const r = await fetch(`${maxUrl}/api/mention/resolve`,{method:'POST',headers:authHdrs(),body:JSON.stringify({mentions:activeMentions})});
+        const {results=[]} = await r.json();
+        const ctx = results.filter(m=>m.content).map(m=>`[File: ${m.value}]\n\`\`\`\n${m.content}\n\`\`\``).join('\n\n');
+        if(ctx) text = `${ctx}\n\n---\n${text}`;
+      }catch{}
+      setMentions([]);
+    }
 
     // Client-side slash command interception
+    if (text === '/split') {
+      splitPane();
+      setMessages(m => [...m, { id: nextMsgId(), role: 'max', persona: 'architect', text: '🔀 Bifurcated editor pane. New pane active.' }]);
+      return;
+    }
+    if (text === '/close') {
+      closePane(activePaneId);
+      setMessages(m => [...m, { id: nextMsgId(), role: 'max', persona: 'architect', text: '✕ Closed active pane.' }]);
+      return;
+    }
+
     if(text.startsWith('/persona ')){
       const name=text.slice(9).trim().toLowerCase();
       if(PERSONAS[name]&&connected){
@@ -4063,7 +5693,9 @@ function App() {
       } else {
         // Plain JSON (swarm/debate)
         const data=await r.json();
-        reply=data.reply||data.response||data.result||data.synthesis||data.verdict||JSON.stringify(data);
+        reply=data.reply||data.response||data.result||data.synthesis||data.verdict
+            ||(data.error ? `Error: ${data.error}` : null)
+            ||'(no response)';
         persona=data.persona||persona;
         setMessages(m=>[...m,{id:msgId2,role:'max',persona,text:reply,modelTier:activeTier,route:activeTier==='fast'?'local':'cloud',streaming:false}]);
       }
@@ -4119,10 +5751,12 @@ function App() {
   };
 
   const runCommand = async (cmd) => {
-    if (!cmd.trim() || termRunning) return;
+    const tid = activeTermId;
+    const term = terminals.find(t=>t.id===tid)||terminals[0];
+    if (!cmd.trim() || term.running) return;
     const id = Date.now();
-    setTermLines(l => [...l, { id, type:'prompt', text:cmd }]);
-    
+    updateTerm(tid, t=>({lines:[...t.lines,{id,type:'prompt',text:cmd}],input:'',running:true,history:[cmd,...t.history.slice(0,49)],histIdx:-1}));
+
     // Choko reacts to interesting commands
     const cmdBase = cmd.trim().split(' ')[0];
     const termReactions = {
@@ -4132,18 +5766,12 @@ function App() {
     };
     if(termReactions[cmdBase]) termReactions[cmdBase]();
 
-    setTermHistory(h => [cmd, ...h.slice(0,49)]);
-    setTermHistIdx(-1);
-    setTermInput('');
-    setTermRunning(true);
-
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({ type: 'shell_input', command: cmd }));
       return;
     }
 
     if (!connected) {
-      // Demo mode fallback...
       // Demo mode — simulate common commands
       setTimeout(() => {
         const demos = {
@@ -4158,8 +5786,7 @@ function App() {
           'npm -v':        [{type:'out',text:'10.2.4'}],
         };
         const out = demos[cmd.trim()] || [{type:'err',text:`command not found: ${cmd.split(' ')[0]} (MAX offline — start with node launcher.mjs --mode api)`}];
-        setTermLines(l => [...l, ...out.map(o=>({...o,id:Math.random()}))]);
-        setTermRunning(false);
+        updateTerm(tid, t=>({lines:[...t.lines,...out.map(o=>({...o,id:Math.random()}))],running:false}));
       }, 600 + Math.random()*400);
       return;
     }
@@ -4327,6 +5954,7 @@ function App() {
     const ext = (tabName.split('.').pop()||'').toLowerCase();
     if(!openTabs.find(t=>t.name===tabName)) setOpenTabs(ts=>[...ts,{name:tabName, path}]);
     setActiveTab(tabName); setShowPreview(false); setLangOverride(null);
+    setPanes(ps => ps.map(p => p.id === activePaneId ? {...p, activeTab: tabName} : p));
     // Binary / image guard
     if (BINARY_EXTS.has(ext)) {
       setFileContents(c=>({...c,[path]:`// Binary file — cannot display in editor\n// ${path}`}));
@@ -4339,11 +5967,19 @@ function App() {
     // Load content if not yet loaded, or forceReload=true (e.g. after MAX wrote the file)
     if (connected && (fileContents[path] === undefined || f.forceReload)) {
       const content = await readFile2(path);
-      if (content !== null) setFileContents(c => ({...c, [path]: content}));
+      if (content !== null) {
+        setFileContents(c => ({...c, [path]: content}));
+        // Trigger LSP diagnostics on open for code files
+        const lspExts = new Set(['ts','tsx','js','jsx','mjs','cjs','py','go','rs']);
+        if (lspExts.has(ext) && socketRef.current?.readyState === WebSocket.OPEN) {
+          socketRef.current.send(JSON.stringify({ type: 'buffer_update', filePath: path, content }));
+        }
+      }
     }
   };
-  // Keep ref fresh so the SSE handler (closed over on mount) always calls the latest openFile
+  // Keep refs fresh so SSE/WS handlers (closed over on mount) always see latest state
   openFileRef.current = openFile;
+  openTabsRef.current = openTabs;
   // Expose globally so ToolCallBlock (rendered outside App) can navigate to files on click
   window.maxOpenFile = openFile;
 
@@ -4357,6 +5993,7 @@ function App() {
     setLangOverride(null);
     if(!openTabs.find(t=>t.name===tabName)) setOpenTabs(ts=>[...ts,{name:tabName,path:n}]);
     setActiveTab(tabName);
+    setPanes(ps => ps.map(p => p.id === activePaneId ? {...p, activeTab: tabName} : p));
   };
 
   const shellRun = async (cmd) => {
@@ -4397,6 +6034,7 @@ function App() {
     setOpenTabs(newTabs);
     setUnsaved(u=>{const n={...u};delete n[name];return n;});
     if(activeTab===name) setActiveTab(newTabs[newTabs.length-1]?.name||null);
+    setPanes(ps => ps.map(p => p.activeTab === name ? {...p, activeTab: newTabs[newTabs.length-1]?.name || null} : p));
   };
 
   const collapseAll=()=>setTreeOpen({});
@@ -4420,6 +6058,69 @@ function App() {
 
   const persona=PERSONAS[maxStatus.persona]||PERSONAS.companion;
   const flattenTree=(arr)=>(arr||[]).flatMap(f=>f.type==='dir'?flattenTree(f.children||[]):[f]);
+
+  const splitPane = () => {
+    const id = `p${Date.now()}`;
+    setPanes(ps => [...ps, { id, type: 'editor', activeTab }]);
+    setActivePaneId(id);
+  };
+
+  const closePane = (paneId) => {
+    setPanes(ps => {
+      if (ps.length <= 1) return ps;
+      const next = ps.filter(p => p.id !== paneId);
+      if (activePaneId === paneId) {
+        const fallback = next[next.length - 1];
+        setActivePaneId(fallback.id);
+        setActiveTab(fallback.activeTab || activeTab);
+      }
+      return next;
+    });
+  };
+
+  const renderPaneContent = (pane) => {
+    const paneTab = pane.activeTab || activeTab;
+    const paneTabPath = openTabs.find(t => t.name === paneTab)?.path || paneTab || '';
+    const edContent = fileContents[paneTabPath] ?? fileContents[paneTab] ?? (DEMO_FILE_CONTENTS[paneTab] || null);
+    const showWelcome = !paneTab || (!unsaved[paneTab] && fileContents[paneTabPath || paneTab] == null && !DEMO_FILE_CONTENTS[paneTab]);
+
+    if (showWelcome) {
+      return (
+        <div className="welcome" style={{position:'absolute',inset:0,zIndex:2,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:'var(--s1)'}}>
+          <div className="welcome-logo">Maxwell</div>
+          <div className="welcome-hint">Open a file or tell MAX what to build →<br/><br/><kbd>Ctrl+K</kbd> palette &nbsp; <kbd>Ctrl+S</kbd> save &nbsp; <kbd>/</kbd> commands</div>
+        </div>
+      );
+    }
+
+    if (typeof edContent === 'string' && edContent.startsWith('__IMAGE__:')) {
+      const imgUrl = edContent.slice(10);
+      return (
+        <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',background:'var(--s1)',overflow:'auto'}}>
+          <img src={imgUrl} alt={paneTab} style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:4}}
+            onError={e=>{e.currentTarget.style.display='none';}}/>
+        </div>
+      );
+    }
+
+    return (
+      <div style={{flex:1,overflow:'hidden',position:'relative',display:'flex',flexDirection:'column'}}>
+        <MonacoEditor
+          key={`${pane.id}:${paneTab}`}
+          fileName={paneTab}
+          content={edContent ?? ''}
+          onChange={content => handleEditorChange(paneTabPath || paneTab, content)}
+          langOverride={langOverride}
+          diagnostics={lspDiagnostics[paneTabPath || paneTab]}
+        />
+        {pane.id === activePaneId && (
+          <div className={`save-status ${saveStatus==='saved'?'show':''}`}>
+            {saveStatus==='saving'?'saving…':'✓ saved'}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const handleAbort = () => {
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
@@ -4536,8 +6237,16 @@ function App() {
           </div>
         </div>
         <div className="tb-status">
-          <PersonaPicker persona={persona} maxUrl={maxUrl} setMaxStatus={setMaxStatus} authHdrs={authHdrs}/>
+          <PersonaPicker persona={persona} maxUrl={maxUrl} setMaxStatus={setMaxStatus} authHdrs={authHdrs}
+            onCompanion={()=>{ setMuseMode(true); setMuseExiting(false); }}
+            onLeaveCompanion={()=>{ setMuseExiting(true); setTimeout(()=>{ setMuseMode(false); setMuseExiting(false); },420); }}
+          />
 
+          <div className="tb-sep"/>
+          <div className={`soma-pill${somaStatus.connected ? ' live' : ''}`} title={somaStatus.connected ? `SOMA connected${somaStatus.signalConnected ? ' · signal bridge live' : ''}` : 'SOMA offline'}>
+            <div className="soma-dot"/>
+            <span>SOMA</span>
+          </div>
           <div className="tb-sep"/>
           <div className="conn-dot" style={connected?{background:'var(--green)',boxShadow:'0 0 6px rgba(16,185,129,.6)',animation:'pulse 2.5s infinite'}:{background:'var(--muted2)'}}/>
         </div>
@@ -4622,9 +6331,13 @@ function App() {
             {ICONS.git}
             {gitChangedCount>0&&<span className="act-badge" style={{background:'var(--amber)'}}/>}
           </button>
-          <button className={`act-btn ${sideTab==='graph'&&sidebarOpen?'active':''}`} title="Dependency Graph"
+          <button className={`act-btn ${sideTab==='graph'&&sidebarOpen?'active':''}`} title="Agent Timeline"
             onClick={()=>{ if(sideTab==='graph'&&sidebarOpen){setSidebarOpen(false);}else{setSideTab('graph');setSidebarOpen(true);} }}>
             {ICONS.graph}
+          </button>
+          <button className={`act-btn ${sideTab==='observability'&&sidebarOpen?'active':''}`} title="Observability Matrix"
+            onClick={()=>{ if(sideTab==='observability'&&sidebarOpen){setSidebarOpen(false);}else{setSideTab('observability');setSidebarOpen(true);} }}>
+            {ICONS.observability}
           </button>
           <div className="act-spacer"/>
           <button className="act-btn" title="Settings" onClick={()=>setShowSettings(true)}>{ICONS.settings}</button>
@@ -4698,7 +6411,15 @@ function App() {
             />
           )}
           {sideTab==='graph'&&(
-            <DependencyGraph connected={connected} maxUrl={maxUrl} onOpenFile={openFile}/>
+            <AgentTimeline connected={connected} maxUrl={maxUrl} messages={messages}/>
+          )}
+          {sideTab==='observability'&&(
+            <ObservabilityView 
+              pagingLog={pagingLog} 
+              groundingLog={groundingLog} 
+              evolutionLog={evolutionLog} 
+              swarmState={swarmState}
+            />
           )}
         </div>
 
@@ -4738,40 +6459,21 @@ function App() {
             {openTabs.length===0&&<span className="tab-welcome">Open a file</span>}
           </div>
           <div style={{flex:1,overflow:'hidden',position:'relative',display:'flex',flexDirection:'column'}}>
-            {(()=>{
-              if (!activeTab) return null;
-              const edContent = fileContents[activeTabPath] ?? fileContents[activeTab] ?? (DEMO_FILE_CONTENTS[activeTab] || null);
-              // Show welcome overlay when content isn't loaded yet (no unsaved draft, not a demo file)
-              if (edContent === null && !unsaved[activeTab]) return null;
-              if (typeof edContent === 'string' && edContent.startsWith('__IMAGE__:')) {
-                const imgUrl = edContent.slice(10);
-                return (
-                  <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',background:'var(--s1)',overflow:'auto'}}>
-                    <img src={imgUrl} alt={activeTab} style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:4}}
-                      onError={e=>{e.currentTarget.style.display='none';}}/>
-                  </div>
-                );
-              }
-              return (
-                <MonacoEditor
-                  key={activeTab}
-                  fileName={activeTab}
-                  content={edContent ?? ''}
-                  onChange={content => handleEditorChange(activeTabPath || activeTab, content)}
-                  langOverride={langOverride}
-                />
-              );
-            })()}
-            <div className={`save-status ${saveStatus==='saved'?'show':''}`}>
-              {saveStatus==='saving'?'saving…':'✓ saved'}
-            </div>
-            {/* Welcome screen — inside the positioned container so absolute overlay is scoped */}
-            {(!activeTab || (!unsaved[activeTab] && fileContents[activeTabPath??activeTab]==null && !DEMO_FILE_CONTENTS[activeTab])) && (
-              <div className="welcome" style={{position:'absolute',inset:0,zIndex:2,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:'var(--s1)'}}>
-                <div className="welcome-logo">Maxwell</div>
-                <div className="welcome-hint">Open a file or tell MAX what to build →<br/><br/><kbd>Ctrl+K</kbd> palette &nbsp; <kbd>Ctrl+S</kbd> save &nbsp; <kbd>/</kbd> commands</div>
-              </div>
-            )}
+            <SplitGrid
+              panes={panes}
+              activePaneId={activePaneId}
+              onPaneClick={setActivePaneId}
+              renderPaneContent={renderPaneContent}
+              onClosePane={closePane}
+              openTabs={openTabs}
+              unsaved={unsaved}
+              fileIcon={fileIcon}
+              onTabSelect={(paneId, name) => {
+                setPanes(ps=>ps.map(p=>p.id===paneId?{...p,activeTab:name}:p));
+                setActivePaneId(paneId);
+              }}
+              onTabClose={name=>closeTab({stopPropagation:()=>{}}, name)}
+            />
           </div>
           {showBottom && (
             <div className="bottom-panel" style={{height:bottomH}}>
@@ -4783,35 +6485,55 @@ function App() {
                 <button className="sb-icon-btn bp-close" style={{display:'flex'}} onClick={()=>setShowBottom(false)}>{ICONS.close}</button>
               </div>
               {/* Terminal tab */}
-              {bottomTab==='terminal' && <>
-                <div className="terminal-body" ref={termBodyRef} onClick={()=>termInputRef.current?.focus()}>
-                  {termLines.map(l=>(
-                    <div key={l.id} className="term-line">
-                      {l.type==='prompt'&&<><span className="term-prompt">❯</span><span className="term-cmd">{l.text}</span></>}
-                      {l.type==='out' &&<span className="term-out">{l.text}</span>}
-                      {l.type==='ok'  &&<span className="term-ok">{l.text}</span>}
-                      {l.type==='err' &&<span className="term-err">{l.text}</span>}
-                      {l.type==='info'&&<span className="term-info">{l.text}</span>}
-                    </div>
-                  ))}
-                  {termRunning && <div className="term-line"><span className="term-info"><span className="term-spinner">◌</span> running…</span></div>}
-                </div>
-                <div className="term-input-row">
-                  <span className="term-prompt">❯</span>
-                  <input ref={termInputRef} className="term-input"
-                    placeholder={connected?"Run a command…":"Run a command… (demo mode)"}
-                    value={termInput} onChange={e=>setTermInput(e.target.value)}
-                    onKeyDown={e=>{
-                      if(e.key==='Enter'){e.preventDefault();runCommand(termInput);}
-                      if(e.key==='ArrowUp'){e.preventDefault();const nx=Math.min(termHistIdx+1,termHistory.length-1);setTermHistIdx(nx);setTermInput(termHistory[nx]||'');}
-                      if(e.key==='ArrowDown'){e.preventDefault();const nx=Math.max(termHistIdx-1,-1);setTermHistIdx(nx);setTermInput(nx===-1?'':termHistory[nx]||'');}
-                      if(e.key==='l'&&e.ctrlKey){e.preventDefault();setTermLines([]);}
-                    }}
-                    disabled={termRunning} autoComplete="off" spellCheck="false"
-                  />
-                  {termRunning&&<span className="term-spinner" style={{color:'var(--amber)',fontSize:13}}>◌</span>}
-                </div>
-              </>}
+              {bottomTab==='terminal' && (()=>{
+                const at = getActiveTerm();
+                return <>
+                  {/* Terminal instance tabs */}
+                  <div className="term-tab-bar">
+                    {terminals.map(t=>(
+                      <div key={t.id} className={`term-tab ${t.id===activeTermId?'active':''}`}
+                           onClick={()=>setActiveTermId(t.id)}>
+                        {ICONS.terminal}&nbsp;{t.name}
+                        {terminals.length>1 && (
+                          <span className="term-tab-close"
+                                onClick={e=>{e.stopPropagation();closeTerminal(t.id);}}
+                                style={{display:'flex',alignItems:'center',justifyContent:'center'}}>✕</span>
+                        )}
+                      </div>
+                    ))}
+                    <div className="term-tab-add" onClick={addTerminal} title="New terminal">+</div>
+                  </div>
+                  <div className="terminal-body" ref={termBodyRef} onClick={()=>termInputRef.current?.focus()}>
+                    {at.lines.map(l=>(
+                      <div key={l.id} className="term-line">
+                        {l.type==='prompt'&&<><span className="term-prompt">❯</span><span className="term-cmd">{l.text}</span></>}
+                        {l.type==='out' &&<span className="term-out">{l.text}</span>}
+                        {l.type==='ok'  &&<span className="term-ok">{l.text}</span>}
+                        {l.type==='err' &&<span className="term-err">{l.text}</span>}
+                        {l.type==='info'&&<span className="term-info">{l.text}</span>}
+                        {l.type==='explain'&&<span className="term-explain">⚡ {l.text}</span>}
+                      </div>
+                    ))}
+                    {at.running && <div className="term-line"><span className="term-info"><span className="term-spinner">◌</span> running…</span></div>}
+                  </div>
+                  <div className="term-input-row">
+                    <span className="term-prompt">❯</span>
+                    <input ref={termInputRef} className="term-input"
+                      placeholder={connected?"Run a command…":"Run a command… (demo mode)"}
+                      value={at.input}
+                      onChange={e=>updateTerm(activeTermId,()=>({input:e.target.value}))}
+                      onKeyDown={e=>{
+                        if(e.key==='Enter'){e.preventDefault();runCommand(at.input);}
+                        if(e.key==='ArrowUp'){e.preventDefault();const nx=Math.min(at.histIdx+1,at.history.length-1);updateTerm(activeTermId,()=>({histIdx:nx,input:at.history[nx]||''}));}
+                        if(e.key==='ArrowDown'){e.preventDefault();const nx=Math.max(at.histIdx-1,-1);updateTerm(activeTermId,()=>({histIdx:nx,input:nx===-1?'':at.history[nx]||''}));}
+                        if(e.key==='l'&&e.ctrlKey){e.preventDefault();updateTerm(activeTermId,()=>({lines:[]}));}
+                      }}
+                      disabled={at.running} autoComplete="off" spellCheck="false"
+                    />
+                    {at.running&&<span className="term-spinner" style={{color:'var(--amber)',fontSize:13}}>◌</span>}
+                  </div>
+                </>;
+              })()}
               {/* Output tab */}
               {bottomTab==='output' && (
                 <div className="terminal-body">
@@ -4882,11 +6604,14 @@ function App() {
               <div className="insight"><div className="ins-label">Insight</div>{insight}</div>
             </div>
           )}
-          <div className="mp-messages">
+          <div className="mp-messages" ref={chatContainerRef} onScroll={handleChatScroll}>
             {messages.map(msg=>
               msg.role==='activity'
                 ? <AgentActivityMessage key={msg.id} msg={msg}/>
-                : <MaxMsg key={msg.id} msg={msg} pendingChanges={pendingChanges} setPendingChanges={setPendingChanges} setActiveTab={setActiveTab}/>
+                : msg.role==='clarification'
+                  ? <ClarificationCard key={msg.id} msg={msg} maxUrl={maxUrl}
+                      onAnswered={id=>setMessages(m=>m.map(x=>x.id===id?{...x,answered:true}:x))}/>
+                  : <MaxMsg key={msg.id} msg={msg} pendingChanges={pendingChanges} setPendingChanges={setPendingChanges} setActiveTab={setActiveTab}/>
             )}
             {isThinking && <Thinking label={thinkLabel} onAbort={handleAbort}/>}
             <div ref={messagesEndRef}/>
@@ -4918,9 +6643,29 @@ function App() {
                 ))}
               </div>
             )}
-            <div className="input-row">
+            {mentions.length > 0 && (
+              <div className="mention-chips">
+                {mentions.map(m=>(
+                  <span key={m.value} className="mention-badge">
+                    📄 {m.value.split('/').pop()}
+                    <span style={{cursor:'pointer',marginLeft:2,opacity:.7}} onClick={()=>setMentions(ms=>ms.filter(x=>x.value!==m.value))}>×</span>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="input-row" style={{position:'relative'}}>
+              {atPicker?.matches?.length > 0 && (
+                <div className="at-picker">
+                  {atPicker.matches.map((f,i)=>(
+                    <div key={f} className={`at-item ${i===atPickerIdx?'active':''}`} onMouseDown={e=>{e.preventDefault();selectAtMention(f);}}>
+                      <span className="at-item-icon">📄</span>
+                      <span className="at-item-name">{f}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               <textarea ref={inputRef} className="mp-textarea"
-                placeholder={chatMode?`${chatMode} mode — describe your task…`:"Talk to MAX… or /command"}
+                placeholder={chatMode?`${chatMode} mode…`:"Message MAX…"}
                 value={input} onChange={handleInputChange} onKeyDown={handleKeyDown} rows={1}
                 onInput={e=>{e.target.style.height='auto';e.target.style.height=Math.min(e.target.scrollHeight,110)+'px';}}
               />
@@ -4943,6 +6688,24 @@ function App() {
         onClickLang={()=>setShowLangPicker(l=>!l)}
         onClickShortcuts={()=>setShowShortcuts(true)}
       />
+
+      {/* ── Muse Mode overlay ── */}
+      {museMode && (
+        <MuseOverlay
+          messages={messages}
+          insights={museInsights}
+          museState={museState}
+          room={museRoom}
+          exiting={museExiting}
+          isThinking={isThinking}
+          onSend={sendMessage}
+          onSwitchRoom={(r)=>{ setMuseRoom(r); localStorage.setItem('mx_muse_room',r); }}
+          onExit={()=>{
+            setMuseExiting(true);
+            setTimeout(()=>{ setMuseMode(false); setMuseExiting(false); }, 420);
+          }}
+        />
+      )}
     </div>
   );
 }

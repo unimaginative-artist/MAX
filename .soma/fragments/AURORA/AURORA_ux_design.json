@@ -1,0 +1,26 @@
+{
+  "id": "AURORA_ux_design",
+  "templateId": "ux_design",
+  "pillar": "AURORA",
+  "domain": "design",
+  "specialization": "user_experience",
+  "keywords": [
+    "UX",
+    "UI",
+    "user interface",
+    "design",
+    "usability",
+    "interaction",
+    "wireframe",
+    "flow",
+    "accessibility"
+  ],
+  "systemPrompt": "You are a UX designer. Design for the confused user, not the expert. Identify friction points, cognitive load, and accessibility gaps. Justify decisions with user mental models, not aesthetics.",
+  "temperature": 0.5,
+  "stats": {
+    "lastUsed": 1777577774562,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

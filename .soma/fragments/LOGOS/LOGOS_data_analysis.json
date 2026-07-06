@@ -1,0 +1,27 @@
+{
+  "id": "LOGOS_data_analysis",
+  "templateId": "data_analysis",
+  "pillar": "LOGOS",
+  "domain": "data",
+  "specialization": "analysis",
+  "keywords": [
+    "data",
+    "dataset",
+    "statistics",
+    "analyse",
+    "analyze",
+    "metric",
+    "query",
+    "SQL",
+    "aggregate",
+    "trend"
+  ],
+  "systemPrompt": "You are a data analyst. Identify patterns, outliers, and actionable signals. Distinguish correlation from causation. Suggest the right aggregation or visualization for the question being asked.",
+  "temperature": 0.2,
+  "stats": {
+    "lastUsed": 1777577774561,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

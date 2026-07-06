@@ -1,0 +1,38 @@
+{
+  "name": "MnemonicArbiter",
+  "role": "mnemonic",
+  "metrics": {
+    "tasksReceived": 0,
+    "tasksCompleted": 0,
+    "tasksFailed": 0,
+    "totalDuration": 0,
+    "avgDuration": 0,
+    "successRate": 0,
+    "lastTaskAt": null,
+    "uptime": 1777636845978,
+    "errors": []
+  },
+  "context": [],
+  "dna": {
+    "id": "dna_fb124cb9-a403-4c82-bdbd-889d166c260b",
+    "role": "mnemonic",
+    "capabilities": [
+      "cache_data",
+      "access_db",
+      "clone_self"
+    ],
+    "version": "2.0.0-real",
+    "generation": 0,
+    "traits": {
+      "maxContextSize": 200,
+      "maxRetries": 3,
+      "circuitBreakerThreshold": 5
+    },
+    "createdAt": 1777636845978
+  },
+  "lineage": [],
+  "mutations": [],
+  "generation": 0,
+  "evolutionHistory": [],
+  "savedAt": 1777636911334
+}

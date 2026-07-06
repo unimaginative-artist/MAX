@@ -25,6 +25,77 @@ export const GitTool = {
     name: 'git',
     description: 'Run git operations: status, diff, log, commit, branch',
 
+    actionDocs: {
+        status: {
+            description: "Run git status --short to see workspace changes.",
+            params: {
+                cwd: { type: "string", required: false, description: "Working directory path." }
+            }
+        },
+        diff: {
+            description: "Get unstaged changes (git diff).",
+            params: {
+                cwd: { type: "string", required: false, description: "Working directory path." },
+                file: { type: "string", required: false, description: "Limit diff to this specific file." }
+            }
+        },
+        log: {
+            description: "Get recent git commits (git log).",
+            params: {
+                cwd: { type: "string", required: false, description: "Working directory path." },
+                limit: { type: "number", required: false, default: 10, description: "Max commits to show (limit 100)." }
+            }
+        },
+        branch: {
+            description: "List local and remote git branches.",
+            params: {
+                cwd: { type: "string", required: false, description: "Working directory path." }
+            }
+        },
+        checkout: {
+            description: "Switch to a git branch.",
+            params: {
+                cwd: { type: "string", required: false, description: "Working directory path." },
+                branch: { type: "string", required: true, description: "Target branch name." }
+            }
+        },
+        add: {
+            description: "Stage file changes for commit (git add).",
+            params: {
+                cwd: { type: "string", required: false, description: "Working directory path." },
+                files: { type: "string", required: false, default: ".", description: "Space-separated file paths to add." }
+            }
+        },
+        commit: {
+            description: "Commit staged changes (git commit -m).",
+            params: {
+                cwd: { type: "string", required: false, description: "Working directory path." },
+                message: { type: "string", required: true, description: "Commit message." }
+            }
+        },
+        pull: {
+            description: "Pull recent changes from the remote repository.",
+            params: {
+                cwd: { type: "string", required: false, description: "Working directory path." }
+            }
+        },
+        push: {
+            description: "Push local commits to remote.",
+            params: {
+                cwd: { type: "string", required: false, description: "Working directory path." },
+                remote: { type: "string", required: false, default: "origin", description: "Remote repository name." },
+                branch: { type: "string", required: false, default: "HEAD", description: "Branch name." }
+            }
+        },
+        clone: {
+            description: "Clone a git repository to a destination path.",
+            params: {
+                url: { type: "string", required: true, description: "Repository URL." },
+                dest: { type: "string", required: true, description: "Destination directory path." }
+            }
+        }
+    },
+
     actions: {
         async status({ cwd }) {
             return git(['status', '--short'], cwd);

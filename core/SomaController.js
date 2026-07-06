@@ -367,6 +367,39 @@ export async function revertLast(checkpoint) {
 }
 
 // ─── Full apply flow (the whole pipeline in one call) ────────────────────
+// A change may lower the score by pure benchmark noise (latency jitter); only a
+// drop beyond this counts as a real regression worth an automatic rollback.
+const COGNITION_REGRESSION_TOLERANCE = 0.03;
+
+/**
+ * Run SOMA's deterministic cognition benchmark in --compare mode (does not
+ * overwrite the standing baseline) and parse the composite + delta. Fail-open:
+ * an infra error returns { measured: false } so a benchmark that can't run never
+ * blocks a deploy whose health check already passed.
+ */
+async function runCognitionBenchmark(onLog = console.log) {
+    try {
+        const { stdout } = await execFileAsync(
+            process.execPath,
+            ['scripts/cognition-benchmark.mjs', '--compare'],
+            { cwd: SOMA_DIR, timeout: 180_000, windowsHide: true }
+        );
+        const composite = Number(stdout.match(/composite:\s*([0-9.]+)/)?.[1]);
+        const deltaMatch = stdout.match(/composite:.*Δ\s*([+-]?[0-9.]+)\s*vs\s*([0-9.]+)/);
+        const delta = deltaMatch ? Number(deltaMatch[1]) : NaN;
+        const previousComposite = deltaMatch ? Number(deltaMatch[2]) : null;
+        if (!Number.isFinite(composite)) {
+            onLog('[MAX] Cognition benchmark produced no parseable score — gate skipped (fail-open).');
+            return { measured: false };
+        }
+        onLog(`[MAX] Cognition composite ${composite}${Number.isFinite(delta) ? ` (Δ ${delta} vs ${previousComposite})` : ' (no prior baseline)'}`);
+        return { measured: true, composite, delta, previousComposite };
+    } catch (e) {
+        onLog(`[MAX] Cognition benchmark could not run (${e.message}) — gate skipped (fail-open).`);
+        return { measured: false, error: e.message };
+    }
+}
+
 export async function applyProposal(proposal, onLog = console.log) {
     const { taskId, file, newCode } = proposal;
     if (!taskId || !file || typeof newCode !== 'string') {
@@ -421,6 +454,17 @@ export async function applyProposal(proposal, onLog = console.log) {
         };
         if (receipt.healthComparison.severeRegression) {
             throw new Error(`SOMA health latency regressed from ${baselineLatency}ms to ${postLatency}ms`);
+        }
+
+        onLog('[MAX] Step 7.5/8: Cognition-fitness regression gate...');
+        // The ASI flywheel: a change can boot cleanly and still make SOMA dumber.
+        // Re-run her deterministic benchmark and roll back on a real regression.
+        // Fail-OPEN on benchmark infra errors (health already passed) — roll back
+        // ONLY on a measured composite drop beyond tolerance.
+        receipt.cognition = await runCognitionBenchmark(onLog);
+        if (receipt.cognition?.measured && Number.isFinite(receipt.cognition.delta)
+            && receipt.cognition.delta < -COGNITION_REGRESSION_TOLERANCE) {
+            throw new Error(`Cognition regression: composite ${receipt.cognition.previousComposite} → ${receipt.cognition.composite} (Δ ${receipt.cognition.delta})`);
         }
 
         onLog('[MAX] Step 8/8: Recording deployment evidence...');

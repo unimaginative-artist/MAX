@@ -88,10 +88,13 @@ export class Sentinel extends EventEmitter {
             console.log(`[Sentinel] 👁️  Detected change in: ${file} (${type})`);
 
             // 1. Re-index the file in "God's Eye" memory
+            const fullPath = path.join(this.root, file);
             if (this.max.indexer) {
-                const fullPath = path.join(this.root, file);
                 await this.max.indexer._indexFile(fullPath).catch(() => {});
             }
+
+            // Re-embed in semantic workspace index so search stays fresh
+            this.max.semanticIndex?.indexFile(fullPath);
 
             // 2. Alert the Heartbeat so the user sees an insight
             this.emit('change', { file, type });
@@ -118,30 +121,58 @@ export class Sentinel extends EventEmitter {
 
     async _proactiveAudit(file, type) {
         if (!this.max.brain?._ready || type === 'deleted') return;
+try {
+    const result = await this.max.brain.think(
+        `I noticed you just ${type} the file: ${file}. 
+Briefly audit this change for:
+1. Immediate logic errors (infinite loops, null pointer dereference).
+2. Security risks (leaked secrets, unsafe shell commands).
+3. Critical syntax issues.
 
-        try {
-            // We don't wait for this — fire and forget background audit
-            const result = await this.max.brain.think(
-                `I noticed you just ${type} the file: ${file}. 
-Briefly audit this change. Are there any immediate logic errors or security risks introduced? 
-If everything looks good, just return "PASS". 
-Otherwise, give a 1-sentence warning.`,
-                { tier: 'fast', temperature: 0.2, maxTokens: 150 }
-            );
+IMPORTANT: Assume all local imports and sibling files exist. Do NOT flag missing imports unless you see an invalid path.
 
-            const report = result.text;
-            if (report !== 'PASS' && !report.includes('PASS')) {
-                // If it looks like a security warning, speak up proactively!
+If it looks good, return "PASS". 
+Otherwise, return a JSON object: {"severity": "low|medium|high", "category": "logic|security|syntax", "issue": "...", "fixable": true|false}`,
+        { tier: 'fast', temperature: 0.1, maxTokens: 200 }
+    );
+
+            const report = result.text.trim();
+            if (report === 'PASS' || report.includes('PASS')) return;
+
+            try {
+                const match = report.match(/\{[\s\S]*\}/);
+                if (match) {
+                    const audit = JSON.parse(match[0]);
+                    console.log(`[Sentinel] 🛡️  Audit Alert [${audit.category.toUpperCase()}]: ${audit.issue}`);
+
+                    if (audit.severity === 'high') {
+                        this.max.say(`🛡️ Sentinel High-Risk Alert: ${audit.issue}`, "Security Council");
+                    }
+
+                    // ── Self-Healing Integration ──
+                    if (audit.fixable && audit.severity !== 'low') {
+                        console.log(`[Sentinel] 🔧 Triggering Self-Healing for: ${file}`);
+                        this.max.goals.addGoal({
+                            title: `Self-Heal: ${audit.category} in ${file}`,
+                            description: `Sentinel detected a ${audit.severity} severity ${audit.category} issue: ${audit.issue}. Fix it immediately.`,
+                            type: 'fix',
+                            priority: audit.severity === 'high' ? 1.0 : 0.8,
+                            source: 'sentinel_healing'
+                        });
+                    }
+                }
+            } catch (e) {
+                // Fallback to simple warning if JSON parsing fails
                 if (report.toLowerCase().includes('security') || report.toLowerCase().includes('risk')) {
                     this.max.say(`🛡️ Sentinel Warning for ${file}: ${report}`, "High Risk Detection");
                 }
-
-                this.emit('insight', {
-                    source: 'sentinel',
-                    label:  `🛡️  Sentinel Audit: ${file}`,
-                    result: report
-                });
             }
+
+            this.emit('insight', {
+                source: 'sentinel',
+                label:  `🛡️  Sentinel Audit: ${file}`,
+                result: report
+            });
         } catch { /* skip audit errors */ }
     }
 }

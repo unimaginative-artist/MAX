@@ -17,7 +17,7 @@ node launcher.mjs --mode api ← API mode only (no REPL)
 - `MAX_AUTO_APPROVE` — `read` | `write` | `all` (default: `write`)
 - `MAX_PORT` — dashboard port (default: 3100)
 - `MAX_DAILY_BUDGET` — hard API spend cap in USD (default: `10.00`)
-- `MAX_SECURITY_COUNCIL` — adversarial code review before file writes (default: `false`)
+- `MAX_SECURITY_COUNCIL` — adversarial code review before file writes (default: `true`; set `false` only for emergency local debugging)
 
 **Deployment models:**
 - **MAX standalone** (default): MAX ships and runs independently. No SOMA needed. `SOMA_URL` is commented out. This is the production product.
@@ -162,13 +162,13 @@ MAX is designed as SOMA's execution layer. When SOMA is running:
 ## Known Gaps & Active Risks
 
 ### Critical
-- **Streaming responses** — MAX's `think()` method waits for the full LLM response before printing anything. For long responses this is 10-30s of silence. Fix requires Brain.js streaming refactor (SSE or AsyncGenerator). Deferred — significant architectural change.
-- **AgentLoop approval UI** — when `autoApproveLevel: 'read'` and MAX needs approval for a write, the approval request goes through `heartbeat.emit('approvalNeeded')` which the launcher doesn't handle as interactive prompt. The user never sees the approval request. Either wire an interactive REPL prompt or default to `write` level.
+- **AgentLoop approval UI** — when `autoApproveLevel: 'read'` and MAX needs approval for a write, the approval request is emitted as `approvalNeeded` and displayed as a box in the REPL. The user must type `/approve` or `/deny`. If using the IDE exclusively, they may miss the REPL prompt. Consider mirroring the approval request to the IDE via WebSocket.
 
 ### Medium
 - **MAX SwarmCoordinator is the simple version** — `swarm/SwarmCoordinator.js` is the basic parallel-subtask version. SOMA has the full `EngineeringSwarmArbiter` with research/plan/debate/synthesis cycles. Eventually MAX's `/swarm` should route complex engineering tasks to SOMA's swarm and use its own simple version only for quick parallel queries.
 - **SkillLibrary prune threshold** — skills pruned if `age > 30 days && usedCount < 3`. For a newly booted MAX that hasn't run many tasks, all skills are <3 uses and get pruned on first boot. Consider requiring both conditions: `age > 30 days AND usedCount < 3 AND lastUsed > 7 days ago`.
 - **Curiosity pipeline goal quality** — `CuriosityEngine.signalsGoal()` uses keyword matching (should/must/critical/etc.) to decide if a curiosity result should become a goal. This generates noisy goals. Consider adding a priority floor (curiosity-sourced goals capped at 0.5 priority) so they don't crowd out user-sourced goals.
+- **LSP server availability** — `core/RealLSPBridge.js` probes for `typescript-language-server`, `pylsp`, `gopls`, `rust-analyzer` in PATH. If none found it falls back to AI pseudo-diagnostics. For full IDE capability install: `npm i -g typescript-language-server typescript`.
 
 ### Low
 - **Running processes lost after restart** — `ShellTool._procs` is module-level state. If MAX is restarted, all `shell:start` background processes are forgotten even if still running. On boot, consider scanning for processes with known names via `ps aux | grep`.
@@ -190,10 +190,16 @@ MAX is designed as SOMA's execution layer. When SOMA is running:
 - [x] SomaController (mechanical SOMA control with git checkpoint + auto-revert)
 - [x] Brain: Gemini replaced with DeepSeek (deepseek-reasoner as smart/code tier)
 - [x] **Feedback loops closed** — ReflectionEngine writes insights to KB after every deep reflection. AgentLoop writes goal outcomes (success + failure) to KB. `dream()` auto-triggers every 3rd reflection + runs on 12h Scheduler. `KnowledgeBase.remember()` shortcut added for plain-text ingestion.
+- [x] **Streaming responses** — Brain.js has `onToken` callback; launcher.mjs streams tokens live. Both Ollama and DeepSeek backends stream. Spinner stops on first token; `MAX:` prefix printed inline.
+- [x] **Interactive approval prompt** — `approvalNeeded` event renders a full UI box in REPL with goal/tool/params. User types `/approve` or `/deny`. AgentLoop has `_pendingApproval` + `approve()` / `deny()` methods wired.
+- [x] **Ghost buffer pipeline** — Maxwell IDE sends `buffer_update` WebSocket messages → `max._ghostBuffers` → ContextPagerArbiter injects unsaved content into system prompt. LSP diagnostics triggered on each update.
+- [x] **Real LSP integration** — `core/RealLSPBridge.js` spawns real language servers (typescript-language-server, pylsp, gopls, rust-analyzer) via stdio JSON-RPC. Falls back to AI pseudo-diagnostics when servers are unavailable.
+- [x] **Monaco completions + hover + go-to-def** — Maxwell IDE registers LSP-backed completion provider, hover provider, definition provider, and AI inline ghost-text provider (Cursor-style Tab completions).
+- [x] **SkillMutator closed loop** — `spawnVariant()` → `queueForTest()` → `runNextTest()` (executes via `_executeStep`) → `_scoreAndPromote()`. High-scoring variants (≥8.0) auto-promoted to SkillLibrary. Scheduled every 12h (spawn) + 3h (test).
+- [x] **AgentLoop cycle queue** — dropped cycles while busy now set `_pendingCycle = true`; retried immediately in `finally` block via `setImmediate`.
 
 ### Short-term
-- [ ] **Streaming responses** — Brain.js streaming refactor. This is the single biggest UX improvement. Users currently wait 10-30s in silence. Even just printing a `...` progress indicator with partial token counts would help.
-- [ ] **Interactive approval prompt** — when AgentLoop needs approval in `read` mode, print a `[APPROVAL NEEDED] <tool>.<action>: <params>  y/n?` prompt to the REPL and wait for input. Currently approval events are emitted but never shown interactively.
+- [ ] **Mirror approval requests to IDE** — when AgentLoop emits `approvalNeeded`, also broadcast to WebSocket clients so IDE users see the request without checking the REPL.
 - [ ] **MAX → SOMA engineering dispatch** — when MAX's `/swarm` is called with a complex engineering request, check if SOMA is available and route to `EngineeringSwarmArbiter` instead of MAX's simple `SwarmCoordinator`.
 - [ ] **Session state on dashboard** — show current goals, active agent loop status, last 5 insights, and memory stats on the dashboard. Most data is already in `max.getStatus()`.
 

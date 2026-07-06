@@ -7,19 +7,26 @@ import express    from 'express';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, join, relative } from 'path';
+import { dirname, join, relative, resolve, sep } from 'path';
 import { randomBytes }   from 'crypto';
 import { createServer as createHttpServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { applyProposal, isSomaHealthy } from '../core/SomaController.js';
 import { VirtualShell } from '../core/VirtualShell.js';
-import { getRunningProcesses, getProcessLog, setProcessLogBroadcast } from '../tools/ShellTool.js';
+import { getRunningProcesses, getProcessLog, setProcessLogBroadcast, setErrorExplainHandler, shutdownShellTool } from '../tools/ShellTool.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const WORKSPACE_ROOT = resolve(process.cwd());
+const WORKSPACE_ROOT_KEY = process.platform === 'win32' ? WORKSPACE_ROOT.toLowerCase() : WORKSPACE_ROOT;
+const MAX_GHOST_BUFFER_BYTES = 2 * 1024 * 1024;
+const MAX_GHOST_BUFFERS = 50;
 
-// ── Persistent Shell Instance for Maxwell IDE ─────────────────────────────
-const ideShell = new VirtualShell();
-ideShell.start();
+function resolveWorkspacePath(inputPath = '.') {
+    const abs = resolve(WORKSPACE_ROOT, inputPath || '.');
+    const key = process.platform === 'win32' ? abs.toLowerCase() : abs;
+    if (key !== WORKSPACE_ROOT_KEY && !key.startsWith(WORKSPACE_ROOT_KEY + sep)) return null;
+    return abs;
+}
 
 // ── API Key management — load or generate on first boot ──────────────────
 function loadOrCreateApiKey() {
@@ -51,15 +58,29 @@ export async function createServer(max, port = 3100) {
     const httpServer = createHttpServer(app);
     const wss = new WebSocketServer({ server: httpServer });
 
-    app.use(express.json());
+    // Maxwell streams unsaved editor buffers; the default 100kb JSON limit is too small.
+    app.use(express.json({ limit: '8mb' }));
     app.use('/assets', express.static(join(__dirname, 'assets')));
+
+    // CORS must run before auth so browser OPTIONS preflights are not rejected.
+    app.use((req, res, next) => {
+        const origin = req.headers.origin;
+        const allowOrigin = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin || '')
+            ? origin
+            : `http://localhost:${port}`;
+        res.setHeader('Access-Control-Allow-Origin', allowOrigin);
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Api-Key');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+        if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
+        next();
+    });
 
     // ── Auth middleware — protect all API routes ───────────────────────────
     // Dashboard HTML + /health are public. Everything else requires the key.
-    const PUBLIC_PATHS = new Set(['/', '/health', '/favicon.ico', '/maxwell', '/ide']);
+    const PUBLIC_PATHS = new Set(['/', '/health', '/favicon.ico', '/maxwell', '/ide', '/preview']);
     app.use((req, res, next) => {
         // Static dashboard and health are always public
-        if (PUBLIC_PATHS.has(req.path) || req.path.startsWith('/assets')) return next();
+        if (PUBLIC_PATHS.has(req.path) || req.path.startsWith('/assets') || req.path.startsWith('/preview/')) return next();
 
         const authHeader = req.headers['authorization'] || '';
         const keyHeader  = req.headers['x-api-key']      || '';
@@ -79,14 +100,31 @@ export async function createServer(max, port = 3100) {
     // ── WebSocket & SSE client registry ──────────────────────────────────
     const sseClients = new Set();
     const wsClients = new Set();
+    max._ideClients = wsClients;
 
     function broadcast(obj) {
         const payload = JSON.stringify(obj);
         // SSE
         const sseData = `data: ${payload}\n\n`;
-        sseClients.forEach(res => { try { res.write(sseData); } catch {} });
+        sseClients.forEach(res => {
+            try { res.write(sseData); }
+            catch { sseClients.delete(res); }
+        });
         // WS
-        wsClients.forEach(ws => { try { ws.send(payload); } catch {} });
+        wsClients.forEach(ws => {
+            try { ws.send(payload); }
+            catch { wsClients.delete(ws); }
+        });
+    }
+
+    let activeAgentActivity = null;
+    const makeActivityId = (prefix = 'act') => `${prefix}_${Date.now()}_${randomBytes(3).toString('hex')}`;
+    function emitActivity(event) {
+        broadcast({
+            type: 'agent_activity',
+            ts: Date.now(),
+            ...event
+        });
     }
 
     wss.on('connection', (ws, req) => {
@@ -100,15 +138,48 @@ export async function createServer(max, port = 3100) {
             return;
         }
 
-        wsClients.add(ws);
-        ws.send(JSON.stringify({ type: 'connected', version: '1.0.0-ws' }));
-        ws.send(JSON.stringify({ type: 'status', ...max.getStatus() }));
+        const shellSessionId = randomBytes(8).toString('hex');
+        let sessionShell = null;
+        let shellAbortController = null;
 
-        // Real-time shell stream
-        const onShellData = (data) => ws.send(JSON.stringify({ type: 'shell_output', text: data }));
-        const onShellErr  = (data) => ws.send(JSON.stringify({ type: 'shell_output', text: data, isError: true }));
-        ideShell.on('data', onShellData);
-        ideShell.on('data_err', onShellErr);
+        const sendWs = (obj) => {
+            if (ws.readyState !== 1) return;
+            try { ws.send(JSON.stringify(obj)); } catch {}
+        };
+        const normalizeShellChunk = (chunk) => {
+            return String(chunk)
+                .split(/\r?\n/)
+                .filter(line => {
+                    const t = line.trim().toLowerCase();
+                    if (!t) return true;
+                    if (t.startsWith('echo __exit_code_') || t.startsWith('echo __max_shell_done_')) return false;
+                    if (t.startsWith('__exit_code_') || t.startsWith('__max_shell_done_')) return false;
+                    if (/^[a-z]:[\\\/].*>/.test(t)) return false;
+                    return true;
+                })
+                .join('\n');
+        };
+        const onShellData = (data) => {
+            const text = normalizeShellChunk(data);
+            if (text) sendWs({ type: 'shell_output', text });
+        };
+        const onShellErr = (data) => {
+            const text = normalizeShellChunk(data);
+            if (text) sendWs({ type: 'shell_output', text, isError: true });
+        };
+        const getSessionShell = () => {
+            if (sessionShell) return sessionShell;
+            sessionShell = new VirtualShell();
+            sessionShell.on('data', onShellData);
+            sessionShell.on('data_err', onShellErr);
+            sessionShell.start();
+            return sessionShell;
+        };
+
+        wsClients.add(ws);
+        sendWs({ type: 'connected', version: '1.0.0-ws' });
+        sendWs({ type: 'shell_session', sessionId: shellSessionId, isolated: true });
+        sendWs({ type: 'status', ...(max.getQuickStatus?.() || max.getStatus()) });
 
         ws.on('message', async (data) => {
             try {
@@ -148,25 +219,83 @@ export async function createServer(max, port = 3100) {
                 }
 
                 if (msg.type === 'shell_input') {
-                    // Direct pipe to persistent shell
-                    if (ideShell.proc) {
-                        // Ensure command has a newline
-                        const cmd = msg.command.endsWith('\n') ? msg.command : msg.command + '\n';
-                        ideShell.proc.stdin.write(cmd);
+                    const command = String(msg.command || '').trim();
+                    if (!command) return;
+                    shellAbortController = new AbortController();
+                    
+                    // If the command is "gemini" or looks interactive, we don't block the UI
+                    const isInteractive = command === 'gemini' || command.startsWith('node') && !command.includes(' ');
+                    
+                    const runPromise = getSessionShell().run(command, msg.timeoutMs || 120_000, shellAbortController.signal, isInteractive);
+                    
+                    if (isInteractive) {
+                        sendWs({ type: 'shell_interactive', sessionId: shellSessionId });
                     }
+
+                    runPromise.then(result => {
+                            sendWs({
+                                type: 'shell_done',
+                                sessionId: shellSessionId,
+                                success: result.success,
+                                code: result.code,
+                                error: result.error || result.stderr || null
+                            });
+                        })
+                        .catch(err => {
+                            sendWs({ type: 'shell_done', sessionId: shellSessionId, success: false, code: -1, error: err.message });
+                        })
+                        .finally(() => { shellAbortController = null; });
+                }
+
+                if (msg.type === 'shell_write') {
+                    // Send raw input to the shell (for interactive apps)
+                    if (sessionShell && sessionShell.proc) {
+                        sessionShell.proc.stdin.write(msg.text || '');
+                    }
+                }
+
+                if (msg.type === 'shell_cancel') {
+                    shellAbortController?.abort();
                 }
 
                 if (msg.type === 'cancel_request') {
                     console.log('[Server] 🛑 Cancel requested via WebSocket');
                     max.abortChat();
-                    ws.send(JSON.stringify({ type: 'cancelled', message: 'Task aborted by user' }));
+                    shellAbortController?.abort();
+                    const agentInterrupted = max.abortAgent?.() || false;
+                    sendWs({ type: 'cancelled', message: agentInterrupted ? 'Chat and agent task aborted by user' : 'Chat aborted by user' });
                 }
 
                 if (msg.type === 'buffer_update') {
                     // Maxwell IDE sending unsaved content for "Ghost Context"
-                    // We store this in a temporary map so Brain can read it if needed
                     if (!max._ghostBuffers) max._ghostBuffers = new Map();
-                    max._ghostBuffers.set(msg.filePath, msg.content);
+                    if (!msg.filePath || typeof msg.content !== 'string') return;
+                    let content = msg.content;
+                    if (Buffer.byteLength(content, 'utf8') > MAX_GHOST_BUFFER_BYTES) {
+                        content = content.slice(0, MAX_GHOST_BUFFER_BYTES) +
+                            '\n\n/* [Maxwell] Ghost buffer truncated at 2MB. */';
+                    }
+                    max._ghostBuffers.delete(msg.filePath);
+                    max._ghostBuffers.set(msg.filePath, { content, updatedAt: Date.now() });
+                    
+                    // Omega: Trigger LSP diagnostics on buffer update
+                    if (max.lsp) {
+                        const absPath = resolve(WORKSPACE_ROOT, msg.filePath || '.');
+                        const fileUri = 'file:///' + absPath.replace(/\\/g, '/');
+                        const ext = (msg.filePath || '').split('.').pop().toLowerCase();
+                        const langId = { ts:'typescript', tsx:'typescript', js:'javascript', mjs:'javascript',
+                            cjs:'javascript', jsx:'javascript', py:'python', go:'go', rs:'rust' }[ext] || 'javascript';
+                        max.lsp.updateDocument(fileUri, content, langId).then(diagnostics => {
+                            // AI-fallback diagnostics: send with relative path so IDE lookup matches
+                            if (diagnostics?.length) {
+                                sendWs({ type: 'lsp_diagnostic', payload: { uri: msg.filePath, diagnostics } });
+                            }
+                        });
+                    }
+
+                    while (max._ghostBuffers.size > MAX_GHOST_BUFFERS) {
+                        max._ghostBuffers.delete(max._ghostBuffers.keys().next().value);
+                    }
                 }
 
                 if (msg.type === 'ping') ws.send(JSON.stringify({ type: 'pong' }));
@@ -178,10 +307,63 @@ export async function createServer(max, port = 3100) {
 
         ws.on('close', () => {
             wsClients.delete(ws);
-            ideShell.removeListener('data', onShellData);
-            ideShell.removeListener('data_err', onShellErr);
+            shellAbortController?.abort();
+            sessionShell?.removeListener('data', onShellData);
+            sessionShell?.removeListener('data_err', onShellErr);
+            sessionShell?.stop();
         });
     });
+
+    // ── Omega Telemetry Hooks ─────────────────────────────────────────────
+    // Forward all real-time events to connected clients
+    max.contextPager?.on('paging_update', (data) => broadcast({ type: 'paging_update', payload: data }));
+    max.grounding?.on('grounding_update', (data) => broadcast({ type: 'grounding_update', payload: data }));
+    max.skillMutator?.on('evolution_update', (data) => broadcast({ type: 'evolution_update', payload: data }));
+    // Real LSP push-diagnostics (textDocument/publishDiagnostics from language servers)
+    max.lsp?.on('diagnostic', ({ uri, diagnostics }) => {
+        // Convert file:/// URI → relative workspace path so IDE key-lookup matches
+        let relUri = uri;
+        if (uri && uri.startsWith('file:///')) {
+            try {
+                const abs = decodeURIComponent(uri.slice(8)).replace(/\//g, sep);
+                relUri = relative(WORKSPACE_ROOT, abs).replace(/\\/g, '/');
+            } catch {}
+        }
+        broadcast({ type: 'lsp_diagnostic', payload: { uri: relUri, diagnostics } });
+    });
+    max.security?.on('issues', (data) => broadcast({ type: 'security_update', payload: data }));
+    max.persona?.on('persona_changed', (data) => broadcast({ type: 'persona_changed', ...data }));
+    max.muse?.on('muse_state',   (state)   => broadcast({ type: 'muse_state',   ...state }));
+    max.muse?.on('activated',    (state)   => broadcast({ type: 'muse_state',   ...state }));
+    max.muse?.on('deactivated',  ()        => broadcast({ type: 'muse_deactivated' }));
+    max.muse?.on('muse_insight', (insight) => broadcast({ type: 'muse_insight',  ...insight }));
+    max.swarm?.on('job:update', (job) => broadcast({ type: 'swarm_update', payload: job }));
+
+    // ── SOMA bridge events → IDE ──────────────────────────────────────────
+    // Forward all SOMA signal bridge messages to connected IDE clients
+    max.soma?.subscribe('*', (data, topic) => {
+        broadcast({ type: 'soma_signal', topic, ...data });
+    });
+    // Broadcast SOMA connection status every 30s + immediately after boot
+    const broadcastSomaStatus = () => broadcast({
+        type:            'soma_status',
+        connected:       max.soma?.available        ?? false,
+        signalConnected: max.soma?._signalConnected ?? false,
+        url:             max.soma?.baseUrl          ?? null,
+    });
+    const somaStatusTimeout = setTimeout(broadcastSomaStatus, 3000);
+    const somaStatusInterval = setInterval(broadcastSomaStatus, 30_000);
+    max.workspaceEdits?.on('editProposed', (proposal) => broadcast({ type: 'edit_proposed', proposal }));
+    max.workspaceEdits?.on('editApplied', (event) => broadcast({ type: 'edit_applied', ...event }));
+    max.workspaceEdits?.on('editRejected', (event) => broadcast({ type: 'edit_rejected', ...event }));
+
+    // AgentLoop approval gate — broadcast to IDE so users aren't stuck in REPL-only mode
+    max.agentLoop?.on('approvalNeeded', (data) => broadcast({ type: 'approval_needed', ...data }));
+    max.agentLoop?.on('approvalGranted', (data) => broadcast({ type: 'approval_granted', ...data }));
+    max.agentLoop?.on('approvalDenied',  (data) => broadcast({ type: 'approval_denied',  ...data }));
+
+    // Clarification gate — broadcast questions to IDE, receive answers back
+    max.agentLoop?.on('clarificationNeeded', (data) => broadcast({ type: 'clarification_needed', ...data }));
 
     // Forward MAX insights to all SSE/WS clients
     max.heartbeat?.on('insight', insight => {
@@ -199,16 +381,49 @@ export async function createServer(max, port = 3100) {
 
     // Agent lane status — UI shows what MAX is working on in the background
     max.agentLoop?.on('goalStart', ({ goal }) => {
+        activeAgentActivity = goal.id || makeActivityId('goal');
+        emitActivity({
+            phase: 'goal_start',
+            activityId: activeAgentActivity,
+            task: goal.title,
+            goalId: goal.id,
+            status: 'running',
+            summary: goal.description || ''
+        });
         broadcast({ type: 'agent_busy', task: goal.title, goalId: goal.id });
     });
     max.agentLoop?.on('goalDone', ({ goal, success }) => {
+        emitActivity({
+            phase: 'goal_done',
+            activityId: activeAgentActivity || goal.id || makeActivityId('goal'),
+            task: goal.title,
+            goalId: goal.id,
+            status: success ? 'done' : 'failed',
+            success,
+            summary: success ? 'Completed.' : 'Stopped or blocked.'
+        });
+        activeAgentActivity = null;
         broadcast({ type: 'agent_free', task: goal.title, goalId: goal.id, success });
     });
     // Step-level progress events for the task tracker
     max.agentLoop?.on('stepStart', data => {
+        emitActivity({
+            phase: 'step_start',
+            activityId: activeAgentActivity || makeActivityId('goal'),
+            stepId: data.step,
+            status: 'running',
+            ...data
+        });
         broadcast({ type: 'agent_step_start', ...data });
     });
     max.agentLoop?.on('stepDone', data => {
+        emitActivity({
+            phase: 'step_done',
+            activityId: activeAgentActivity || makeActivityId('goal'),
+            stepId: data.step,
+            status: data.success ? 'done' : 'failed',
+            ...data
+        });
         broadcast({ type: 'agent_step_done', ...data });
     });
 
@@ -218,8 +433,36 @@ export async function createServer(max, port = 3100) {
     if (max.tools?.execute) {
         const _origExec = max.tools.execute.bind(max.tools);
         max.tools.execute = async (toolName, action, params) => {
+            const suppressActivity = params?.__source === 'ui' || params?.__silent === true;
+            const standaloneActivityId = !activeAgentActivity && !suppressActivity ? makeActivityId('tool') : null;
+            const activityPayload = {
+                activityId: activeAgentActivity || standaloneActivityId,
+                task: activeAgentActivity ? null : `Running ${toolName}:${action}`,
+                tool: toolName,
+                toolAction: action,
+                action: params?.command || params?.filePath || params?.path || params?.query || `${toolName}:${action}`,
+                file: params?.filePath || params?.path || null,
+                params: params ? {
+                    command: params.command,
+                    filePath: params.filePath || params.path,
+                    query: params.query
+                } : {}
+            };
+            if (standaloneActivityId) {
+                emitActivity({ phase: 'tool_start', status: 'running', ...activityPayload });
+            }
+
             const result = await _origExec(toolName, action, params);
             try {
+                if (standaloneActivityId) {
+                    emitActivity({
+                        phase: 'tool_done',
+                        status: result?.success === false ? 'failed' : 'done',
+                        success: result?.success !== false,
+                        summary: result?.error || result?.stderr || result?.stdout || result?.output || '',
+                        ...activityPayload
+                    });
+                }
                 if (toolName === 'file') {
                     const fp = params?.filePath || params?.path;
                     if (fp && ['read', 'readFile'].includes(action)) {
@@ -239,6 +482,13 @@ export async function createServer(max, port = 3100) {
         };
     }
 
+    // Sentinel file-watch — notify IDE when files change externally so open editors reload
+    max.sentinel?.on('change', ({ file, type }) => {
+        if (type !== 'deleted') {
+            broadcast({ type: 'file_changed', file, changeType: type });
+        }
+    });
+
     // Self-improvement proposals — broadcast to dashboard for one-click approve/deny
     max.selfImprovement?.on('proposal', (proposal) => {
         broadcast({ type: 'self_proposal', ...proposal });
@@ -255,32 +505,37 @@ export async function createServer(max, port = 3100) {
         broadcast({ type: 'process_log', ...entry });
     });
 
+    // Terminal error explanation — Warp-style inline AI explain on failed commands
+    setErrorExplainHandler(async ({ command, code, stdout, stderr }) => {
+        if (!max.brain?._ready) return;
+        const context = [stderr, stdout].filter(Boolean).join('\n').trim().slice(0, 800);
+        if (!context) return;
+        const result = await max.brain.think(
+            `A shell command failed. Explain the error briefly (2-3 sentences max) and suggest the most likely fix.\n\nCommand: ${command}\nExit code: ${code}\nOutput:\n${context}`,
+            { tier: 'fast', temperature: 0.2, maxTokens: 150 }
+        );
+        broadcast({ type: 'error_explain', command, explanation: result.text.trim() });
+    });
+
     // Periodic status push every 12s
-    setInterval(() => {
+    const _statusInterval = setInterval(() => {
         if (!sseClients.size) return;
-        try { broadcast({ type: 'status', ...max.getStatus() }); } catch {}
+        try { broadcast({ type: 'status', ...(max.getQuickStatus?.() || max.getStatus()) }); } catch {}
     }, 12000);
+    _statusInterval.unref();
 
     // Periodic SOMA status broadcast every 15s when SOMA is active
-    setInterval(async () => {
+    const _somaInterval = setInterval(async () => {
         if (!sseClients.size || !max.soma?.available) return;
         try {
             const somaStatus = await max.soma.getSomaStatus();
             if (somaStatus) broadcast({ type: 'soma_status', ...somaStatus });
         } catch {}
     }, 15000);
+    _somaInterval.unref();
 
-    // CORS for local frontends
-    app.use((req, res, next) => {
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-        if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
-        next();
-    });
-
-    // ── Web UI ────────────────────────────────────────────────────────────
-    app.get('/', (req, res) => {
+    // ── Web UI (legacy dashboard) ─────────────────────────────────────────
+    app.get('/dashboard', (req, res) => {
         try {
             res.setHeader('Content-Type', 'text/html');
             res.send(readFileSync(join(__dirname, 'ui.html'), 'utf8'));
@@ -298,22 +553,29 @@ export async function createServer(max, port = 3100) {
             const injection = `<script>
 window.__MAX_API_KEY = ${JSON.stringify(API_KEY)};
 window.__MAX_BASE_URL = 'http://localhost:${port}';
+window.MAX_URL = window.__MAX_BASE_URL;
 try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } catch(e) {}
 </script>`;
-            html = html.replace('<script>\n// Save React/Babel\'s require', injection + '\n<script>\n// Save React/Babel\'s require');
+            if (html.includes('</head>')) {
+                html = html.replace('</head>', `${injection}\n</head>`);
+            } else {
+                html = injection + '\n' + html;
+            }
             res.setHeader('Content-Type', 'text/html');
             res.send(html);
         } catch {
             res.status(404).send('Maxwell IDE not found — run from MAX root');
         }
     }
+    app.get('/',        serveMaxwell);
     app.get('/maxwell', serveMaxwell);
     app.get('/ide',     serveMaxwell);
 
     // ── File tree ─────────────────────────────────────────────────────────
     // Returns a structured tree for Maxwell's file explorer
     app.get('/api/files/tree', async (req, res) => {
-        const rootDir = req.query.dir || '.';
+        const rootDir = resolveWorkspacePath(req.query.dir || '.');
+        if (!rootDir) return res.status(403).json({ error: 'forbidden' });
         const SKIP = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.cache', 'coverage']);
         async function buildTree(dir, depth = 0) {
             if (depth > 4) return [];
@@ -322,7 +584,7 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
             for (const e of entries) {
                 if (SKIP.has(e.name) || e.name.startsWith('.')) continue;
                 const full = join(dir, e.name);
-                const rel  = relative(process.cwd(), full).replace(/\\/g, '/');
+                const rel  = relative(WORKSPACE_ROOT, full).replace(/\\/g, '/');
                 if (e.isDirectory()) {
                     result.push({ name: e.name, type: 'directory', path: rel, children: await buildTree(full, depth + 1) });
                 } else {
@@ -342,9 +604,8 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
     app.get('/api/files/raw', async (req, res) => {
         const filePath = req.query.path;
         if (!filePath) return res.status(400).send('path required');
-        // Prevent path traversal
-        const abs = join(process.cwd(), filePath);
-        if (!abs.startsWith(process.cwd())) return res.status(403).send('forbidden');
+        const abs = resolveWorkspacePath(filePath);
+        if (!abs) return res.status(403).send('forbidden');
         try {
             const data = await fsp.readFile(abs);
             const ext = filePath.split('.').pop().toLowerCase();
@@ -356,6 +617,23 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
         } catch {
             res.status(404).send('not found');
         }
+    });
+
+    // ── @mention resolver — reads file content for @file mentions in chat ──
+    app.post('/api/mention/resolve', async (req, res) => {
+        const { mentions = [] } = req.body; // [{ type: 'file', value: 'core/Brain.js' }, ...]
+        const results = [];
+        for (const m of mentions.slice(0, 5)) {
+            if (m.type === 'file') {
+                const abs = resolveWorkspacePath(m.value);
+                if (!abs) { results.push({ ...m, error: 'forbidden' }); continue; }
+                try {
+                    const content = await fsp.readFile(abs, 'utf8');
+                    results.push({ ...m, content: content.slice(0, 4000) });
+                } catch { results.push({ ...m, error: 'not found' }); }
+            }
+        }
+        res.json({ results });
     });
 
     // ── Config — persist API keys to config/api-keys.env ─────────────────
@@ -387,10 +665,11 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
         res.setHeader('Connection', 'keep-alive');
         res.flushHeaders();
         sseClients.add(res);
+        res.on('error', () => sseClients.delete(res));
         // Send initial connected + status
         try {
             res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
-            res.write(`data: ${JSON.stringify({ type: 'status', ...max.getStatus() })}\n\n`);
+            res.write(`data: ${JSON.stringify({ type: 'status', ...(max.getQuickStatus?.() || max.getStatus()) })}\n\n`);
         } catch {}
         req.on('close', () => sseClients.delete(res));
     });
@@ -422,6 +701,104 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
         console.log(`  → /approve ${p.taskId.slice(0, 8)}   or   /deny ${p.taskId.slice(0, 8)}\n`);
     }
 
+    // ── Shared approve/deny actions (used by the HTTP routes AND MAX's auto-review) ──
+    async function approveProposal(proposal, source = 'user') {
+        console.log(`\n[MAX] ✅ ${source} approved proposal ${proposal.taskId.slice(0, 8)} — beginning apply pipeline...\n`);
+        pendingProposals.delete(proposal.taskId);
+        pendingProposals.delete(proposal.taskId.slice(0, 8));
+
+        const result = await applyProposal(proposal, msg => console.log(msg));
+
+        const SOMA_URL = process.env.SOMA_URL || 'http://127.0.0.1:3001';
+        fetch(`${SOMA_URL}/api/soma/modification-result`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ taskId: proposal.taskId, approvedBy: source, ...result })
+        }).catch(() => {});
+        broadcast({ type: 'soma_proposal_result', taskId: proposal.taskId, approvedBy: source, ...result });
+        return result;
+    }
+
+    function denyProposal(proposal, source = 'user', reason = '') {
+        pendingProposals.delete(proposal.taskId);
+        pendingProposals.delete(proposal.taskId.slice(0, 8));
+        console.log(`\n[MAX] 🚫 ${source} denied proposal ${proposal.taskId.slice(0, 8)} for ${proposal.file}${reason ? ` — ${reason}` : ''}\n`);
+
+        const SOMA_URL = process.env.SOMA_URL || 'http://127.0.0.1:3001';
+        fetch(`${SOMA_URL}/api/soma/modification-result`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ taskId: proposal.taskId, applied: false, deniedBy: source, reason })
+        }).catch(() => {});
+        broadcast({ type: 'soma_proposal_denied', taskId: proposal.taskId, deniedBy: source, reason });
+    }
+
+    // ── MAX autonomous review — Barry delegated approval authority (Jul 2026) ──
+    // MAX reviews each SOMA proposal with his own brain and decides. Hard rails:
+    // high-risk / low-score / protected-file proposals are never auto-approved —
+    // they stay pending for Barry with a Discord ping. Everything MAX decides is
+    // reported to Discord so there is a human-visible audit trail.
+    const AUTO_REVIEW_PROTECTED = /launcher|SomaBootstrap|ASIKernel|SomaAgenticExecutor|SelfModificationArbiter|SelfModificationPipeline|GoalPlannerArbiter|AutonomousHeartbeat|RiskGateway|PromotionLadder|package(-lock)?\.json/i;
+
+    async function autoReviewProposal(proposal) {
+        const shortId = proposal.taskId.slice(0, 8);
+        const escalate = async (why) => {
+            console.log(`[MAX] 🧑‍⚖️ Proposal ${shortId} escalated to Barry: ${why}`);
+            await max.notifier?.notify(
+                `🧑‍⚖️ **SOMA self-mod proposal needs YOUR call** (\`${shortId}\`)\nFile: \`${proposal.file}\`\nWhy escalated: ${why}\nRationale: ${proposal.rationale || 'n/a'}\nApprove: \`POST /api/soma/proposals/${shortId}/approve\``,
+                { force: true }
+            ).catch(() => {});
+        };
+
+        // Hard rails — never auto-approve these
+        if (AUTO_REVIEW_PROTECTED.test(proposal.file || '')) return escalate('protected core file');
+        if ((proposal.riskLevel || 'high') === 'high') return escalate(`risk level ${proposal.riskLevel || 'unknown'}`);
+        if ((proposal.overallScore || 0) < 0.75) return escalate(`verification score ${((proposal.overallScore || 0) * 100).toFixed(0)}% < 75%`);
+        if (!max.brain?._ready) return escalate('MAX brain not ready to review');
+
+        try {
+            const codePreview = String(proposal.newCode || '').split('\n').slice(0, 120).join('\n');
+            const verificationSummary = proposal.verification
+                ? Object.entries(proposal.verification).map(([k, v]) => `${k}: ${v?.pass ? 'pass' : 'FAIL'} (${((v?.confidence || 0) * 100).toFixed(0)}%)`).join(', ')
+                : 'none provided';
+            const result = await max.think(
+                `You are MAX, the engineering reviewer with final approval authority over SOMA's self-modifications (delegated by Barry). Review this proposal and decide.
+
+File: ${proposal.file}
+Risk: ${proposal.riskLevel} | Verification score: ${((proposal.overallScore || 0) * 100).toFixed(0)}%
+Automated gates: ${verificationSummary}
+Rationale: ${proposal.rationale || 'n/a'}
+
+PROPOSED CODE (first 120 lines):
+\`\`\`
+${codePreview}
+\`\`\`
+
+Judge: does the code actually do what the rationale claims, is it syntactically plausible, does it avoid obvious security/stability hazards (unbounded loops, deleted safety checks, secrets, network calls to unknown hosts), and is the blast radius contained to the stated file?
+Reply ONLY with JSON: {"verdict":"approve"|"deny"|"escalate","confidence":0.0-1.0,"reason":"one sentence"}`,
+                { tier: 'smart' }
+            );
+            const text = (result?.response || result?.text || '').toString();
+            const parsed = JSON.parse(text.match(/\{[\s\S]*?\}/)?.[0] || '{}');
+
+            if (parsed.verdict === 'approve' && (parsed.confidence || 0) >= 0.7) {
+                await max.notifier?.notify(`🧬 **MAX approved** SOMA self-mod \`${shortId}\` for \`${proposal.file}\` (confidence ${((parsed.confidence || 0) * 100).toFixed(0)}%): ${parsed.reason || ''}`).catch(() => {});
+                const applied = await approveProposal(proposal, 'MAX_auto_review');
+                await max.notifier?.notify(applied?.applied !== false
+                    ? `✅ Self-mod \`${shortId}\` applied and verified.`
+                    : `⚠️ Self-mod \`${shortId}\` approved but apply pipeline reported failure — check MAX logs.`
+                ).catch(() => {});
+            } else if (parsed.verdict === 'deny') {
+                denyProposal(proposal, 'MAX_auto_review', parsed.reason || 'failed MAX review');
+                await max.notifier?.notify(`🚫 **MAX denied** SOMA self-mod \`${shortId}\` for \`${proposal.file}\`: ${parsed.reason || 'failed review'}`).catch(() => {});
+            } else {
+                await escalate(parsed.reason || `MAX verdict "${parsed.verdict || 'unparseable'}" (confidence ${parsed.confidence ?? '?'})`);
+            }
+        } catch (err) {
+            await escalate(`review error: ${err.message}`);
+        }
+    }
+
     // Receive proposal from SOMA
     app.post('/api/soma/propose', (req, res) => {
         const proposal = req.body;
@@ -434,6 +811,11 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
         printProposal(proposal);
         broadcast({ type: 'soma_proposal', proposal });
         res.json({ received: true, taskId: proposal.taskId });
+        // MAX reviews and decides autonomously (Barry delegated approval authority).
+        // Deferred a few seconds so the HTTP response and console output land first.
+        setTimeout(() => autoReviewProposal(proposal).catch(err =>
+            console.warn(`[MAX] Auto-review failed for ${proposal.taskId.slice(0, 8)}: ${err.message}`)
+        ), 5000);
     });
 
     // List pending proposals (full, for UI buttons)
@@ -452,24 +834,9 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
         const proposal = pendingProposals.get(req.params.id);
         if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
 
-        console.log(`\n[MAX] ✅ User approved proposal ${req.params.id} — beginning apply pipeline...\n`);
-        pendingProposals.delete(proposal.taskId);
-        pendingProposals.delete(proposal.taskId.slice(0, 8));
-
         // Run apply in background — don't block the HTTP response
         res.json({ accepted: true, taskId: proposal.taskId });
-
-        const result = await applyProposal(proposal, msg => console.log(msg));
-
-        // Notify SOMA of the result
-        const SOMA_URL = process.env.SOMA_URL || 'http://127.0.0.1:3001';
-        fetch(`${SOMA_URL}/api/soma/modification-result`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ taskId: proposal.taskId, ...result })
-        }).catch(() => {});
-
-        broadcast({ type: 'soma_proposal_result', taskId: proposal.taskId, ...result });
+        await approveProposal(proposal, 'user');
     });
 
     // Deny
@@ -477,17 +844,7 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
         const proposal = pendingProposals.get(req.params.id);
         if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
 
-        pendingProposals.delete(proposal.taskId);
-        pendingProposals.delete(proposal.taskId.slice(0, 8));
-        console.log(`\n[MAX] 🚫 User denied proposal ${req.params.id} for ${proposal.file}\n`);
-
-        const SOMA_URL = process.env.SOMA_URL || 'http://127.0.0.1:3001';
-        fetch(`${SOMA_URL}/api/soma/modification-result`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ taskId: proposal.taskId, applied: false })
-        }).catch(() => {});
-
+        denyProposal(proposal, 'user');
         res.json({ denied: true });
     });
 
@@ -581,9 +938,9 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
         res.json({ ok: !!ok });
     });
 
-    // ── Health ────────────────────────────────────────────────────────────
-    app.get('/health', (req, res) => {
-        res.json({ ok: true, agent: 'MAX', ready: max._ready });
+    app.post('/api/goals/:id/clarify', (req, res) => {
+        const answered = max.agentLoop?.answerClarification(req.params.id, req.body.answers);
+        res.json({ success: !!answered });
     });
 
     // ── Dashboard (Visual APM) ────────────────────────────────────────────
@@ -676,7 +1033,7 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
             <div style="max-height: 300px; overflow-y: auto; font-size: 0.85em;">
                 ${max.artifacts.list().slice(0, 5).map(a => `
                     <div style="margin-bottom: 15px; border-left: 2px solid #00ff41; padding-left: 10px;">
-                        <div style="color: #888; font-size: 0.8em;">${new Date(a.timestamp).toLocaleTimeString()} | ${a.type.toUpperCase()}</div>
+                        <div style="color: #888; font-size: 0.8em;">${a.timestamp ? new Date(a.timestamp).toLocaleTimeString() : '—'} | ${a.type.toUpperCase()}</div>
                         <div style="color: #fff; margin: 2px 0; font-weight: bold;">${a.name}</div>
                         <div style="color: #00ff41; font-family: monospace;">${a.content.slice(0, 200).replace(/</g, '&lt;')}${a.content.length > 200 ? '...' : ''}</div>
                     </div>
@@ -695,7 +1052,7 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
             const { tool, action_name, params = {} } = req.body;
             if (!tool || !action_name) return res.status(400).json({ error: 'tool and action_name required' });
 
-            const result = await max.tools.execute(tool, action_name, params);
+            const result = await max.tools.execute(tool, action_name, { ...params, __source: 'ui' });
             res.json(result);
         } catch (error) {
             res.status(500).json({ error: error.message });
@@ -703,16 +1060,33 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
     });
 
     app.get('/api/status', (req, res) => {
-        res.json({ ...max.getStatus(), cwd: process.cwd().replace(/\\/g, '/') });
+        const status = req.query.full === '1'
+            ? max.getStatus()
+            : (max.getQuickStatus?.() || max.getStatus());
+        res.json({ ...status, cwd: process.cwd().replace(/\\/g, '/') });
+    });
+
+    // ── Game preview — serve generated HTML game files ────────────────────
+    app.get('/preview/:slug', async (req, res) => {
+        const slug = req.params.slug.replace(/[^a-z0-9_-]/gi, '');
+        const gamePath = join(process.cwd(), '.max', 'game-code', `${slug}.html`);
+        try {
+            const html = await fsp.readFile(gamePath, 'utf8');
+            res.setHeader('Content-Type', 'text/html; charset=utf-8');
+            res.send(html);
+        } catch {
+            res.status(404).send(`<h2>Game not found: ${slug}</h2><p>Generate it with game_code.scaffold first.</p>`);
+        }
     });
 
     // ── Health — detailed system status, always public ────────────────────
     app.get('/health', (req, res) => {
-        const brain    = max.brain?.getStatus()   || {};
+        const brain    = max.brain?.getStatus()          || {};
         const budget   = max.economics?.getBudgetStatus() || {};
-        const goals    = max.goals?.getStatus()   || {};
-        const mcp      = max.mcp?.getStatus()     || {};
-        const security = max.security?.getStatus() || { enabled: false };
+        const goals    = max.goals?.getStatus()          || {};
+        const mcp      = max.mcp?.getStatus()            || {};
+        const security = max.security?.getStatus()       || { enabled: false };
+        const mem      = process.memoryUsage();
 
         const healthy = max._ready && (brain.fast?.ready || brain.smart?.ready);
 
@@ -721,13 +1095,19 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
             ready:    max._ready,
             version:  '1.0.0',
             systems: {
-                brain:   { fast: brain.fast?.ready, smart: brain.smart?.ready, code: brain.code?.ready },
-                budget:  { used: `$${budget.used?.toFixed(4) || '0'}`, cap: `$${budget.cap || 10}`, overBudget: budget.overBudget },
-                goals:   { active: goals.active || 0 },
-                mcp:     { servers: mcp.count || 0 },
+                brain:    { fast: brain.fast?.ready, smart: brain.smart?.ready, code: brain.code?.ready,
+                            backends: { smart: brain.smart?.backend, code: brain.code?.backend } },
+                budget:   { used: `$${budget.used?.toFixed(4) || '0'}`, cap: `$${budget.cap || 10}`, overBudget: budget.overBudget },
+                goals:    { active: goals.active || 0, queued: max.goals?.listPending?.()?.length ?? 0 },
+                memory:   { heapUsedMb: Math.round(mem.heapUsed / 1024 / 1024),
+                            heapTotalMb: Math.round(mem.heapTotal / 1024 / 1024),
+                            contextDepth: max._context?.length ?? 0,
+                            chatQueueDepth: max._chatQueue?.size ?? 0 },
+                mcp:      { servers: mcp.count || 0 },
                 security: { enabled: security.enabled }
             },
-            uptime: process.uptime()
+            lastError: max._lastError ?? null,
+            uptime:    process.uptime()
         });
     });
 
@@ -792,6 +1172,26 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
         }
 
         res.end();
+    });
+
+    // ── SOMA-compatible chat endpoint (for other MAX/SOMA instances on the LAN) ──
+    // Accepts the same JSON shape SomaBridge.think() sends; returns a plain JSON response.
+    app.post('/api/soma/chat', async (req, res) => {
+        const { message, systemPrompt, temperature, maxTokens } = req.body;
+        if (!message) return res.status(400).json({ error: 'message required' });
+        try {
+            const t0 = Date.now();
+            const result = await max.think(message, { temperature, maxTokens: maxTokens || 2048, systemPrompt });
+            const text = result.response || result.text || '';
+            res.json({
+                success:  true,
+                message:  text,
+                response: text,
+                metadata: { confidence: 0.85, brain: 'MAX', latency: { totalMs: Date.now() - t0 } }
+            });
+        } catch (err) {
+            res.status(500).json({ success: false, error: err.message });
+        }
     });
 
     // ── Self-improvement proposals ────────────────────────────────────────
@@ -1025,54 +1425,11 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
     // ── Dependency graph ──────────────────────────────────────────────────
     app.get('/api/graph', async (req, res) => {
         try {
-            const root = process.cwd();
-            const jsFiles = [];
-
-            async function scan(dir, depth = 0) {
-                if (depth > 4) return;
-                const skip = new Set(['node_modules', '.git', '.max', 'dist', 'build', 'coverage']);
-                let entries;
-                try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
-                for (const e of entries) {
-                    if (skip.has(e.name)) continue;
-                    const full = join(dir, e.name);
-                    if (e.isDirectory()) { await scan(full, depth + 1); }
-                    else if (/\.(js|mjs|ts|tsx|jsx)$/.test(e.name)) jsFiles.push(full);
-                }
+            // Rebuild if it's been more than 5 minutes or never run
+            if (!max.graph.lastRebuild || Date.now() - max.graph.lastRebuild > 300000) {
+                await max.graph.rebuild();
             }
-            await scan(root);
-
-            const nodes = [];
-            const edgeSet = new Set();
-            const edges = [];
-            const { resolve, dirname: dn, basename } = await import('path');
-
-            for (const file of jsFiles) {
-                const rel = relative(root, file).replace(/\\/g, '/');
-                nodes.push({ id: rel, label: basename(file) });
-
-                let src;
-                try { src = await fsp.readFile(file, 'utf8'); } catch { continue; }
-
-                const importRe = /(?:import|require)\s*[\('"]*([^'"\)\n]+)['"]/g;
-                let m;
-                while ((m = importRe.exec(src)) !== null) {
-                    const dep = m[1].trim();
-                    if (!dep.startsWith('.')) continue;
-                    const resolved = resolve(dn(file), dep);
-                    const candidates = [resolved, resolved + '.js', resolved + '.mjs', resolved + '/index.js'];
-                    for (const c of candidates) {
-                        const depRel = relative(root, c).replace(/\\/g, '/');
-                        if (jsFiles.some(f => relative(root, f).replace(/\\/g, '/') === depRel)) {
-                            const key = `${rel}→${depRel}`;
-                            if (!edgeSet.has(key)) { edgeSet.add(key); edges.push({ source: rel, target: depRel }); }
-                            break;
-                        }
-                    }
-                }
-            }
-
-            res.json({ nodes, edges });
+            res.json(max.graph.getVisualizationData());
         } catch (e) {
             res.status(500).json({ error: e.message });
         }
@@ -1091,7 +1448,7 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
     app.post('/api/tools/:tool/:action', async (req, res) => {
         const { tool, action } = req.params;
         try {
-            const result = await max.tools.execute(tool, action, req.body);
+            const result = await max.tools.execute(tool, action, { ...req.body, __source: 'ui' });
             res.json(result);
         } catch (err) {
             res.status(400).json({ error: err.message });
@@ -1102,6 +1459,103 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
     app.post('/api/clear', (req, res) => {
         max.clearContext();
         res.json({ ok: true });
+    });
+
+    // ── Workspace edit approval ───────────────────────────────────────────
+    app.post('/api/workspace-edits/:id/accept', async (req, res) => {
+        const result = await max.workspaceEdits?.accept?.(req.params.id);
+        if (!result) return res.status(404).json({ success: false, error: 'Workspace edit arbiter unavailable' });
+        res.status(result.success === false ? 400 : 200).json(result);
+    });
+
+    app.post('/api/workspace-edits/:id/reject', (req, res) => {
+        const result = max.workspaceEdits?.reject?.(req.params.id);
+        if (!result) return res.status(404).json({ success: false, error: 'Workspace edit arbiter unavailable' });
+        res.status(result.success === false ? 400 : 200).json(result);
+    });
+
+    // ── LSP endpoints (completions, hover, go-to-def, AI ghost text) ─────
+    app.post('/api/lsp/complete', async (req, res) => {
+        const { uri, position, languageId, content } = req.body || {};
+        if (!uri || !position) return res.status(400).json({ items: [] });
+        try {
+            const result = await max.lsp?.getCompletions(uri, position, languageId, content);
+            res.json(result ?? { items: [] });
+        } catch (err) {
+            res.json({ items: [] });
+        }
+    });
+
+    app.post('/api/lsp/hover', async (req, res) => {
+        const { uri, position, languageId } = req.body || {};
+        if (!uri || !position) return res.status(400).json(null);
+        try {
+            const result = await max.lsp?.getHover(uri, position, languageId);
+            res.json(result ?? null);
+        } catch {
+            res.json(null);
+        }
+    });
+
+    app.post('/api/lsp/definition', async (req, res) => {
+        const { uri, position, languageId } = req.body || {};
+        if (!uri || !position) return res.status(400).json(null);
+        try {
+            const result = await max.lsp?.getDefinition(uri, position, languageId);
+            res.json(result ?? null);
+        } catch {
+            res.json(null);
+        }
+    });
+
+    // LRU cache for AI completions — avoids redundant LLM calls for identical prefixes
+    const _completionCache = new Map(); // key → { completion, ts }
+    const COMPLETION_CACHE_MAX = 200;
+    const COMPLETION_CACHE_TTL = 5 * 60 * 1000; // 5 min
+
+    app.post('/api/lsp/ai-complete', async (req, res) => {
+        const { text, languageId = 'javascript', fileName = '' } = req.body || {};
+        if (!text) return res.json({ completion: '' });
+
+        // Cache key: last 300 chars of text (the relevant cursor context)
+        const cacheKey = `${languageId}:${text.slice(-300)}`;
+        const cached   = _completionCache.get(cacheKey);
+        if (cached && Date.now() - cached.ts < COMPLETION_CACHE_TTL) {
+            return res.json({ completion: cached.completion, cached: true });
+        }
+
+        try {
+            const completion = await max.lsp?.getAICompletion(text, languageId, fileName) ?? '';
+            if (completion) {
+                // Evict oldest if over limit
+                if (_completionCache.size >= COMPLETION_CACHE_MAX) {
+                    _completionCache.delete(_completionCache.keys().next().value);
+                }
+                _completionCache.set(cacheKey, { completion, ts: Date.now() });
+            }
+            res.json({ completion });
+        } catch {
+            res.json({ completion: '' });
+        }
+    });
+
+    // ── Agent cancellation ────────────────────────────────────────────────
+    app.post('/api/agent/interrupt', (req, res) => {
+        const interrupted = max.abortAgent?.() || false;
+        res.json({ interrupted });
+    });
+
+    // AgentLoop approval gate — IDE calls these instead of typing /approve or /deny in REPL
+    app.post('/api/agent/approve', (req, res) => {
+        if (!max.agentLoop?.approve) return res.status(404).json({ error: 'No pending approval' });
+        max.agentLoop.approve();
+        res.json({ approved: true });
+    });
+
+    app.post('/api/agent/deny', (req, res) => {
+        if (!max.agentLoop?.deny) return res.status(404).json({ error: 'No pending approval' });
+        max.agentLoop.deny();
+        res.json({ denied: true });
     });
 
     // ── Heartbeat control ─────────────────────────────────────────────────
@@ -1115,7 +1569,7 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
         res.json({ running: false });
     });
 
-    await new Promise((resolve) => {
+    await new Promise((resolve, reject) => {
         const server = httpServer.listen(port, () => {
             console.log(`[MAX] 🌐 API  →  http://localhost:${port}`);
             console.log(`[MAX]   POST /api/chat                    — streaming chat (SSE)`);
@@ -1138,9 +1592,22 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
             } else {
                 console.error('[MAX] Server error:', err.message);
             }
-            resolve(); // don't block startup
+            reject(err);
         });
     });
 
-    return app;
+    return {
+        app,
+        close: () => {
+            clearInterval(_statusInterval);
+            clearInterval(_somaInterval);
+            clearTimeout(somaStatusTimeout);
+            clearInterval(somaStatusInterval);
+            wss.close();
+            shutdownShellTool();
+            return new Promise((resolve, reject) =>
+                httpServer.close(err => err ? reject(err) : resolve())
+            );
+        }
+    };
 }

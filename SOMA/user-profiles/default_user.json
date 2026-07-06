@@ -1,0 +1,35 @@
+{
+  "userId": "default_user",
+  "name": "User",
+  "preferences": {
+    "communicationStyle": "balanced",
+    "detailLevel": "medium",
+    "useEmojis": true,
+    "technicalLevel": "medium"
+  },
+  "memory": {
+    "name": "User",
+    "location": null,
+    "occupation": null,
+    "interests": [],
+    "goals": [],
+    "projects": []
+  },
+  "conversationContext": {
+    "topics": {},
+    "lastDiscussed": {},
+    "favoriteTopics": []
+  },
+  "relationship": {
+    "firstInteraction": 1777577770477,
+    "lastInteraction": 1777577770477,
+    "totalInteractions": 0,
+    "sentiment": 0.5,
+    "trust": 0.5
+  },
+  "notes": [],
+  "metadata": {
+    "createdAt": 1777577770477,
+    "updatedAt": 1777577770477
+  }
+}

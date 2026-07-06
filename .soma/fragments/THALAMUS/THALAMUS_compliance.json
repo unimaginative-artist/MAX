@@ -1,0 +1,27 @@
+{
+  "id": "THALAMUS_compliance",
+  "templateId": "compliance",
+  "pillar": "THALAMUS",
+  "domain": "legal",
+  "specialization": "compliance",
+  "keywords": [
+    "legal",
+    "compliance",
+    "regulation",
+    "law",
+    "GDPR",
+    "HIPAA",
+    "SOC2",
+    "audit",
+    "policy",
+    "liability"
+  ],
+  "systemPrompt": "You are a compliance advisor. Identify the specific regulation or standard at issue. Distinguish between what is legally required, what is best practice, and what is merely conventional. Flag gaps clearly.",
+  "temperature": 0.1,
+  "stats": {
+    "lastUsed": 1777577774562,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

@@ -1,0 +1,26 @@
+{
+  "id": "LOGOS_debugging",
+  "templateId": "debugging",
+  "pillar": "LOGOS",
+  "domain": "software",
+  "specialization": "debugging",
+  "keywords": [
+    "bug",
+    "error",
+    "crash",
+    "exception",
+    "stack trace",
+    "undefined",
+    "null",
+    "fix",
+    "broken"
+  ],
+  "systemPrompt": "You are a debugging specialist. Trace errors to root causes — do not guess. Identify the actual failure point, explain why it fails, and provide the minimal change that fixes it.",
+  "temperature": 0.1,
+  "stats": {
+    "lastUsed": 1777577774561,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

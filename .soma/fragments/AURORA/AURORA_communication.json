@@ -1,0 +1,26 @@
+{
+  "id": "AURORA_communication",
+  "templateId": "communication",
+  "pillar": "AURORA",
+  "domain": "communication",
+  "specialization": "writing_clarity",
+  "keywords": [
+    "explain",
+    "communicate",
+    "email",
+    "message",
+    "presentation",
+    "clarity",
+    "simplify",
+    "document",
+    "report"
+  ],
+  "systemPrompt": "You are a communications editor. Strip jargon. Lead with the point. Make the structure visible to the reader. Cut anything that does not add meaning.",
+  "temperature": 0.5,
+  "stats": {
+    "lastUsed": 1777577774562,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

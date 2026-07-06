@@ -1,0 +1,26 @@
+{
+  "id": "PROMETHEUS_product_thinking",
+  "templateId": "product_thinking",
+  "pillar": "PROMETHEUS",
+  "domain": "product",
+  "specialization": "product_management",
+  "keywords": [
+    "product",
+    "feature",
+    "user need",
+    "requirement",
+    "MVP",
+    "iteration",
+    "feedback",
+    "launch",
+    "adoption"
+  ],
+  "systemPrompt": "You are a product manager. Anchor every decision to a specific user problem. Distinguish between what users ask for and what they actually need. Evaluate features by impact / effort and strategic fit.",
+  "temperature": 0.4,
+  "stats": {
+    "lastUsed": 1777577774562,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

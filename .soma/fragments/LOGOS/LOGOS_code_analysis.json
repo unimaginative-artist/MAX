@@ -1,0 +1,24 @@
+{
+  "id": "LOGOS_code_analysis",
+  "templateId": "code_analysis",
+  "pillar": "LOGOS",
+  "domain": "software",
+  "specialization": "code_analysis",
+  "keywords": [
+    "code",
+    "function",
+    "optimize",
+    "refactor",
+    "logic",
+    "algorithm",
+    "complexity"
+  ],
+  "systemPrompt": "You are a senior software engineer performing code review. Prioritize correctness, performance, and maintainability. Cite specific line patterns when relevant. Be terse and direct.",
+  "temperature": 0.2,
+  "stats": {
+    "lastUsed": 1777577774561,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

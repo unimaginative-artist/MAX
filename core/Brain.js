@@ -40,6 +40,13 @@ if (existsSync(_envPath)) {
     }
 }
 
+function isAbortError(err) {
+    const msg = String(err?.message || err || '').toLowerCase();
+    return err?.name === 'AbortError'
+        || msg === 'aborterror'
+        || msg.includes('user aborted');
+}
+
 export class Brain {
     constructor(max, config = {}) {
         this.max          = max;
@@ -194,9 +201,11 @@ export class Brain {
             try {
                 return await this._ollama(this._fast.ollamaModel, prompt, systemPrompt, temperature, maxTokens, this.fastTimeout, onToken, messages || null, signal);
             } catch (err) {
+                if (signal?.aborted || isAbortError(err)) {
+                    // User/agent cancellation is not an Ollama health failure.
+                    throw err;
+                }
                 this._fastFailures++;
-                // Aggressive circuit breaker: 1 failure and we stop hitting local Ollama for the session.
-                // This prevents "PC heat" issues from constant connection retries/timeouts.
                 if (this._fastFailures >= 3) {
                     this._fastDisabled = true;
                     console.warn(`[Brain] ⚡ Fast tier disabled for this session — Ollama unresponsive (using DeepSeek for fast calls)`);
@@ -217,12 +226,14 @@ export class Brain {
         throw new Error('Code tier unavailable — add DEEPSEEK_API_KEY to config/api-keys.env');
     }
 
-    // ─── Smart tier execution — DeepSeek only ────────────────────────────
+    // ─── Smart tier execution — MAX-owned providers only ─────────────────
     async _runSmart(prompt, systemPrompt, temperature, maxTokens, onToken = null, messages = null, signal = null) {
+        // SOMA's /chat route applies SOMA's identity kernel. Using it as MAX's
+        // conversational backend makes the two agents claim each other's identity.
         if (this._validKey(this._smart.deepseekKey)) {
             return this._deepseek(prompt, systemPrompt, temperature, maxTokens, null, onToken, messages, this.smartTimeout, signal);
         }
-        throw new Error('Smart tier unavailable — add DEEPSEEK_API_KEY to config/api-keys.env');
+        return this._runFast(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages, signal);
     }
 
     // ─── Backend implementations ──────────────────────────────────────────
@@ -335,6 +346,7 @@ export class Brain {
 
     async _ollama(model, prompt, systemPrompt, temperature, maxTokens, timeoutMs = null, onToken = null, prebuiltMessages = null, signal = null) {
         const start = Date.now();
+        if (signal?.aborted) throw new Error('AbortError');
 
         let messages;
         if (prebuiltMessages) {
@@ -358,16 +370,35 @@ export class Brain {
             options: { temperature, num_predict: maxTokens }
         };
 
-        const fetchSignal = (signal && typeof AbortSignal.any === 'function')
-            ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs || this.timeout)])
-            : (signal || AbortSignal.timeout(timeoutMs || this.timeout));
+        const abortController = new AbortController();
+        let timeoutFired = false;
+        let externalAbort = false;
+        const timeoutId = setTimeout(() => {
+            timeoutFired = true;
+            abortController.abort();
+        }, timeoutMs || this.timeout);
+        const onExternalAbort = () => {
+            externalAbort = true;
+            abortController.abort();
+        };
+        if (signal) signal.addEventListener('abort', onExternalAbort, { once: true });
 
-        const res = await fetch(`${this.ollamaUrl}/api/chat`, {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify(body),
-            signal:  fetchSignal
-        });
+        let res;
+        try {
+            res = await fetch(`${this.ollamaUrl}/api/chat`, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify(body),
+                signal:  abortController.signal
+            });
+        } catch (err) {
+            if (externalAbort || signal?.aborted) throw new Error('AbortError');
+            if (timeoutFired) throw new Error(`Ollama timed out after ${timeoutMs || this.timeout}ms`);
+            throw err;
+        } finally {
+            clearTimeout(timeoutId);
+            if (signal) signal.removeEventListener('abort', onExternalAbort);
+        }
         if (!res.ok) throw new Error(`Ollama ${res.status}`);
 
         let fullText = '';

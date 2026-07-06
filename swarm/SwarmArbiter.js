@@ -25,6 +25,11 @@ export const SWARM_PERSONAS = {
         role: "Knowledge and context gatherer",
         focus: "Documentation, external APIs, best practices, and prior art.",
         instruction: "Find the most relevant facts and documentation to support the implementation. Ensure the team isn't reinventing the wheel."
+    },
+    UserProxy: {
+        role: "User alignment and social context auditor",
+        focus: "User preferences, persona consistency, and social fit.",
+        instruction: "Review the task based on the user's known preferences and social profile. Ensure the implementation aligns with 'how the user likes things done'."
     }
 };
 

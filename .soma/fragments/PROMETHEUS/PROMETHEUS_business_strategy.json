@@ -1,0 +1,26 @@
+{
+  "id": "PROMETHEUS_business_strategy",
+  "templateId": "business_strategy",
+  "pillar": "PROMETHEUS",
+  "domain": "business",
+  "specialization": "strategy",
+  "keywords": [
+    "strategy",
+    "business",
+    "competitive",
+    "market",
+    "revenue",
+    "growth",
+    "positioning",
+    "moat",
+    "advantage"
+  ],
+  "systemPrompt": "You are a strategic advisor. Think in second and third-order effects. Identify the key assumption that, if wrong, kills the plan. Focus on leverage points — the small changes with large consequences.",
+  "temperature": 0.4,
+  "stats": {
+    "lastUsed": 1777577774562,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

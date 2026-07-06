@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { EventEmitter } from 'events';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -54,7 +55,11 @@ Sharp and precise. No unnecessary fluff.`
         name: 'Grinder',
         emoji: '⚙️',
         description: 'Implementation, step-by-step execution, getting it done',
-        trigger: ['implement', 'build', 'write', 'create', 'code', 'fix', 'add', 'make', 'generate', 'function', 'class'],
+        trigger: [
+            'implement', 'build', 'write', 'create', 'code', 'fix', 'add', 'make', 'generate', 'function', 'class',
+            'read', 'replace', 'patch', 'search', 'grep', 'run', 'execute', 'start', 'stop', 'checkout', 'commit',
+            'push', 'pull', 'status', 'diff', 'log'
+        ],
         systemPrompt: `You are MAX in Grinder mode. You are an autonomous software engineering agent.
 Your goal is to complete tasks autonomously through a tight loop of observation, verification, and action.
 
@@ -151,12 +156,29 @@ Sharp engineering energy — everything has a purpose and a place.`
     }
 };
 
-export class PersonaEngine {
+export class PersonaEngine extends EventEmitter {
     constructor() {
-        this.currentPersona = PERSONAS.COMPANION;
+        super();
+        this._currentPersona = PERSONAS.COMPANION;
         this.history        = [];
         this.experts        = new Map();
         this.loadExpertPersonas();
+    }
+
+    get currentPersona() {
+        return this._currentPersona;
+    }
+
+    set currentPersona(p) {
+        const changed = this._currentPersona !== p;
+        this._currentPersona = p;
+        if (changed && p) {
+            this.emit('persona_changed', { id: p.id, name: p.name, emoji: p.emoji });
+        }
+    }
+
+    get current() {
+        return this.currentPersona;
     }
 
     loadExpertPersonas() {
@@ -205,10 +227,15 @@ export class PersonaEngine {
 
         const lower = taskText.toLowerCase();
 
-        // ── 1. Conversational/emotional keywords always win ────────────────
-        // Check Companion triggers first — if someone's asking "how are you"
-        // they want a person, not a code machine.
-        if (PERSONAS.COMPANION.trigger.some(kw => lower.includes(kw))) {
+        // ── 1. Conversational/emotional keywords win, EXCEPT if technical triggers exist ────────────────
+        // Check Companion triggers — if someone is asking "how are you" they want a friend,
+        // unless they are explicitly asking for an operation (e.g. "hey, read this file").
+        const hasTechnicalTrigger = [
+            'read', 'write', 'replace', 'patch', 'search', 'grep', 'run', 'execute', 'start', 'stop', 'checkout', 'commit',
+            'push', 'pull', 'status', 'diff', 'log', 'code', 'build', 'implement', 'fix'
+        ].some(kw => lower.includes(kw));
+
+        if (PERSONAS.COMPANION.trigger.some(kw => lower.includes(kw)) && !hasTechnicalTrigger) {
             this.currentPersona = PERSONAS.COMPANION;
             return PERSONAS.COMPANION;
         }
@@ -278,6 +305,7 @@ export class PersonaEngine {
     // This runs under every persona. It sets the foundation of character.
     getBasePrompt() {
         return `You are MAX — a highly capable, autonomous engineering agent.
+Your identity is invariant: your name is MAX. You are not SOMA and must never claim to be SOMA. SOMA is a separate system you can inspect and assist through your bridge.
 Your personality is a blend of a world-class senior developer and a deeply collaborative partner.
 
 ## CORE VIBE

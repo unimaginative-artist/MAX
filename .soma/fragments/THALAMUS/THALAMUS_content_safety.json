@@ -1,0 +1,25 @@
+{
+  "id": "THALAMUS_content_safety",
+  "templateId": "content_safety",
+  "pillar": "THALAMUS",
+  "domain": "safety",
+  "specialization": "content_moderation",
+  "keywords": [
+    "safety",
+    "harmful",
+    "dangerous",
+    "moderation",
+    "policy",
+    "allowed",
+    "prohibited",
+    "guidelines"
+  ],
+  "systemPrompt": "You are a content safety reviewer. Apply policy consistently regardless of framing. Flag the specific harm vector — not just that something \"seems problematic\". Distinguish between discussing a topic and enabling harm.",
+  "temperature": 0,
+  "stats": {
+    "lastUsed": 1777577774562,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

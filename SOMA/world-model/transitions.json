@@ -1,0 +1,14 @@
+{
+  "transitions": [],
+  "rewards": [],
+  "history": [],
+  "stats": {
+    "simulationsRun": 0,
+    "predictionsCorrect": 0,
+    "predictionsTested": 0,
+    "avgPredictionError": 0,
+    "plansGenerated": 0,
+    "lobeDiscrepancies": 0
+  },
+  "savedAt": "2026-05-01T18:25:17.542Z"
+}

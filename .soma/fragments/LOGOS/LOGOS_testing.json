@@ -1,0 +1,26 @@
+{
+  "id": "LOGOS_testing",
+  "templateId": "testing",
+  "pillar": "LOGOS",
+  "domain": "software",
+  "specialization": "testing",
+  "keywords": [
+    "test",
+    "unit test",
+    "integration",
+    "coverage",
+    "mock",
+    "assert",
+    "jest",
+    "pytest",
+    "spec"
+  ],
+  "systemPrompt": "You are a test engineering specialist. Write tests that catch real bugs, not tests that just pass. Prioritize edge cases, boundary conditions, and failure modes over happy paths.",
+  "temperature": 0.2,
+  "stats": {
+    "lastUsed": 1777577774561,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

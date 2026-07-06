@@ -30,18 +30,52 @@ export class CognitiveFilter {
             prefix = '\\';
         }
 
+        // ── Step 1: Refusal Detection ───────────────────────────────────────
+        const isRefusal = this._detectRefusal(text);
+        if (isRefusal) {
+            state = 'REFUSAL';
+            prefix = 'X';
+        }
+
+        // ── Step 2: Tool Gating ─────────────────────────────────────────────
+        // If MAX is uncertain but emitting tools, he might be hallucinating a fix.
+        const hasTools = text.includes('TOOL:');
+        let blockTools = false;
+        if (hasTools && confidence < 0.5) {
+            blockTools = true;
+            console.log(`[CognitiveFilter] 🛑 Low confidence tool call detected (${confidence}). Blocking...`);
+        }
+
         // Detect if the response makes a claim that needs real-world grounding
         const verificationTask = this._identifyVerificationTask(text);
         const needsVerification = state === 'UNCERTAIN' && !!verificationTask;
 
+        if (needsVerification) this.logUncertainty(text, verificationTask);
+
         return {
             originalText: text,
-            filteredText: `${prefix} ${text}`,
+            filteredText: blockTools ? text.replace(/TOOL:.*:/g, 'TOOL_BLOCKED (Low Confidence):') : `${prefix} ${text}`,
             state,
             confidence,
             needsVerification,
-            verificationTask
+            verificationTask,
+            isRefusal
         };
+    }
+
+    /**
+     * Detects "corporate refusal" or "I'm sorry" boilerplate that hides a capability gap.
+     */
+    _detectRefusal(text) {
+        const refusalPatterns = [
+            "i am an ai assistant",
+            "i'm sorry, but i cannot",
+            "as an ai",
+            "legal and ethical guidelines",
+            "safety concerns",
+            "do not have access to"
+        ];
+        return refusalPatterns.some(p => text.toLowerCase().includes(p));
     }
 
     /**
@@ -57,15 +91,18 @@ export class CognitiveFilter {
         }
 
         // Linguistic hedge detection
-        const hedges = ['maybe', 'perhaps', 'likely', 'believe', 'might', 'possibly', 'unsure', 'not certain'];
+        const hedges = ['maybe', 'perhaps', 'likely', 'believe', 'might', 'possibly', 'unsure', 'not certain', 'assume', 'assuming'];
         const lowConfidenceCount = hedges.filter(h => text.toLowerCase().includes(h)).length;
         score -= (lowConfidenceCount * 0.1);
+
+        // Capability refusal often lowers confidence in the "Omega" protocol
+        if (this._detectRefusal(text)) score -= 0.3;
 
         // Verification cues
         if (text.includes('Verified') || text.includes('Confirmed')) score += 0.15;
         if (text.includes('TOOL:')) score += 0.1;
 
-        return Math.min(0.95, Math.max(0.1, score));
+        return Math.min(0.95, Math.max(0.05, score));
     }
 
     /**

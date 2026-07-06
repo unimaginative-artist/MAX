@@ -25,3 +25,9 @@ dist-electron/
 # Editor
 .vscode/settings.json
 .idea/
+
+# Databases and local state (added 2026-07-06)
+*.db
+*.db-shm
+*.db-wal
+*.db-bak

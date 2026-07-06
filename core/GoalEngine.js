@@ -198,6 +198,7 @@ QUALITY RULES — every step must be completable and produce a verifiable result
 - DO NOT generate steps that only plan more steps or read more files without producing output.
 - The goal is COMPLETE when the final step produces its artifact. There is no "I'll continue next time".
 - A goal with vague success criteria ("looks good", "seems right") is a bad goal — success must be observable.
+- For build/app/site/API work, include security in the plan: validate inputs, protect auth/session boundaries, avoid secret exposure, prevent injection/XSS/path traversal, and verify risky surfaces before completion.
 
 MANDATORY Verification:
 - If type is 'fix' or 'task', the LAST STEP MUST be a verification.
@@ -205,6 +206,7 @@ MANDATORY Verification:
 - NEVER invent benchmark scripts, test files, or commands that don't already exist in the project.
 - For non-code goals (config, credentials, connections), use 'brain' to summarize what was done instead of a shell command.
 - The goal is not finished until you prove it works with output evidence.
+- If the task touches auth, payments, uploads, shell execution, file access, network requests, crypto, personal data, admin controls, or rendered user content, verification must include a security check for that surface.
 
 Rules:
 - Each step must use one of the listed tools
@@ -536,10 +538,15 @@ Return JSON array ONLY:
             completed: this._completed.slice(0, 20),
             stats:     this.stats
         }, null, 2);
-        
-        fs.promises.writeFile(this.goalsPath, data).catch(err => {
+
+        try {
+            fs.mkdirSync(path.dirname(this.goalsPath), { recursive: true });
+            const tmpPath = `${this.goalsPath}.tmp`;
+            fs.writeFileSync(tmpPath, data, 'utf8');
+            fs.renameSync(tmpPath, this.goalsPath);
+        } catch (err) {
             console.error(`[GoalEngine] ❌ Failed to save goals:`, err.message);
-        });
+        }
     }
 
     _load() {

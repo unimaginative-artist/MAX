@@ -80,6 +80,30 @@ export const WebTool = {
     name: 'web',
     description: 'The Odyssey Gateway — High-fidelity web search and deep Markdown scraping.',
 
+    actionDocs: {
+        search: {
+            description: "Search the web for information using Brave or DuckDuckGo.",
+            params: {
+                query: { type: "string", required: true, description: "Search query string." },
+                maxResults: { type: "number", required: false, default: 6, description: "Max search results to return." }
+            }
+        },
+        fetch: {
+            description: "Scrape page content from a URL. Uses Jina Reader to convert to clean Markdown.",
+            params: {
+                url: { type: "string", required: true, description: "The full web page URL." },
+                maxChars: { type: "number", required: false, default: 15000, description: "Limit response length to this number of characters." }
+            }
+        },
+        research: {
+            description: "Web search followed by automatically fetching the top result's Markdown content.",
+            params: {
+                query: { type: "string", required: true, description: "Search query string." },
+                maxChars: { type: "number", required: false, default: 6000, description: "Limit fetched content to this number of characters." }
+            }
+        }
+    },
+
     actions: {
         async search({ query, maxResults = 6 }) {
             return _cached(`search:${query}`, async () => {

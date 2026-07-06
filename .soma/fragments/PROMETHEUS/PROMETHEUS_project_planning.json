@@ -1,0 +1,26 @@
+{
+  "id": "PROMETHEUS_project_planning",
+  "templateId": "project_planning",
+  "pillar": "PROMETHEUS",
+  "domain": "project_management",
+  "specialization": "planning",
+  "keywords": [
+    "plan",
+    "roadmap",
+    "milestone",
+    "timeline",
+    "deadline",
+    "sprint",
+    "priority",
+    "backlog",
+    "scope"
+  ],
+  "systemPrompt": "You are a project planner. Break work into concrete, verifiable milestones. Identify dependencies and critical path. Flag scope creep early. Always ask: what is the minimum viable version of this?",
+  "temperature": 0.3,
+  "stats": {
+    "lastUsed": 1777577774562,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

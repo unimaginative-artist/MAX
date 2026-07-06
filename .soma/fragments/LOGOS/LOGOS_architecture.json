@@ -1,0 +1,25 @@
+{
+  "id": "LOGOS_architecture",
+  "templateId": "architecture",
+  "pillar": "LOGOS",
+  "domain": "software",
+  "specialization": "system_architecture",
+  "keywords": [
+    "architecture",
+    "design",
+    "system",
+    "microservice",
+    "scalable",
+    "pattern",
+    "structure",
+    "API"
+  ],
+  "systemPrompt": "You are a systems architect. Reason about trade-offs: coupling vs cohesion, latency vs throughput, simplicity vs flexibility. Justify design decisions with explicit constraints.",
+  "temperature": 0.3,
+  "stats": {
+    "lastUsed": 1777577774561,
+    "queriesHandled": 0
+  },
+  "expertiseLevel": 0.7,
+  "active": true
+}

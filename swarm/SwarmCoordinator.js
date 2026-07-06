@@ -6,8 +6,13 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { EventEmitter } from 'events';
+import { Worker }      from 'worker_threads';
+import path            from 'path';
+import { fileURLToPath } from 'url';
 import { commandPolicy } from '../core/CommandPolicyEngine.js';
 import { SwarmArbiter }    from './SwarmArbiter.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export class SwarmCoordinator extends EventEmitter {
     constructor(brain, toolRegistry, config = {}) {
@@ -17,12 +22,42 @@ export class SwarmCoordinator extends EventEmitter {
         this.config   = {
             maxWorkers:   config.maxWorkers   || 4,
             workerTimeout: config.workerTimeout || 120000,  // 2 min per worker
+            useWorkers:   config.useWorkers   ?? true,      // Set to true for true parallel
             ...config
         };
 
         this.activeJobs  = new Map();  // jobId → job
         this.jobHistory  = [];
         this._jobCounter = 0;
+        this._workerPool = [];
+    }
+
+    /**
+     * Spawns or retrieves a worker thread for an agent.
+     */
+    async _getWorker(id, persona) {
+        if (!this.config.useWorkers) return null;
+
+        return new Promise((resolve, reject) => {
+            const worker = new Worker(path.join(__dirname, 'SwarmNode.js'), {
+                workerData: {
+                    id,
+                    persona,
+                    projectRoot: process.cwd(),
+                    config: this.config
+                }
+            });
+
+            worker.on('message', (msg) => {
+                if (msg.type === 'ready') resolve(worker);
+                if (msg.type === 'error') reject(new Error(msg.error));
+            });
+
+            worker.on('error', reject);
+            worker.on('exit', (code) => {
+                if (code !== 0) reject(new Error(`Worker stopped with exit code ${code}`));
+            });
+        });
     }
 
     // ─── Run a swarm job ──────────────────────────────────────────────────
@@ -99,7 +134,6 @@ export class SwarmCoordinator extends EventEmitter {
 
         // Assign persona if not present
         if (!subtask.persona) {
-            const personaKeys = Object.keys(SwarmArbiter.getPersona(''));
             subtask.persona = SwarmArbiter.getPersona(subtask.id);
         }
         const persona = subtask.persona;
@@ -107,6 +141,50 @@ export class SwarmCoordinator extends EventEmitter {
         console.log(`  [Swarm] ▶ ${subtask.id} (${persona.role}): ${subtask.prompt?.slice(0, 60)}...`);
         this.emit('subtask:start', { jobId: job.id, subtaskId: subtask.id, persona: persona.role });
 
+        // ─── Parallel Worker Mode ──────────────────────────────────────────
+        if (this.config.useWorkers) {
+            try {
+                const worker = await this._getWorker(subtask.id, persona);
+                
+                return new Promise((resolve, reject) => {
+                    const taskId = `task_${Date.now()}`;
+                    worker.postMessage({
+                        type: 'run',
+                        taskId,
+                        payload: {
+                            prompt: subtask.prompt,
+                            systemPrompt: `You are the ${persona.role} in MAX's engineering swarm.
+Job: "${job.name}"
+Focus: ${persona.focus}
+Instruction: ${persona.instruction}`,
+                            tier: subtask.tier || 'fast'
+                        }
+                    });
+
+                    worker.on('message', (msg) => {
+                        if (msg.taskId === taskId) {
+                            if (msg.type === 'success') {
+                                subtask.status = 'complete';
+                                subtask.result = msg.result;
+                                subtask.endedAt = Date.now();
+                                console.log(`  [Swarm] ✅ ${subtask.id} done via worker (${subtask.endedAt - subtask.startedAt}ms)`);
+                                worker.terminate(); // Release resources
+                                resolve({ id: subtask.id, result: msg.result, discoveries: msg.discoveries });
+                            } else {
+                                worker.terminate();
+                                reject(new Error(msg.error));
+                            }
+                        }
+                    });
+
+                    worker.on('error', (err) => { worker.terminate(); reject(err); });
+                });
+            } catch (err) {
+                console.warn(`  [Swarm] ⚠️  Worker failed, falling back to local for ${subtask.id}: ${err.message}`);
+            }
+        }
+
+        // ─── Local Fallback Mode ───────────────────────────────────────────
         try {
             // Execute any tool calls first
             const toolResults = {};
