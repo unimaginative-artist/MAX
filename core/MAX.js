@@ -24,6 +24,19 @@ import { EvolutionArbiter }   from './EvolutionArbiter.js';
 import { SelfCodeInspector }  from './SelfCodeInspector.js';
 import { ReflectionEngine }   from './ReflectionEngine.js';
 import { PoseidonResearch }    from './PoseidonResearch.js';
+import { MaxMemory }           from '../memory/MaxMemory.js';
+import { KnowledgeBase }       from '../memory/KnowledgeBase.js';
+import { CodeIndexer }         from '../memory/CodeIndexer.js';
+import { UserProfile }         from '../onboarding/UserProfile.js';
+import { RepoGraph }           from './RepoGraph.js';
+import { Sentinel }            from './Sentinel.js';
+import { DiagnosticsSystem }   from './Diagnostics.js';
+import { WorldModel }          from './WorldModel.js';
+import { ArtifactManager }     from './ArtifactManager.js';
+import { TestGenerator }       from './TestGenerator.js';
+import { SkillLibrary }        from './SkillLibrary.js';
+import { SelfEditor }          from './SelfEditor.js';
+import { SwarmCoordinator }    from '../swarm/SwarmCoordinator.js';
 import { PersonaEngine }      from '../personas/PersonaEngine.js';
 import { MuseEngine }         from './MuseEngine.js';
 import { ToolRegistry }       from '../tools/ToolRegistry.js';
@@ -40,19 +53,6 @@ import { createSystemTool }    from '../tools/SystemTool.js';
 import { DiscordTool, autoConnectDiscord, isAuthorizedDiscordOperator } from '../tools/DiscordTool.js';
 import { EmailTool,   autoConnectEmail   } from '../tools/EmailTool.js';
 import { KnowledgeTool }      from '../tools/KnowledgeTool.js';
-import { SwarmCoordinator }   from '../swarm/SwarmCoordinator.js';
-import { MaxMemory }          from '../memory/MaxMemory.js';
-import { KnowledgeBase }      from '../memory/KnowledgeBase.js';
-import { UserProfile }        from '../onboarding/UserProfile.js';
-import { CodeIndexer }        from '../memory/CodeIndexer.js';
-import { RepoGraph }          from './RepoGraph.js';
-import { DiagnosticsSystem }  from './Diagnostics.js';
-import { Sentinel }           from './Sentinel.js';
-import { WorldModel }         from './WorldModel.js';
-import { ArtifactManager }    from './ArtifactManager.js';
-import { TestGenerator }      from './TestGenerator.js';
-import { SkillLibrary }       from './SkillLibrary.js';
-import { SelfEditor }         from './SelfEditor.js';
 import { Notifier }           from './Notifier.js';
 import { SomaBridge }         from './SomaBridge.js';
 import { DebugLoop }             from './DebugLoop.js';
@@ -76,6 +76,8 @@ import { GameWorldTool }      from '../tools/GameWorldTool.js';
 import { GameCodeTool }       from '../tools/GameCodeTool.js';
 import { GameAssetFetcherTool } from '../tools/GameAssetFetcher.js';
 import { SocialArbiter }         from './SocialArbiter.js';
+import { E2EWebSandboxEngine }   from './E2EWebSandboxEngine.js';
+import { NightShiftEngine }      from './NightShiftEngine.js';
 import { SkillEvolutionArbiter }  from './SkillEvolutionArbiter.js';
 import { SkillMutatorArbiter }    from './SkillMutatorArbiter.js';
 import { ContextPagerArbiter }    from './ContextPagerArbiter.js';
@@ -207,6 +209,8 @@ export class MAX extends EventEmitter {
         this.semanticIndex   = new SemanticIndex(this);
         this.grounding       = new GroundingArbiter(this);
         this.lsp             = new LSPArbiter(this);
+        this.e2eSandbox      = new E2EWebSandboxEngine(this);
+        this.nightShift      = new NightShiftEngine(this);
 
         // State flags
         this.isThinking       = false;
@@ -352,47 +356,100 @@ export class MAX extends EventEmitter {
                 return 'You are talking to MAX. SOMA is a separate system connected through my bridge.';
             }
 
-            const somaOpsIntent = /\bsoma\b/i.test(content)
-                && /\b(health|status|online|offline|running|start|restart|wake|up|responding|responsive)\b/i.test(content);
+            const somaOpsIntent = /\b(soma|marionette)\b/i.test(content)
+                && /\b(health|status|online|offline|running|start|restart|wake|up|responding|responsive|down|unreachable|dead|stuck|restarting)\b/i.test(content);
             if (somaOpsIntent && isAuthorizedDiscordOperator(payload?.authorId)) {
-                const wantsStart = /\b(start|restart|wake|offline|not running|not responding|unresponsive)\b/i.test(content);
+                const wantsStart = /\b(start|restart|wake|offline|not running|not responding|unresponsive|down|unreachable|dead|stuck|restarting)\b/i.test(content);
                 const health = await this.soma.checkHealth({ startIfOffline: wantsStart });
                 if (health.available) {
                     return 'I checked SOMA directly. She is online and her health endpoint is responding.';
                 }
+
+                // Queue an investigation & recovery check goal so AgentLoop reports back concrete results
+                const title = `SOMA & Marionette recovery check (${content.slice(0, 60)})`;
+                const id = this.goals?.addGoal?.({
+                    title,
+                    description: `Check SOMA and Marionette process state and logs for ${payload.author || 'operator'}. Report status and recovery steps back to Discord #${payload.channel || 'general'}.\nRequest: ${content}`,
+                    type: 'fix',
+                    priority: 0.95,
+                    source: 'discord',
+                    channelId: payload.channelId,
+                    messageId: payload.messageId,
+                    author: payload.author,
+                    channelName: payload.channel
+                });
+                setImmediate(() => this.agentLoop?.runCycle?.().catch(err => {
+                    console.warn('[MAX] SOMA recovery check run failed:', err.message);
+                }));
+
                 return health.action === 'start_requested'
-                    ? 'SOMA is offline. I sent a real local start request and will let Marionette supervise recovery.'
-                    : 'SOMA is offline. I verified that against her health endpoint.';
+                    ? `SOMA is offline. I sent a real start request to Marionette and queued goal ${id || ''} to monitor recovery. I will message back here when complete.`
+                    : `SOMA is offline. I verified that against her health endpoint and queued goal ${id || ''} to inspect process state/logs. I will report back here shortly.`;
             }
 
-            const engineeringIntent = /\b(fix|patch|debug|diagnose|investigate|audit|implement|build|test|check|repair)\b/i.test(content)
-                && /\b(soma|repo|code|codebase|server|discord|bridge|executor|goal|agent|tool|file|bug|error|broken|not working|failing)\b/i.test(content);
-            if (engineeringIntent && isAuthorizedDiscordOperator(payload?.authorId) && this.goals?.addGoal) {
-                const title = `Discord engineering request: ${content.slice(0, 120)}`;
+            const researchOrEngineeringIntent = /\b(scour|search|find|crawl|look for|research|fetch|scan|review|analyze|gather|compile|fix|patch|debug|diagnose|investigate|audit|implement|build|test|check|repair|find out|figure out)\b/i.test(content)
+                || /\b(github|repo|repos|paper|papers|asi|architecture|soma|marionette|code|codebase|server|discord|bridge|executor|goal|agent|tool|file|bug|error|broken|not working|failing|down|unreachable)\b/i.test(content);
+
+            if (researchOrEngineeringIntent && isAuthorizedDiscordOperator(payload?.authorId) && this.goals?.addGoal) {
+                const title = `Discord task: ${content.slice(0, 100)}`;
                 const id = this.goals.addGoal({
                     title,
                     description: [
-                        `Owner Discord request from ${payload.author || payload.authorId || 'unknown'} in #${payload.channel || 'unknown'}:`,
+                        `Owner Discord request from ${payload.author || payload.authorId || 'operator'} in #${payload.channel || 'chat'}:`,
                         content,
                         '',
-                        'Execute real tool-backed work. Inspect files before claiming completion. Run syntax/tests when code changes. Report concrete files, commands, and outcomes.'
+                        'Execute real tool-backed work. Perform research, inspect code/repos, or run fixes. Report concrete evidence and findings back to Discord.'
                     ].join('\n'),
-                    type: 'fix',
+                    type: content.includes('fix') || content.includes('bug') ? 'fix' : 'research',
                     priority: 0.95,
-                    source: 'discord_owner'
+                    source: 'discord',
+                    channelId: payload.channelId,
+                    messageId: payload.messageId,
+                    author: payload.author,
+                    channelName: payload.channel
                 });
                 setImmediate(() => this.agentLoop?.runCycle?.().catch(err => {
-                    console.warn('[MAX] Discord engineering goal run failed:', err.message);
+                    console.warn('[MAX] Discord task run failed:', err.message);
                 }));
-                return `Queued real MAX engineering goal ${id}. I am starting AgentLoop now and will report concrete evidence instead of just talking.`;
+                return `Queued real MAX engineering task **${id}**. I am executing AgentLoop now and will report concrete evidence back to this channel when finished!`;
             }
 
+            const followUpIntent = /\b(what did you find|any update|status|let me know|figure out|check|find out|get back|report back|tell me when)\b/i.test(content);
+            if (followUpIntent && isAuthorizedDiscordOperator(payload?.authorId)) {
+                // Check completed and active goals for recent findings
+                const active = this.goals?.getPending?.() || [];
+                const done = this.goals?.getCompleted?.()?.slice(-3) || [];
+                if (done.length > 0) {
+                    const last = done[done.length - 1];
+                    return `Here is what I found from my recent run (**${last.title}**):\n\n${last.summary || 'Completed successfully.'}`;
+                } else if (active.length > 0) {
+                    return `I am currently executing **${active[0].title}** in the background. I'll report back here as soon as it finishes!`;
+                } else if (this.goals?.addGoal) {
+                    const id = this.goals.addGoal({
+                        title: `Discord follow-up investigation: ${content.slice(0, 80)}`,
+                        description: `User asked follow-up: "${content}". Investigate and report findings back to Discord.`,
+                        type: 'task',
+                        priority: 0.9,
+                        source: 'discord',
+                        channelId: payload.channelId,
+                        messageId: payload.messageId,
+                        author: payload.author,
+                        channelName: payload.channel
+                    });
+                    setImmediate(() => this.agentLoop?.runCycle?.().catch(() => {}));
+                    return `I'm on it. I've queued task **${id}** to investigate and will report back here with concrete findings.`;
+                }
+            }
+
+            const hasActionKeywords = /\b(scour|search|read|cat|list|dir|find|grep|run|check|status|log|inspect|show)\b/i.test(content);
+            const allowTools = isAuthorizedDiscordOperator(payload?.authorId) && hasActionKeywords;
+
             const result = await this.think(
-                `[Discord message from ${payload.author} in #${payload.channel}] ${content}\n\nReply as a normal Discord message. Do not output / TRUE, TOOL calls, JSON tool syntax, or implementation traces.`,
+                `[Discord message from ${payload.author} in #${payload.channel}] ${content}\n\nReply as a normal Discord message. You have access to real system tools if needed to inspect or fulfill the user's request directly. Do not make unfulfilled promises to check things in the background unless a background goal is queued.`,
                 {
                     tier: 'smart',
                     maxTokens: 1200,
-                    skipInlineTools: true,
+                    skipInlineTools: !allowTools,
                 }
             );
             return sanitizeDiscordReply(result?.response);
