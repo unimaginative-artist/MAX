@@ -68,6 +68,28 @@ export function canProcessDiscordMessage({ authorId, guildId, channelId }, creds
     return allowed.has(String(authorId || ''));
 }
 
+// Discord's MessageContent is a PRIVILEGED intent — it must be toggled ON per-bot
+// in the Developer Portal. MAX#4417 is a different bot from SOMA, so it may not be
+// enabled; when it isn't, Discord rejects the gateway identify (close code 4014).
+// We self-heal: drop to non-privileged intents and reconnect so MAX still comes
+// online (DMs + @mentions carry content without the privileged intent).
+const _FULL_INTENTS = [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.DirectMessages
+];
+const _BASIC_INTENTS = [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.DirectMessages
+];
+let _intentSet = _FULL_INTENTS;
+function _isDisallowedIntents(err) {
+    const m = (err?.message || String(err || '')).toLowerCase();
+    return m.includes('disallowed intent') || m.includes('privileged') || err?.code === 4014;
+}
+
 async function connectClient(token) {
     if (_connected && _client) return _client;
     if (_connecting) return _connecting;
@@ -75,12 +97,7 @@ async function connectClient(token) {
     _connecting = new Promise((resolve, reject) => {
         try { _client?.destroy(); } catch {}
         _client = new Client({
-            intents: [
-                GatewayIntentBits.Guilds,
-                GatewayIntentBits.GuildMessages,
-                GatewayIntentBits.MessageContent,
-                GatewayIntentBits.DirectMessages
-            ],
+            intents: _intentSet,
             partials: [Partials.Channel, Partials.Message]
         });
 
@@ -92,6 +109,11 @@ async function connectClient(token) {
             _connected = false;
             _lastError = error?.message || String(error);
             try { _client?.destroy(); } catch {}
+            if (_isDisallowedIntents(error) && _intentSet === _FULL_INTENTS) {
+                console.warn('[Discord] MessageContent intent not enabled for MAX#4417 — reconnecting without it (DMs + @mentions still work). Enable "Message Content Intent" in the Developer Portal for full channel reading.');
+                _intentSet = _BASIC_INTENTS;
+                scheduleReconnect(1000);
+            }
             reject(error);
         };
         const timeout = setTimeout(() => fail(new Error('Discord login timed out after 15s')), 15_000);
@@ -220,19 +242,17 @@ Actions:
   react        → add emoji reaction: TOOL:discord:react:{"messageId":"123","channelId":"456","emoji":"👍"}
   reconnect    → reconnect using saved credentials: TOOL:discord:reconnect:{}
   askApproval  → POST an interactive PR embed and wait for user ✅/❌: TOOL:discord:askApproval:{"channelName":"general","title":"My Patch","description":"Here is the fix","diff":"-old\n+new"}
-  listChannels → list all text channels: TOOL:discord:listChannels:{}
   status       → connection status: TOOL:discord:status:{}`,
 
-    // Set by MAX.js — routes incoming Discord messages to the heartbeat for awareness
-    onMessage: null,
+    get connected() {
+        return _connected && !!_client;
+    },
 
-    // Set by MAX.js — called when a monitored channel gets a message, returns reply string
+    onMessage: null,
     onRespond: null,
 
     actions: {
-        // ── Main setup: token → connect → save → say hello ────────────────
         async setup({ token, channelId = null }) {
-            if (!token) return { success: false, error: 'Bot token required' };
 
             const cleanToken = token.trim().replace(/^Bot\s+/i, '');
 
@@ -492,11 +512,12 @@ async function resolveChannel(channelId, channelName) {
 }
 
 // ── Auto-reconnect on boot if credentials saved ───────────────────────────
-export async function autoConnectDiscord() {
+export async function autoConnectDiscord(max) {
     const creds = loadCreds();
     if (!creds.discord?.token) return false;
     try {
         await connectClient(creds.discord.token);
+        if (max?.notifier) max.notifier.setDiscordTool(DiscordTool);
         // Restore monitored channels
         for (const channelId of (creds.discord.monitored || [])) {
             try {
