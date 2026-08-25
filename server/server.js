@@ -10,10 +10,12 @@ import { fileURLToPath } from 'url';
 import { dirname, join, relative, resolve, sep } from 'path';
 import { randomBytes }   from 'crypto';
 import { createServer as createHttpServer } from 'http';
+import { createServer as createHttpsServer } from 'https';
 import { WebSocketServer } from 'ws';
 import { applyProposal, isSomaHealthy } from '../core/SomaController.js';
 import { VirtualShell } from '../core/VirtualShell.js';
 import { getRunningProcesses, getProcessLog, setProcessLogBroadcast, setErrorExplainHandler, shutdownShellTool } from '../tools/ShellTool.js';
+import { createClusterRoutes } from './clusterRoutes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = resolve(process.cwd());
@@ -55,7 +57,11 @@ function trackRequest(sessionId, tokensUsed = 0) {
 export async function createServer(max, port = 3100) {
     const API_KEY = loadOrCreateApiKey();
     const app = express();
-    const httpServer = createHttpServer(app);
+    const tlsCertPath = process.env.MAX_TLS_CERT;
+    const tlsKeyPath = process.env.MAX_TLS_KEY;
+    const httpServer = tlsCertPath && tlsKeyPath
+        ? createHttpsServer({ cert: readFileSync(tlsCertPath), key: readFileSync(tlsKeyPath) }, app)
+        : createHttpServer(app);
     const wss = new WebSocketServer({ server: httpServer });
 
     // Maxwell streams unsaved editor buffers; the default 100kb JSON limit is too small.
@@ -69,11 +75,18 @@ export async function createServer(max, port = 3100) {
             ? origin
             : `http://localhost:${port}`;
         res.setHeader('Access-Control-Allow-Origin', allowOrigin);
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Api-Key');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Api-Key, X-Max-Cluster-Secret, X-Max-Node-Id, Idempotency-Key');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
         if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
         next();
     });
+
+    // Cluster routes use a separate shared secret so two machines do not need
+    // to copy their dashboard API keys. Mount before the general API guard.
+    app.use('/api/swarm', createClusterRoutes(max, {
+        clusterSecret: process.env.MAX_CLUSTER_SECRET,
+        apiKey: API_KEY
+    }));
 
     // ── Auth middleware — protect all API routes ───────────────────────────
     // Dashboard HTML + /health are public. Everything else requires the key.
@@ -1569,9 +1582,10 @@ Reply ONLY with JSON: {"verdict":"approve"|"deny"|"escalate","confidence":0.0-1.
         res.json({ running: false });
     });
 
+    const host = process.env.MAX_HOST || '0.0.0.0';
     await new Promise((resolve, reject) => {
-        const server = httpServer.listen(port, () => {
-            console.log(`[MAX] 🌐 API  →  http://localhost:${port}`);
+        const server = httpServer.listen(port, host, () => {
+            console.log(`[MAX] 🌐 API  →  http://${host}:${port}`);
             console.log(`[MAX]   POST /api/chat                    — streaming chat (SSE)`);
             console.log(`[MAX]   WS   /api/events                  — bidirectional (WebSockets)`);
             console.log(`[MAX]   GET  /api/events                  — SSE live feed`);

@@ -115,12 +115,14 @@ function loadEnv() {
 // ─── Parse CLI args ───────────────────────────────────────────────────────
 function parseArgs() {
     const args   = process.argv.slice(2);
-    const result = { mode: 'chat', persona: null, task: null };
+    const result = { mode: 'chat', persona: null, task: null, clusterRole: null, nodeId: null };
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--mode'    && args[i+1]) result.mode    = args[++i];
         if (args[i] === '--persona' && args[i+1]) result.persona = args[++i];
         if (args[i] === '--task'    && args[i+1]) result.task    = args[++i];
         if (args[i] === '--port'    && args[i+1]) result.port    = parseInt(args[++i]);
+        if (args[i] === '--cluster-role' && args[i+1]) result.clusterRole = args[++i];
+        if (args[i] === '--node-id' && args[i+1]) result.nodeId = args[++i];
     }
     return result;
 }
@@ -404,6 +406,9 @@ async function chatMode(max, opts = {}) {
 async function main() {
     loadEnv();
     const opts = parseArgs();
+    opts.clusterRole = String(opts.clusterRole || process.env.MAX_CLUSTER_ROLE || 'standalone').toLowerCase();
+    opts.nodeId = String(opts.nodeId || process.env.MAX_NODE_ID || `max-${process.env.COMPUTERNAME || 'local'}`);
+    if (opts.clusterRole === 'worker') opts.mode = 'api';
     console.log('[Launcher] 🚀 Booting MAX OMEGA...');
 
     // Check port BEFORE expensive initialization so we fail fast
@@ -421,7 +426,12 @@ async function main() {
         geminiKey:  process.env.GEMINI_API_KEY,
         memory:     { dbPath: join(__dirname, '.max', 'memory.db') },
         agentLoop:  { autoApproveLevel: process.env.MAX_AUTO_APPROVE || 'write' },
-        mode:       opts.mode
+        mode:       opts.mode,
+        clusterRole: opts.clusterRole,
+        nodeId: opts.nodeId,
+        clusterSecret: process.env.MAX_CLUSTER_SECRET,
+        clusterWorkers: process.env.MAX_CLUSTER_WORKERS,
+        workerCloudAllowed: process.env.MAX_WORKER_ALLOW_CLOUD === 'true'
     });
 
     console.log('[Launcher] ⚙️  Initializing core systems...');
@@ -435,11 +445,21 @@ async function main() {
     }
 }
 
-process.on('unhandledRejection', (err) => {
-    console.error('[MAX] ⚠️  Unhandled rejection:', err?.message || err);
-});
-process.on('uncaughtException', (err) => {
-    console.error('[MAX] ⚠️  Uncaught exception:', err?.message || err);
-});
+function logFatalError(type, err) {
+    const errorText = `[${new Date().toISOString()}] FATAL (${type}): ${err?.stack || err?.message || err}\n\n`;
+    console.error(`[MAX] ⚠️  ${type}:`, err?.message || err);
+    try {
+        const logsDir = join(__dirname, 'logs');
+        if (!existsSync(logsDir)) {
+            const fs = import('fs');
+            fs.then(f => f.mkdirSync(logsDir, { recursive: true })).catch(() => {});
+        }
+        const fs = import('fs');
+        fs.then(f => f.appendFileSync(join(logsDir, 'fatal.log'), errorText)).catch(() => {});
+    } catch {}
+}
 
-main().catch(err => { console.error('[MAX] Fatal:', err); process.exit(1); });
+process.on('unhandledRejection', (err) => logFatalError('Unhandled Rejection', err));
+process.on('uncaughtException', (err) => logFatalError('Uncaught Exception', err));
+
+main().catch(err => { logFatalError('Main Boot Failure', err); process.exit(1); });

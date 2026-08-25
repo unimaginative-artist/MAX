@@ -1,5 +1,5 @@
 import { parentPort, workerData } from 'worker_threads';
-import { MAX } from './core/MAX.js';
+import { MAX } from '../core/MAX.js';
 import path from 'path';
 
 /**
@@ -12,9 +12,12 @@ async function boot() {
     // Change current directory to project root so tools work correctly
     process.chdir(projectRoot);
 
-    // Initialize a "Light MAX" — no server, no discord, just the core engine
+    // A swarm thread is a bounded local worker.  Worker role prevents it from
+    // starting MAX's autonomous schedulers and disables cloud fallback.
     const max = new MAX({
-        isWorker: true,
+        clusterRole: 'worker',
+        nodeId: `swarm-${id}`,
+        workerCloudAllowed: false,
         memory: { dbPath: path.join(projectRoot, '.max', `swarm_mem_${id}.db`) }
     });
 

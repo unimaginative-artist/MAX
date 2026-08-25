@@ -78,6 +78,29 @@ import { GameAssetFetcherTool } from '../tools/GameAssetFetcher.js';
 import { SocialArbiter }         from './SocialArbiter.js';
 import { E2EWebSandboxEngine }   from './E2EWebSandboxEngine.js';
 import { NightShiftEngine }      from './NightShiftEngine.js';
+import { ASTSymbolIndexer }       from './ASTSymbolIndexer.js';
+import { TerminalAutoFixer }      from './TerminalAutoFixer.js';
+import { ExtendedThinkingChamber } from './ExtendedThinkingChamber.js';
+import { SpeculativeShadowPatcher } from './SpeculativeShadowPatcher.js';
+import { SomaOnboardRepairEngine } from './SomaOnboardRepairEngine.js';
+import { SelfPlayRLEngine }       from './SelfPlayRLEngine.js';
+import { CloudDeployerTool }      from '../tools/CloudDeployerTool.js';
+import { SpatialWorldModelEngine } from './SpatialWorldModelEngine.js';
+import { AutoTunerEngine }        from './AutoTunerEngine.js';
+import { MultiRepoPatchSynthesizer } from './MultiRepoPatchSynthesizer.js';
+import { AudioVoiceBridge }       from './AudioVoiceBridge.js';
+import { SomaChassisSynthesisEngine } from './SomaChassisSynthesisEngine.js';
+import { SomaFeatureAssemblyMatrix }  from './SomaFeatureAssemblyMatrix.js';
+import { SomaFirmwareSandbox }        from './SomaFirmwareSandbox.js';
+import { SwarmMeshProtocolEngine }    from './SwarmMeshProtocolEngine.js';
+import { NeuroSymbolicSolverEngine }  from './NeuroSymbolicSolverEngine.js';
+import { StateSpaceMemoryEngine }     from './StateSpaceMemoryEngine.js';
+import { GraphNeuralReasoningEngine } from './GraphNeuralReasoningEngine.js';
+import { ParallelToolPipeline }       from './ParallelToolPipeline.js';
+import { ToolGrammarEnforcer }        from './ToolGrammarEnforcer.js';
+import { RemoteSwarmWorker }          from './RemoteSwarmWorker.js';
+import { ClusterTaskRuntime }         from './ClusterTaskRuntime.js';
+import { ClusterControlPlane }        from './ClusterControlPlane.js';
 import { SkillEvolutionArbiter }  from './SkillEvolutionArbiter.js';
 import { SkillMutatorArbiter }    from './SkillMutatorArbiter.js';
 import { ContextPagerArbiter }    from './ContextPagerArbiter.js';
@@ -132,13 +155,14 @@ class ChatQueue {
 
     get size() { return this._queue.length; }
 }
-
 export class MAX extends EventEmitter {
     constructor(config = {}) {
         super();
         this.config = config;
         this.name   = 'MAX';
         this._ready = false;
+        this.clusterRole = String(config.clusterRole || process.env.MAX_CLUSTER_ROLE || 'standalone').toLowerCase();
+        this.nodeId = String(config.nodeId || process.env.MAX_NODE_ID || `max-${process.env.COMPUTERNAME || 'local'}`);
 
         // Core systems
         this.brain      = new Brain(this, config);
@@ -147,12 +171,25 @@ export class MAX extends EventEmitter {
         this.curiosity = new CuriosityEngine(config.curiosity);
         this.persona   = new PersonaEngine();
         this.muse      = new MuseEngine();
-        this.memory    = new MaxMemory(config.memory);
-        this.kb        = new KnowledgeBase({ dbPath: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.max', 'knowledge.db') });
-        this.profile   = new UserProfile();
+        this._subsystemErrors = [];
+
+        // Helper to safely instantiate subsystems without crashing the entire process on single-organ failure
+        this._safeInstantiate = (name, fn) => {
+            try {
+                return fn();
+            } catch (err) {
+                console.warn(`[MAX] ⚠️ Subsystem "${name}" failed to instantiate: ${err.message}. Booting without it.`);
+                this._subsystemErrors.push({ name, error: err.message, ts: new Date().toISOString() });
+                return null;
+            }
+        };
+
+        this.memory    = this._safeInstantiate('memory', () => new MaxMemory(config.memory));
+        this.kb        = this._safeInstantiate('kb', () => new KnowledgeBase({ dbPath: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.max', 'knowledge.db') }));
+        this.profile   = this._safeInstantiate('profile', () => new UserProfile());
 
         // Tools
-        this.tools     = new ToolRegistry();
+        this.tools     = this._safeInstantiate('tools', () => new ToolRegistry());
 
         // Higher systems — init after brain is ready
         this.swarm     = null;
@@ -162,55 +199,89 @@ export class MAX extends EventEmitter {
         // Autonomous systems
         this.outcomes     = null;
         this.reasoning    = null;
-        this.cognitive    = new CognitiveFilter(this);
+        this.cognitive    = this._safeInstantiate('cognitive', () => new CognitiveFilter(this));
         this.evolution    = null;
         this.goals        = null;
         this.agentLoop    = null;
-        this.poseidon     = new PoseidonResearch(this);
-        this.graph        = new RepoGraph(this);
+        this.poseidon     = this._safeInstantiate('poseidon', () => new PoseidonResearch(this));
+        this.graph        = this._safeInstantiate('graph', () => new RepoGraph(this));
         this.toolCreator  = null;
         this.selfInspector = null;
         this.reflection    = null;
-        this.indexer       = new CodeIndexer(this);
-        this.sentinel      = new Sentinel(this);
-        this.vector        = new VectorDaemon(this);
-        this.diagnostics   = new DiagnosticsSystem(this);
-        this.world         = new WorldModel(this);
-        this.artifacts     = new ArtifactManager(this);
-        this.lab           = new TestGenerator(this);
-        this.skills        = new SkillLibrary();
-        this.selfEditor    = new SelfEditor();
-        this.notifier      = new Notifier();
-        this.soma          = new SomaBridge();
-        this.edge          = new EdgeWorkerOrchestrator(this);
-        this.odyssey       = new OdysseyPlanner(this);
-        this.economics     = new EconomicsEngine(config.economics);
-        this.agentManager  = new AgentManager(this);
-        this.hydra         = new HydraController(this);
-        this.oracle        = new OracleKernel(this);
-        this.ingestion     = new UniversalIngestion(this);
-        this.dialectic     = new DialecticModel(this);
-        this.sovereign     = new SovereignLoop(this);
-        this.roadmap       = new RoadmapEngine(this);
-        this.ci              = new CIWatcher(this);
-        this.debugLoop       = new DebugLoop(this);
-        this.research        = new ResearchPipeline(this);
-        this.mcp             = new MCPRegistry(this);
-        this.selfImprovement = new SelfImprovementEngine(this);
-        this.security        = new SecurityCouncil(this);
-        this.securityPack    = new SecurityExpertisePack();
-        this.autonomy        = new AutonomyPolicy(config.autonomy);
-        this.social          = new SocialArbiter(this);
-        this.skillEvolution  = new SkillEvolutionArbiter(this);
-        this.skillMutator    = new SkillMutatorArbiter(this);
-        this.contextPager    = new ContextPagerArbiter(this);
-        this.bridge          = null; // Deprecated: server/server.js owns the active IDE WebSocket/SSE bridge.
-        this.workspaceEdits  = new WorkspaceEditArbiter(this);
-        this.semanticIndex   = new SemanticIndex(this);
-        this.grounding       = new GroundingArbiter(this);
-        this.lsp             = new LSPArbiter(this);
-        this.e2eSandbox      = new E2EWebSandboxEngine(this);
-        this.nightShift      = new NightShiftEngine(this);
+        this.indexer       = this._safeInstantiate('indexer', () => new CodeIndexer(this));
+        this.sentinel      = this._safeInstantiate('sentinel', () => new Sentinel(this));
+        this.vector        = this._safeInstantiate('vector', () => new VectorDaemon(this));
+        this.diagnostics   = this._safeInstantiate('diagnostics', () => new DiagnosticsSystem(this));
+        this.world         = this._safeInstantiate('world', () => new WorldModel(this));
+        this.artifacts     = this._safeInstantiate('artifacts', () => new ArtifactManager(this));
+        this.lab           = this._safeInstantiate('lab', () => new TestGenerator(this));
+        this.skills        = this._safeInstantiate('skills', () => new SkillLibrary());
+        this.selfEditor    = this._safeInstantiate('selfEditor', () => new SelfEditor());
+        this.notifier      = this._safeInstantiate('notifier', () => new Notifier());
+        this.soma          = this._safeInstantiate('soma', () => new SomaBridge());
+        this.edge          = this._safeInstantiate('edge', () => new EdgeWorkerOrchestrator(this));
+        this.odyssey       = this._safeInstantiate('odyssey', () => new OdysseyPlanner(this));
+        this.economics     = this._safeInstantiate('economics', () => new EconomicsEngine(config.economics));
+        this.clusterControl = this._safeInstantiate('clusterControl', () => new ClusterControlPlane({ nodeId: this.nodeId, dbPath: config.clusterDbPath }));
+        if (this.economics) this.economics.controlPlane = this.clusterControl;
+        this.agentManager  = this._safeInstantiate('agentManager', () => new AgentManager(this));
+        this.hydra         = this._safeInstantiate('hydra', () => new HydraController(this));
+        this.oracle        = this._safeInstantiate('oracle', () => new OracleKernel(this));
+        this.ingestion     = this._safeInstantiate('ingestion', () => new UniversalIngestion(this));
+        this.dialectic     = this._safeInstantiate('dialectic', () => new DialecticModel(this));
+        this.sovereign     = this._safeInstantiate('sovereign', () => new SovereignLoop(this));
+        this.roadmap       = this._safeInstantiate('roadmap', () => new RoadmapEngine(this));
+        this.ci              = this._safeInstantiate('ci', () => new CIWatcher(this));
+        this.debugLoop       = this._safeInstantiate('debugLoop', () => new DebugLoop(this));
+        this.research        = this._safeInstantiate('research', () => new ResearchPipeline(this));
+        this.mcp             = this._safeInstantiate('mcp', () => new MCPRegistry(this));
+        this.selfImprovement = this._safeInstantiate('selfImprovement', () => new SelfImprovementEngine(this));
+        this.security        = this._safeInstantiate('security', () => new SecurityCouncil(this));
+        this.securityPack    = this._safeInstantiate('securityPack', () => new SecurityExpertisePack());
+        this.autonomy        = this._safeInstantiate('autonomy', () => new AutonomyPolicy(config.autonomy));
+        this.social          = this._safeInstantiate('social', () => new SocialArbiter(this));
+        this.skillEvolution  = this._safeInstantiate('skillEvolution', () => new SkillEvolutionArbiter(this));
+        this.skillMutator    = this._safeInstantiate('skillMutator', () => new SkillMutatorArbiter(this));
+        this.contextPager    = this._safeInstantiate('contextPager', () => new ContextPagerArbiter(this));
+        this.bridge          = null;
+        this.workspaceEdits  = this._safeInstantiate('workspaceEdits', () => new WorkspaceEditArbiter(this));
+        this.semanticIndex   = this._safeInstantiate('semanticIndex', () => new SemanticIndex(this));
+        this.grounding       = this._safeInstantiate('grounding', () => new GroundingArbiter(this));
+        this.lsp             = this._safeInstantiate('lsp', () => new LSPArbiter(this));
+        this.e2eSandbox      = this._safeInstantiate('e2eSandbox', () => new E2EWebSandboxEngine(this));
+        this.nightShift      = this._safeInstantiate('nightShift', () => new NightShiftEngine(this));
+        this.astIndexer      = this._safeInstantiate('astIndexer', () => new ASTSymbolIndexer(this));
+        this.autoFixer       = this._safeInstantiate('autoFixer', () => new TerminalAutoFixer(this));
+        this.extendedThinking = this._safeInstantiate('extendedThinking', () => new ExtendedThinkingChamber(this));
+        this.shadowPatcher   = this._safeInstantiate('shadowPatcher', () => new SpeculativeShadowPatcher(this));
+        this.somaRepair      = this._safeInstantiate('somaRepair', () => new SomaOnboardRepairEngine(this));
+        this.selfPlayRL      = this._safeInstantiate('selfPlayRL', () => new SelfPlayRLEngine(this));
+        this.cloudDeployer   = this._safeInstantiate('cloudDeployer', () => new CloudDeployerTool(this));
+        this.spatialWorld    = this._safeInstantiate('spatialWorld', () => new SpatialWorldModelEngine(this));
+        this.autoTuner       = this._safeInstantiate('autoTuner', () => new AutoTunerEngine(this));
+        this.multiRepo       = this._safeInstantiate('multiRepo', () => new MultiRepoPatchSynthesizer(this));
+        this.audioVoice      = this._safeInstantiate('audioVoice', () => new AudioVoiceBridge(this));
+        this.somaChassis     = this._safeInstantiate('somaChassis', () => new SomaChassisSynthesisEngine(this));
+        this.somaMatrix      = this._safeInstantiate('somaMatrix', () => new SomaFeatureAssemblyMatrix(this));
+        this.somaFirmware    = this._safeInstantiate('somaFirmware', () => new SomaFirmwareSandbox(this));
+        this.swarmMesh       = this._safeInstantiate('swarmMesh', () => new SwarmMeshProtocolEngine(this));
+        this.neuroSolver     = this._safeInstantiate('neuroSolver', () => new NeuroSymbolicSolverEngine(this));
+        this.stateMemory     = this._safeInstantiate('stateMemory', () => new StateSpaceMemoryEngine(this));
+        this.graphReasoning  = this._safeInstantiate('graphReasoning', () => new GraphNeuralReasoningEngine(this));
+        this.parallelPipeline = this._safeInstantiate('parallelPipeline', () => new ParallelToolPipeline(this));
+        this.grammarEnforcer = this._safeInstantiate('grammarEnforcer', () => new ToolGrammarEnforcer(this));
+        this.clusterTasks    = this._safeInstantiate('clusterTasks', () => new ClusterTaskRuntime(this, {
+            role: this.clusterRole,
+            nodeId: this.nodeId,
+            secret: config.clusterSecret,
+            workerCloudAllowed: config.workerCloudAllowed
+        }));
+        this.remoteSwarm     = this._safeInstantiate('remoteSwarm', () => new RemoteSwarmWorker(this, {
+            nodeId: this.nodeId,
+            secret: config.clusterSecret,
+            workers: config.clusterWorkers,
+            controlPlane: this.clusterControl
+        }));
 
         // State flags
         this.isThinking       = false;
@@ -339,6 +410,38 @@ export class MAX extends EventEmitter {
         this.tools.register(GameAssetFetcherTool);
         this._installAutonomyPolicy();
 
+        await this.clusterTasks?.initialize?.();
+        await this.remoteSwarm?.initialize?.();
+        if (this.clusterRole !== 'worker') this.clusterControl?.acquireLeadership?.();
+
+        this.tools.register({
+            name: 'cluster',
+            description: `Delegate bounded work to authenticated remote MAX worker nodes.
+Actions:
+  status           → show real worker health and receipts: TOOL:cluster:status:{}
+  refresh          → probe a worker: TOOL:cluster:refresh:{"workerId":"machine_b"}
+  dispatch         → run a reason/verify/swarm task remotely: TOOL:cluster:dispatch:{"workerId":"machine_b","kind":"reason","prompt":"..."}
+  soma_improvement → ask a remote worker for an evidence-grounded SOMA improvement proposal: TOOL:cluster:soma_improvement:{"workerId":"machine_b","request":"...","files":["C:/path/to/file.js"]}
+
+Remote workers never promote SOMA changes. Any proposed change must return through SOMA's governed self-modification pipeline.`,
+            actions: {
+                status: async () => ({ success: true, ...this.remoteSwarm.getStatus(), local: this.clusterTasks.getStatus() }),
+                refresh: async ({ workerId }) => ({ success: true, worker: await this.remoteSwarm.refreshWorker(workerId) }),
+                dispatch: async ({ workerId, kind = 'reason', title = '', prompt = '', command = '', cwd = '', files = [], context = '', timeoutMs = null }) => {
+                    const selected = workerId || this.remoteSwarm.selectWorker(kind)?.id;
+                    if (!selected) return { success: false, error: `No online worker supports ${kind}` };
+                    const task = await this.remoteSwarm.dispatchTaskToWorker(selected, { kind, title, prompt, command, cwd, files, context }, { timeoutMs });
+                    return { success: true, task };
+                },
+                soma_improvement: async ({ workerId, request, title = '', files = [], context = '', timeoutMs = null }) => {
+                    const selected = workerId || this.remoteSwarm.selectWorker('soma_improvement')?.id;
+                    if (!selected) return { success: false, error: 'No online SOMA-improvement worker is available' };
+                    const task = await this.remoteSwarm.dispatchSomaImprovement(selected, request, { title, files, context, timeoutMs });
+                    return { success: true, task, nextStep: 'Submit the returned proposal through SOMA SelfModificationPipeline; do not apply it directly.' };
+                }
+            }
+        });
+
         // DiscordTool owns transport; MAX owns cognition. Keep Discord turns in
         // the same serialized chat queue as local turns, but never execute
         // inline tools from an unsolicited channel message.
@@ -387,8 +490,11 @@ export class MAX extends EventEmitter {
                     : `SOMA is offline. I verified that against her health endpoint and queued goal ${id || ''} to inspect process state/logs. I will report back here shortly.`;
             }
 
-            const researchOrEngineeringIntent = /\b(scour|search|find|crawl|look for|research|fetch|scan|review|analyze|gather|compile|fix|patch|debug|diagnose|investigate|audit|implement|build|test|check|repair|find out|figure out)\b/i.test(content)
-                || /\b(github|repo|repos|paper|papers|asi|architecture|soma|marionette|code|codebase|server|discord|bridge|executor|goal|agent|tool|file|bug|error|broken|not working|failing|down|unreachable)\b/i.test(content);
+            const isCasualGreeting = /^(test|hello|hi|hey|yo|ping|pong|awake|u awake|are you awake)\b/i.test(content) && content.split(/\s+/).length <= 4;
+            const researchOrEngineeringIntent = !isCasualGreeting && (
+                /\b(scour|search|find|crawl|look for|research|fetch|scan|review|analyze|gather|compile|fix|patch|debug|diagnose|investigate|audit|implement|build|test|check|repair|find out|figure out)\b/i.test(content)
+                || /\b(github|repo|repos|paper|papers|asi|architecture|soma|marionette|code|codebase|server|discord|bridge|executor|goal|agent|tool|file|bug|error|broken|not working|failing|down|unreachable)\b/i.test(content)
+            );
 
             if (researchOrEngineeringIntent && isAuthorizedDiscordOperator(payload?.authorId) && this.goals?.addGoal) {
                 const title = `Discord task: ${content.slice(0, 100)}`;
@@ -942,8 +1048,8 @@ Actions:
     _scheduleBackgroundLoops() {
         const configured = Number(process.env.MAX_BACKGROUND_START_DELAY_MS);
         const mode = this.config.mode || this.config.runtimeMode || 'chat';
-        if (mode === 'api' && process.env.MAX_API_BACKGROUND !== 'true') {
-            console.log('[MAX] API mode — background loops disabled by default (set MAX_API_BACKGROUND=true to enable)');
+        if (mode === 'api' && process.env.MAX_API_BACKGROUND === 'false') {
+            console.log('[MAX] API mode — background loops disabled (MAX_API_BACKGROUND=false)');
             return;
         }
 
@@ -1062,6 +1168,11 @@ Actions:
                     });
                 }
             });
+        }
+
+        if (this.clusterRole === 'worker') {
+            console.log(`[MAX] 🧰 Worker-only mode active (${this.nodeId}). Autonomous heartbeat, schedules, external integrations, and eager goals are disabled.`);
+            return;
         }
 
         // Start heartbeat (drives AgentLoop + curiosity cycles)
@@ -1595,3 +1706,4 @@ Actions:
         };
     }
 }
+

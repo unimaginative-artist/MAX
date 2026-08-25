@@ -55,7 +55,7 @@ export class Brain {
         this.smartTimeout = config.smartTimeout || 120_000;  // 2 min for chat/reasoning
         this.codeTimeout  = config.codeTimeout  || 900_000;  // 15 min for large code generation
         this.timeout      = this.codeTimeout;                // legacy alias used by _deepseek default
-        this.fastTimeout  = config.fastTimeout  || 90_000;
+        this.fastTimeout  = config.fastTimeout  || 240_000; // 4 minutes for 14B local models
 
         // ── Fast tier config ─────────────────────────────────────────────
         // Local Ollama ONLY — heartbeats, yes/no checks, quick acks, verification
@@ -92,6 +92,12 @@ export class Brain {
 
     get economics() {
         return this.max?.economics;
+    }
+
+    _cloudAllowed() {
+        const role = String(this.max?.clusterRole || process.env.MAX_CLUSTER_ROLE || 'standalone').toLowerCase();
+        if (role === 'worker' && process.env.MAX_WORKER_ALLOW_CLOUD !== 'true') return false;
+        return !this.max?.economics?.isOverBudget?.();
     }
 
     // ─── Initialize — probe all backends ─────────────────────────────────
@@ -143,8 +149,15 @@ export class Brain {
     // tier: 'fast' | 'smart' | 'code' — code goes straight to DeepSeek, bypassing local Ollama
     // onToken: optional (token: string) => void callback for streaming output
     // messages: optional pre-built messages array for multi-turn conversation history
-    async think(prompt, { systemPrompt = '', temperature = 0.7, maxTokens = 2048, tier = 'smart', onToken = null, messages = null, signal = null } = {}) {
+    async think(prompt, { systemPrompt = '', temperature = 0.7, maxTokens = 2048, tier = 'fast', onToken = null, messages = null, signal = null } = {}) {
         if (!this._ready) throw new Error('Brain not initialized — call initialize() first');
+
+        // Automatic Local-First Tier & Scratchpad Thinking Enhancement
+        const isCodingTask = /\b(function|class|export|import|const|let|async|await|bug|refactor|test|code|fix)\b/i.test(prompt);
+        if (isCodingTask && !systemPrompt.includes('<thinking>')) {
+            systemPrompt = (systemPrompt ? systemPrompt + '\n\n' : '') +
+                `CRITICAL REASONING PROTOCOL: Before writing code or tool calls, formulate your step-by-step logic and null/type invariants inside <thinking> ... </thinking>. Then provide clean, verifiable, production-ready code.`;
+        }
 
         // Hard token budget guard — prevents context overflow errors.
         // Rough estimate: 1 token ≈ 4 chars. Reserve maxTokens for completion.
@@ -170,14 +183,15 @@ export class Brain {
             else tier = 'smart';
         }
 
-        // Hard budget guard — block cloud API calls when daily cap exceeded
+        // A spent coordinator and cloud-disabled worker continue locally.
         const econ = this.max?.economics;
         if (econ?.isOverBudget() && tier !== 'fast') {
             const budget = econ.getBudgetStatus();
-            const msg = `Daily budget cap reached ($${budget.used.toFixed(2)} / $${budget.cap.toFixed(2)}). Set MAX_DAILY_BUDGET in config/api-keys.env to increase.`;
-            console.warn(`[Brain] 💰 ${msg}`);
-            if (onToken) onToken(`[Budget cap reached — ${msg}]`);
-            return { text: `Budget cap reached. Used $${budget.used.toFixed(2)} of $${budget.cap.toFixed(2)} today.`, metadata: { model: 'budget_cap', tokens: 0, latency: 0, backend: 'none' } };
+            console.warn(`[Brain] 💰 Daily budget cap reached ($${budget.used.toFixed(2)} / $${budget.cap.toFixed(2)}). Routing locally.`);
+            tier = 'fast';
+        }
+        if (String(this.max?.clusterRole || '').toLowerCase() === 'worker' && process.env.MAX_WORKER_ALLOW_CLOUD !== 'true') {
+            tier = 'fast';
         }
 
         let result;
@@ -214,24 +228,54 @@ export class Brain {
                 }
             }
         }
+        // Never let a local failure bypass the shared budget or worker policy.
+        const econ = this.max?.economics;
+        if (!this._cloudAllowed()) {
+            const budget = econ?.getBudgetStatus?.();
+            const reason = String(this.max?.clusterRole || '').toLowerCase() === 'worker'
+                ? 'cloud fallback is disabled in worker mode'
+                : `daily budget cap reached ($${budget?.used?.toFixed?.(2) || '?'} / $${budget?.cap?.toFixed?.(2) || '?'})`;
+            console.warn(`[Brain] 💰 Local model unavailable and ${reason}.`);
+            return { text: `[Local model unavailable; ${reason}]`, metadata: { model: 'cloud_blocked', tokens: 0, latency: 0, backend: 'none' } };
+        }
         // Ollama down/disabled — fall back to DeepSeek with a cost-capped token limit
         return this._runSmart(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages, signal);
     }
 
     // ─── Code tier — deepseek-reasoner (deep thinking for code) ──────────
     async _runCode(prompt, systemPrompt, temperature, maxTokens, onToken = null, messages = null, signal = null) {
-        if (this._validKey(this._smart.deepseekKey)) {
-            return this._deepseek(prompt, systemPrompt, temperature, maxTokens, this._smart.deepseekCodeModel, onToken, messages, this.codeTimeout, signal);
+        const econ = this.max?.economics;
+        if (!this._cloudAllowed()) {
+            console.warn(`[Brain] 💰 Cloud code tier unavailable — routing to local fast model`);
+            return this._runFast(prompt, systemPrompt, temperature, maxTokens, onToken, messages, signal);
         }
-        throw new Error('Code tier unavailable — add DEEPSEEK_API_KEY to config/api-keys.env');
+
+        if (this._validKey(this._smart.deepseekKey)) {
+            try {
+                return await this._deepseek(prompt, systemPrompt, temperature, maxTokens, this._smart.deepseekCodeModel, onToken, messages, this.codeTimeout, signal);
+            } catch (err) {
+                console.warn(`[Brain] Code tier DeepSeek error: ${err.message} — falling back to Ollama fast tier`);
+                return this._runFast(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages, signal);
+            }
+        }
+        return this._runFast(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages, signal);
     }
 
     // ─── Smart tier execution — MAX-owned providers only ─────────────────
     async _runSmart(prompt, systemPrompt, temperature, maxTokens, onToken = null, messages = null, signal = null) {
-        // SOMA's /chat route applies SOMA's identity kernel. Using it as MAX's
-        // conversational backend makes the two agents claim each other's identity.
+        const econ = this.max?.economics;
+        if (!this._cloudAllowed()) {
+            console.warn(`[Brain] 💰 Cloud smart tier unavailable — routing to local fast model`);
+            return this._runFast(prompt, systemPrompt, temperature, maxTokens, onToken, messages, signal);
+        }
+
         if (this._validKey(this._smart.deepseekKey)) {
-            return this._deepseek(prompt, systemPrompt, temperature, maxTokens, null, onToken, messages, this.smartTimeout, signal);
+            try {
+                return await this._deepseek(prompt, systemPrompt, temperature, maxTokens, null, onToken, messages, this.smartTimeout, signal);
+            } catch (err) {
+                console.warn(`[Brain] Smart tier DeepSeek error: ${err.message} — falling back to Ollama fast tier`);
+                return this._runFast(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages, signal);
+            }
         }
         return this._runFast(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages, signal);
     }
@@ -248,13 +292,21 @@ export class Brain {
 
         const model = modelOverride || this._smart.deepseekModel;
         const useStream = !!onToken;
+        const econ = this.max?.economics;
+        const estimatedInputTokens = Math.ceil(JSON.stringify(messages).length / 4);
+        const reservationId = econ?.reserveUsage?.(model, estimatedInputTokens, maxTokens) ?? null;
+        if (econ?.reserveUsage && !reservationId) {
+            throw new Error('Cloud budget reservation denied');
+        }
+        let reservationSettled = false;
 
-        // Combine timeout with user signal if provided
-        const fetchSignal = (signal && typeof AbortSignal.any === 'function')
-            ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs || this.timeout)])
-            : (signal || AbortSignal.timeout(timeoutMs || this.timeout));
+        try {
+            // Combine timeout with user signal if provided
+            const fetchSignal = (signal && typeof AbortSignal.any === 'function')
+                ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs || this.timeout)])
+                : (signal || AbortSignal.timeout(timeoutMs || this.timeout));
 
-        const res = await fetch(`${this._smart.deepseekUrl}/chat/completions`, {
+            const res = await fetch(`${this._smart.deepseekUrl}/chat/completions`, {
             method:  'POST',
             headers: {
                 'Content-Type':  'application/json',
@@ -270,10 +322,10 @@ export class Brain {
             signal: fetchSignal
         });
 
-        if (!res.ok) {
-            const err = await res.text();
-            throw new Error(`DeepSeek ${res.status}: ${err}`);
-        }
+            if (!res.ok) {
+                const err = await res.text();
+                throw new Error(`DeepSeek ${res.status}: ${err}`);
+            }
 
         if (useStream) {
             // SSE streaming — fire onToken per chunk, return full text when done
@@ -319,9 +371,9 @@ export class Brain {
                     backend: 'deepseek'
                 }
             };
-            const econ = this.max?.economics;
             if (econ && typeof econ.recordUsage === 'function') {
-                econ.recordUsage(model, prompt.length / 4, totalTokens);
+                econ.recordUsage(model, prompt.length / 4, totalTokens, reservationId);
+                reservationSettled = true;
             }
             return result;
         }
@@ -329,9 +381,9 @@ export class Brain {
         // Non-streaming path
         const data = await res.json();
         const usage = data.usage || { prompt_tokens: prompt.length / 4, completion_tokens: 0 };
-        const econ = this.max?.economics;
         if (econ && typeof econ.recordUsage === 'function') {
-            econ.recordUsage(model, usage.prompt_tokens, usage.completion_tokens);
+            econ.recordUsage(model, usage.prompt_tokens, usage.completion_tokens, reservationId);
+            reservationSettled = true;
         }
         return {
             text: data.choices?.[0]?.message?.content?.trim() || '',
@@ -341,7 +393,10 @@ export class Brain {
                 latency: Date.now() - start,
                 backend: 'deepseek'
             }
-        };
+            };
+        } finally {
+            if (!reservationSettled && reservationId) econ?.releaseReservation?.(reservationId);
+        }
     }
 
     async _ollama(model, prompt, systemPrompt, temperature, maxTokens, timeoutMs = null, onToken = null, prebuiltMessages = null, signal = null) {
