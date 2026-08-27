@@ -84,6 +84,7 @@ export class Brain {
         // Circuit breaker — after N fast-tier timeouts, stop hitting Ollama this session
         this._fastFailures = 0;
         this._fastDisabled = false;
+        this._deepseekDisabledReason = null;
         this._warmupPromise = null; // resolves when Ollama model is loaded into VRAM
 
         // Convenience: _ready is true if at least one tier works
@@ -95,9 +96,25 @@ export class Brain {
     }
 
     _cloudAllowed() {
+        if (this._deepseekDisabledReason) return false;
         const role = String(this.max?.clusterRole || process.env.MAX_CLUSTER_ROLE || 'standalone').toLowerCase();
         if (role === 'worker' && process.env.MAX_WORKER_ALLOW_CLOUD !== 'true') return false;
         return !this.max?.economics?.isOverBudget?.();
+    }
+
+    _disableDeepseekOnAccountError(error) {
+        const message = String(error?.message || error || '');
+        if (!/(?:\b402\b|insufficient balance|payment required|quota exceeded|billing)/i.test(message)) return false;
+        this._deepseekDisabledReason = message.slice(0, 240);
+        console.warn('[Brain] DeepSeek disabled for this session after an account/balance rejection; routing locally.');
+        return true;
+    }
+
+    _cloudBlockedReason() {
+        if (this._deepseekDisabledReason) return 'DeepSeek is unavailable for this session after an account/balance rejection';
+        if (String(this.max?.clusterRole || '').toLowerCase() === 'worker') return 'cloud fallback is disabled in worker mode';
+        const budget = this.max?.economics?.getBudgetStatus?.();
+        return `daily budget cap reached ($${budget?.used?.toFixed?.(2) || '?'} / $${budget?.cap?.toFixed?.(2) || '?'})`;
     }
 
     // ─── Initialize — probe all backends ─────────────────────────────────
@@ -231,10 +248,7 @@ export class Brain {
         // Never let a local failure bypass the shared budget or worker policy.
         const econ = this.max?.economics;
         if (!this._cloudAllowed()) {
-            const budget = econ?.getBudgetStatus?.();
-            const reason = String(this.max?.clusterRole || '').toLowerCase() === 'worker'
-                ? 'cloud fallback is disabled in worker mode'
-                : `daily budget cap reached ($${budget?.used?.toFixed?.(2) || '?'} / $${budget?.cap?.toFixed?.(2) || '?'})`;
+            const reason = this._cloudBlockedReason();
             console.warn(`[Brain] 💰 Local model unavailable and ${reason}.`);
             return { text: `[Local model unavailable; ${reason}]`, metadata: { model: 'cloud_blocked', tokens: 0, latency: 0, backend: 'none' } };
         }
@@ -254,6 +268,7 @@ export class Brain {
             try {
                 return await this._deepseek(prompt, systemPrompt, temperature, maxTokens, this._smart.deepseekCodeModel, onToken, messages, this.codeTimeout, signal);
             } catch (err) {
+                this._disableDeepseekOnAccountError(err);
                 console.warn(`[Brain] Code tier DeepSeek error: ${err.message} — falling back to Ollama fast tier`);
                 return this._runFast(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages, signal);
             }
@@ -273,6 +288,7 @@ export class Brain {
             try {
                 return await this._deepseek(prompt, systemPrompt, temperature, maxTokens, null, onToken, messages, this.smartTimeout, signal);
             } catch (err) {
+                this._disableDeepseekOnAccountError(err);
                 console.warn(`[Brain] Smart tier DeepSeek error: ${err.message} — falling back to Ollama fast tier`);
                 return this._runFast(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages, signal);
             }
@@ -517,11 +533,13 @@ export class Brain {
     }
 
     getStatus() {
+        const localOnly = Boolean(this._deepseekDisabledReason);
         return {
             ready: this._ready,
             fast:  { backend: this._fast.backend,  model: this._fast.ollamaModel,     ready: this._fast.ready  },
-            smart: { backend: this._smart.backend, model: this._smart.deepseekModel,  ready: this._smart.ready },
-            code:  { backend: this._smart.backend, model: this._smart.deepseekCodeModel, ready: this._smart.ready },
+            smart: { backend: localOnly ? this._fast.backend : this._smart.backend, model: localOnly ? this._fast.ollamaModel : this._smart.deepseekModel,  ready: localOnly ? this._fast.ready : this._smart.ready },
+            code:  { backend: localOnly ? this._fast.backend : this._smart.backend, model: localOnly ? this._fast.ollamaModel : this._smart.deepseekCodeModel, ready: localOnly ? this._fast.ready : this._smart.ready },
+            cloudDisabledReason: this._deepseekDisabledReason
         };
     }
 }
