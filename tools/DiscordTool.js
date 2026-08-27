@@ -22,6 +22,12 @@ function loadCreds() {
     } catch { return {}; }
 }
 
+function configuredDiscordToken(creds = loadCreds()) {
+    return String(creds.discord?.token || process.env.DISCORD_BOT_TOKEN || '')
+        .trim()
+        .replace(/^Bot\s+/i, '');
+}
+
 function saveCreds(update) {
     const dir = path.dirname(CREDS_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -214,7 +220,7 @@ async function connectClient(token) {
 }
 
 function scheduleReconnect(delayMs = 30_000) {
-    if (_reconnectTimer || _connected || !loadCreds().discord?.token) return;
+    if (_reconnectTimer || _connected || !configuredDiscordToken()) return;
     _reconnectTimer = setTimeout(async () => {
         _reconnectTimer = null;
         _reconnectAttempts += 1;
@@ -485,7 +491,7 @@ Actions:
 
         async reconnect() {
             const creds = loadCreds();
-            if (!creds.discord?.token) return { success: false, error: 'No saved Discord token' };
+            if (!configuredDiscordToken(creds)) return { success: false, error: 'No configured Discord token' };
             if (_reconnectTimer) {
                 clearTimeout(_reconnectTimer);
                 _reconnectTimer = null;
@@ -514,9 +520,10 @@ async function resolveChannel(channelId, channelName) {
 // ── Auto-reconnect on boot if credentials saved ───────────────────────────
 export async function autoConnectDiscord(max) {
     const creds = loadCreds();
-    if (!creds.discord?.token) return false;
+    const token = configuredDiscordToken(creds);
+    if (!token) return false;
     try {
-        await connectClient(creds.discord.token);
+        await connectClient(token);
         if (max?.notifier) max.notifier.setDiscordTool(DiscordTool);
         // Restore monitored channels
         for (const channelId of (creds.discord.monitored || [])) {

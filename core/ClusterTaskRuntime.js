@@ -309,7 +309,26 @@ export class ClusterTaskRuntime {
         }
         const cwd = path.resolve(payload.cwd || process.cwd());
         if (!this.allowedRoots.some(root => within(root, cwd))) throw new Error('Verification cwd is outside the worker allowlist');
-        const result = await this.max?.tools?.execute?.('shell', 'run', { command, cwd, timeoutMs: 15 * 60_000 });
+        const registry = this.max?.tools;
+        let result;
+        // Cluster files may be synced independently during a rolling two-node
+        // upgrade. Older ToolRegistry builds expose execute() but not the
+        // resolveCall() method used by the latest implementation. Dispatch the
+        // already allowlisted command through the registered shell action in
+        // that narrow compatibility case so workers do not advertise healthy
+        // verification capability and then fail every task.
+        if (typeof registry?.resolveCall === 'function') {
+            result = await registry.execute('shell', 'run', { command, cwd, timeoutMs: 15 * 60_000 });
+        } else {
+            const shellTool = registry?.get?.('shell') || registry?._tools?.get?.('shell');
+            if (typeof shellTool?.actions?.run === 'function') {
+                result = await shellTool.actions.run({ command, cwd, timeoutMs: 15 * 60_000 });
+            } else if (typeof shellTool?.run === 'function') {
+                result = await shellTool.run({ action: 'run', command, cwd, timeoutMs: 15 * 60_000 });
+            } else {
+                throw new Error('Worker shell verification runtime is unavailable');
+            }
+        }
         if (!result || result.success === false || Number(result.code ?? 0) !== 0) throw new Error(`Verification failed: ${clip(result?.stderr || result?.error || result?.stdout, 8_000)}`);
         return { command, cwd, code: Number(result.code || 0), stdout: clip(result.stdout, 40_000), stderr: clip(result.stderr, 8_000) };
     }
