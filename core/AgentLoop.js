@@ -16,7 +16,6 @@
 import { EventEmitter } from 'events';
 import fs   from 'fs/promises';
 import path from 'path';
-import { commandPolicy }  from './CommandPolicyEngine.js';
 import { LoopSelector }   from './LoopSelector.js';
 import { ExploreLoop }    from './loops/ExploreLoop.js';
 import { BuildLoop }      from './loops/BuildLoop.js';
@@ -60,14 +59,13 @@ export class AgentLoop extends EventEmitter {
             ...config
         };
 
-        this._running               = false;
-        this._busy                  = false;
-        this._pendingApproval       = null;   // { resolve, reject, description }
-        this._interrupted           = false;
-        this._abortController       = null;
-        this._interruptFile         = path.join(process.cwd(), '.max', 'interrupt_state.json');
-        this._toolFailures          = new Map();
-        this._pendingClarifications = new Map(); // goalId → { resolve, timer }
+        this._running         = false;
+        this._busy            = false;
+        this._pendingApproval = null;   // { resolve, reject, description }
+        this._interrupted     = false;  // set by interrupt() to pause at next wave boundary
+        this._abortController = null;   // cancels the active brain/tool call immediately
+        this._interruptFile   = path.join(process.cwd(), '.max', 'interrupt_state.json');
+        this._toolFailures    = new Map(); // toolName -> count (Level 4 Meta-Correction)
 
         // â”€â”€ Loop dispatch infrastructure â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         this._selector = new LoopSelector();
@@ -154,32 +152,14 @@ export class AgentLoop extends EventEmitter {
             return null;
         }
 
-        try {
-            // ── 1.5 Clarification gate — ask before diving in ─────────────────
-            if (goal.source === 'user' && !goal._clarified) {
-            goal._clarified = true;
-            const questions = await this._getClarifyingQuestions(goal);
-            if (questions?.length) {
-                this.emit('clarificationNeeded', {
-                    goalId: goal.id, goalTitle: goal.title, questions, timeoutMs: 300_000
-                });
-                const answers = await this._waitForClarification(goal.id, 300_000);
-                if (answers) {
-                    goal.description = (goal.description || '') + '\n\nClarifications from user:\n' + answers;
-                    console.log(`  [AgentLoop] 💬 Clarification received — proceeding with context`);
-                } else {
-                    console.log(`  [AgentLoop] ⏱️  Clarification timeout — proceeding with assumptions`);
-                }
-            }
-        }
-
-        // ── 1.6 Route to specialized loop if applicable ───────────────────
+        // ── 1.5 Route to specialized loop if applicable ───────────────────
         const { loop, confidence, rationale } = this._selector.classify(goal);
 
         if (loop !== 'default') {
             console.log(`  [AgentLoop] ðŸ”€ Loop: ${loop} (confidence: ${(confidence * 100).toFixed(0)}% â€” ${rationale})`);
             const loopHandler = this._loops[loop];
             if (loopHandler) {
+                this._startProgressPing(goal, loop);
                 try {
                     const result = await loopHandler.run(goal, this.max, this);
                     // Surface the result as an insight so the launcher can show it
@@ -190,6 +170,9 @@ export class AgentLoop extends EventEmitter {
                             : `âš ï¸  Blocked (${loop}): ${goal.title}`,
                         result: result?.summary || goal.title
                     });
+                    // Specialized loops used to return without the report-back
+                    // reflex — every explore/build goal completed silently.
+                    await this._reportBack(goal, result?.success !== false, result?.summary || '');
                     return result;
                 } catch (err) {
                     this.emit('insight', {
@@ -234,6 +217,7 @@ export class AgentLoop extends EventEmitter {
 
         console.log(`\n[AgentLoop] ðŸŽ¯ Goal: "${goal.title}" (${goal.steps.length} steps)`);
         this.stats.goalsStarted++;
+        this._startProgressPing(goal, 'default');
 
         this.emit('goalStart', { goal });
 
@@ -548,6 +532,10 @@ export class AgentLoop extends EventEmitter {
 
         goalSuccess ? drive?.onGoalComplete(goal.title) : null;
 
+        // ─── REPORT BACK REFLEX ──────────────────────────────────────────
+        await this._reportBack(goal, goalSuccess, goalSummary);
+        // ─────────────────────────────────────────────────────────────────
+
         // Crystallize successful runs into reusable skills (fire-and-forget)
         if (goalSuccess && stepResults.length > 0) {
             this.max.skills?.encodeFromRun(goal, stepResults, this.max.agentBrain).catch(() => {});
@@ -575,13 +563,12 @@ export class AgentLoop extends EventEmitter {
         });
 
         // â”€â”€ 7. Proactive background messaging â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        // Notify Barry only for goals he explicitly requested
-        if (goal.source === 'user' || goal.source === 'clarification') {
-            const msgText = goalSuccess
-                ? `Done: **${goal.title}**\n\n${goalSummary || 'No additional details.'}`
-                : `Hit a wall on: **${goal.title}**\n\n${goalSummary || 'Could not complete.'}`;
-            this.max.say(msgText, goal.source);
-        }
+        this.max.say(
+            goalSuccess 
+                ? `I've successfully completed the background task: "${goal.title}".` 
+                : `I've hit a roadblock with the background task: "${goal.title}".`,
+            goalSuccess ? "Success" : "Blocked"
+        );
 
         // Store in memory
         this.max.memory?.remember(insightResult, { goal: goal.title, source: 'agent_loop' }, {
@@ -591,21 +578,66 @@ export class AgentLoop extends EventEmitter {
 
         this.emit('goalDone', { goal, success: goalSuccess });
         return { goal: goal.title, success: goalSuccess, summary: goalSummary };
-        } finally {
-            if (goal && goal.id) {
-                try {
-                    const shellTool = this.max.tools.get('shell');
-                    if (shellTool && shellTool.actions && shellTool.actions.cleanupSession) {
-                        await shellTool.actions.cleanupSession({ sessionId: goal.id });
-                    }
-                } catch (err) {
-                    console.warn(`  [AgentLoop] Failed to cleanup shell session ${goal.id}:`, err.message);
-                }
-            }
-        }
     }
 
     // ─── Execute a single step ─────────────────────────────────────────────
+    /**
+     * Report a goal outcome to Barry. Tries the Discord tool first (thread-aware
+     * for discord-sourced goals), falls back to the Notifier when the tool is not
+     * connected. Barry's #1 complaint (Jul 2026): "MAX never seems to get back to
+     * me when he's done with a task" — silence is no longer an option here.
+     */
+    async _reportBack(goal, goalSuccess, goalSummary) {
+        // Every completion path funnels through here — stop the progress ping.
+        if (this._progressTimer) { clearInterval(this._progressTimer); this._progressTimer = null; }
+        const summaryLine = (goalSummary || 'Check my logs for details.').slice(0, 600);
+        try {
+            const discord = this.max.tools?.get('discord');
+            if (discord && discord.connected) {
+                if (goal.source === 'discord' && goal.channelId) {
+                    const message = goalSuccess ? `✅ I just finished: **${goal.title}**.\n*${summaryLine}*`
+                                                : `❌ I couldn't complete: **${goal.title}**.\n*${summaryLine}*`;
+                    if (goal.messageId) {
+                        await this.max.tools.execute('discord', 'reply', { messageId: goal.messageId, channelName: goal.channelId, message, __approvedExternal: true, __source: 'discord' }).catch(() => {});
+                    } else {
+                        await this.max.tools.execute('discord', 'send', { channelName: goal.channelId, message, __approvedExternal: true, __source: 'discord' }).catch(() => {});
+                    }
+                } else {
+                    const message = goalSuccess ? `🧠 **Autonomous Task Completed**:\n**${goal.title}**\n*${summaryLine}*`
+                                                : `⚠️ **Autonomous Task Failed**:\n**${goal.title}**\n*${summaryLine}*`;
+                    await this.max.tools.execute('discord', 'send', { message, __approvedExternal: true, __source: 'discord' }).catch(() => {});
+                }
+                return;
+            }
+            // Discord tool not connected — use the Notifier so the report still lands
+            await this.max.notifier?.notify(
+                goalSuccess ? `✅ **MAX** finished: **${goal.title}**\n> ${summaryLine}`
+                            : `❌ **MAX** could not complete: **${goal.title}**\n> ${summaryLine}`,
+                { force: true }
+            );
+        } catch (err) {
+            console.log(`  [AgentLoop] Failed to report back: ${err.message}`);
+        }
+    }
+
+    /**
+     * While a goal runs, ping Barry every 30 minutes so multi-hour work is never
+     * a black hole ("What did you find, it's been like 5 hours").
+     * Returns the interval handle — caller must clearInterval in finally.
+     */
+    _startProgressPing(goal, loopName = 'default') {
+        if (this._progressTimer) clearInterval(this._progressTimer);
+        const startedAt = Date.now();
+        this._progressTimer = setInterval(() => {
+            const mins = Math.round((Date.now() - startedAt) / 60000);
+            this.max.notifier?.notify(
+                `⏳ **MAX** still working on **${goal.title}** (${loopName} loop, ${mins} min in). I'll report when it lands.`,
+                { force: true }
+            ).catch(() => {});
+        }, 30 * 60 * 1000);
+        return this._progressTimer;
+    }
+
     async _executeStep(step, goal, stepResultMap = new Map()) {
         const signal = this._abortController?.signal;
         if (signal?.aborted) {
@@ -683,24 +715,15 @@ export class AgentLoop extends EventEmitter {
                         query:    action,       // web fallback
                         cwd:      process.cwd(),
                         signal,
-                        sessionId: goal.id,
                         ...(step.params || {})  // planner-specified params win
                     };
-
-                    // Policy gate: validate shell commands before execution
-                    if (toolName === 'shell' && toolParams.command) {
-                        const policy = commandPolicy.validate(String(toolParams.command), toolParams.cwd || process.cwd());
-                        if (!policy.allowed) {
-                            console.warn(`  [AgentLoop] 🚫 Command blocked by policy: ${policy.reason}`);
-                            return { step: step.step, success: false, result: '', summary: `Blocked — ${policy.reason}` };
-                        }
-                    }
 
                     // ── Self-Healing Pipeline: Backup Original State ──
                     let originalContent = null;
                     const isFileMod = toolName === 'file' && ['write', 'replace', 'edit', 'patch'].includes(action);
                     if (isFileMod && toolParams.filePath) {
                         try {
+                            const fs = await import('fs/promises');
                             originalContent = await fs.readFile(toolParams.filePath, 'utf8');
                         } catch { /* file might not exist yet, which is fine for 'write' */ }
                     }
@@ -740,8 +763,9 @@ export class AgentLoop extends EventEmitter {
 
                                 if (hasError) {
                                     console.warn(`  [AgentLoop] ❌ Shadow Validation Failed! Reverting change.`);
-                                     // Auto-revert the broken code
-                                     if (originalContent !== null) {
+                                    // Auto-revert the broken code
+                                    const fs = await import('fs/promises');
+                                    if (originalContent !== null) {
                                         await fs.writeFile(toolParams.filePath, originalContent);
                                     } else {
                                         await fs.unlink(toolParams.filePath).catch(() => {});
@@ -1297,81 +1321,20 @@ Root cause guide:
     // Only commits if there are staged changes in the working tree and
     // autoApproveLevel is not 'read' (respects the user's permission config).
     async _autoCommit(goalTitle) {
-        if (this.config.autoApproveLevel === 'read') return;
+        if (this.config.autoApproveLevel === 'read') return;  // user wants to control commits
 
         try {
             const cwd    = process.cwd();
             const status = await this.max.tools.execute('git', 'status', { cwd });
-            if (!status?.success || !status.output) return;
+            if (!status?.success || !status.output) return;  // no changes or not a git repo
 
             await this.max.tools.execute('git', 'add', { cwd, files: '.' });
             const message = `AgentLoop: ${goalTitle.slice(0, 72)}`;
             const commit  = await this.max.tools.execute('git', 'commit', { cwd, message });
             if (commit?.success) {
-                console.log(`  [AgentLoop] 📦 Committed: “${message}”`);
-                this._autoPR(goalTitle, cwd).catch(() => {});
+                console.log(`  [AgentLoop] ðŸ“¦ Committed: "${message}"`);
             }
-        } catch { /* non-fatal */ }
-    }
-
-    async _getClarifyingQuestions(goal) {
-        try {
-            const prompt = `A user asked an AI agent to do the following:\n\nGoal: ${goal.title}\nDescription: ${goal.description || ''}\n\nBefore starting, decide: is this clear enough to proceed, or are there 1-2 specific questions that would significantly improve the outcome?\n\nRespond with ONLY one of:\n- The word CLEAR (if no questions needed)\n- A JSON array of 1-2 short question strings, e.g. ["Which file?", "Should tests be updated?"]`;
-            const res = await this.max.brain.think(prompt, { tier: 'fast', maxTokens: 120, systemPrompt: 'You decide if a task is clear or needs clarification. Respond only with CLEAR or a JSON array.' });
-            const text = (res?.text || res?.response || '').trim();
-            if (!text || text === 'CLEAR' || text.startsWith('CLEAR')) return null;
-            const match = text.match(/\[[\s\S]*\]/);
-            if (!match) return null;
-            const questions = JSON.parse(match[0]);
-            return Array.isArray(questions) && questions.length ? questions.slice(0, 2) : null;
-        } catch { return null; }
-    }
-
-    _waitForClarification(goalId, timeoutMs) {
-        return new Promise(resolve => {
-            const timer = setTimeout(() => {
-                this._pendingClarifications.delete(goalId);
-                resolve(null);
-            }, timeoutMs);
-            this._pendingClarifications.set(goalId, { resolve, timer });
-        });
-    }
-
-    answerClarification(goalId, answers) {
-        const pending = this._pendingClarifications.get(goalId);
-        if (!pending) return false;
-        clearTimeout(pending.timer);
-        this._pendingClarifications.delete(goalId);
-        pending.resolve(answers);
-        return true;
-    }
-
-    async _autoPR(goalTitle, cwd) {
-        try {
-            const { execSync } = await import('child_process');
-            const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd, encoding: 'utf8' }).trim();
-            if (!branch.startsWith('max/')) return;
-
-            execSync('git push -u origin HEAD --quiet', { cwd, stdio: 'pipe' });
-
-            const desc = await this.max.brain.think(
-                `A background AI agent just completed: “${goalTitle}”\n\nWrite a 2-3 sentence GitHub PR description explaining what was done and why, in plain language. No headers or bullet points.`,
-                { tier: 'fast', maxTokens: 150, systemPrompt: 'Write concise, plain-language PR descriptions.' }
-            );
-            const body  = (desc?.text?.trim() || goalTitle).replace(/"/g, "'");
-            const title = goalTitle.slice(0, 70).replace(/"/g, "'");
-
-            const prOut = execSync(
-                `gh pr create --title “${title}” --body “${body}” --base main 2>&1`,
-                { cwd, encoding: 'utf8', stdio: 'pipe' }
-            ).trim();
-
-            const prUrl = prOut.match(/https:\/\/github\.com[^\s]+/)?.[0];
-            if (prUrl) {
-                console.log(`  [AgentLoop] 📬 PR opened: ${prUrl}`);
-                this.emit('insight', { source: 'agent', label: `📬 PR: ${goalTitle.slice(0, 50)}`, result: prUrl });
-            }
-        } catch { /* gh not installed or not authed — silent */ }
+        } catch { /* non-fatal â€” git not available or nothing to commit */ }
     }
 
     // --- Git Checkpoint: stash user work before autonomous writes, restore on failure ---
@@ -1383,8 +1346,8 @@ Root cause guide:
             const dirty = execSync('git status --porcelain', { cwd: process.cwd(), encoding: 'utf8' }).trim();
             if (!dirty) return { stashed: false };
             const label = `MAX-pre-${goal.id?.slice(0, 8) || Date.now()}`;
-            execSync(`git stash push --include-untracked -m “${label}”`, { cwd: process.cwd() });
-            console.log(`  [AgentLoop] Git checkpoint: stashed user work as “${label}”`);
+            execSync(`git stash push --include-untracked -m "${label}"`, { cwd: process.cwd() });
+            console.log(`  [AgentLoop] Git checkpoint: stashed user work as "${label}"`);
             return { stashed: true, label };
         } catch { return null; }
     }
@@ -1393,8 +1356,6 @@ Root cause guide:
         if (!checkpoint?.stashed) return;
         try {
             const { execSync } = await import('child_process');
-            execSync('git checkout -- .', { cwd: process.cwd() });
-            execSync('git clean -fd', { cwd: process.cwd() });
             execSync('git stash pop', { cwd: process.cwd() });
             console.log(`  [AgentLoop] Git checkpoint restored -- user's work recovered`);
         } catch (err) {

@@ -802,12 +802,67 @@ html,body,#root { height:100%; background:var(--bg); color:var(--text); font-fam
   to { opacity:0; transform:translateY(16px) scale(.92); }
 }
 .choko-avatar {
-  width:56px; height:56px; flex-shrink:0; cursor:pointer;
-  filter:drop-shadow(0 4px 12px rgba(244,114,182,.4));
-  transition:transform .2s;
-  user-select:none;
+  width:86px; height:86px; flex-shrink:0; cursor:pointer;
+  position:relative; user-select:none;
+  border-radius:50%;
+  box-shadow:0 6px 26px rgba(0,0,0,0.6), 0 0 0 2.5px rgba(244,114,182,.6);
+  animation:choko-float 3.4s ease-in-out infinite;
+  transition:transform .2s ease, box-shadow .2s ease;
 }
-.choko-avatar:hover { transform:scale(1.08) rotate(-3deg); }
+.choko-avatar:hover { transform:scale(1.12) translateY(-4px) rotate(-3deg); box-shadow:0 8px 30px rgba(244,114,182,.8), 0 0 0 3px var(--pink); }
+.choko-mascot-img {
+  width:100%; height:100%; object-fit:cover;
+  border-radius:50%;
+  display:block;
+  animation:choko-bounce-in .4s cubic-bezier(.34,1.56,.64,1);
+  transition:transform .25s ease, filter .25s ease;
+}
+.choko-avatar:hover .choko-mascot-img {
+  filter:brightness(1.05);
+}
+.choko-docked-pet {
+  position:fixed; bottom:34px; right:18px; z-index:90;
+  width:48px; height:48px; border-radius:50%;
+  cursor:pointer; user-select:none;
+  box-shadow:0 4px 18px rgba(0,0,0,0.5), 0 0 0 2px rgba(244,114,182,0.6);
+  animation:choko-float 3.2s ease-in-out infinite;
+  transition:all .2s ease;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--s2);
+}
+.choko-docked-pet:hover {
+  transform:scale(1.18) translateY(-3px) rotate(-4deg);
+  box-shadow:0 6px 24px rgba(244,114,182,0.8), 0 0 0 3px var(--pink);
+}
+.choko-docked-img {
+  width:100%; height:100%; border-radius:50%; object-fit:cover;
+  display:block;
+}
+.choko-sparkles-overlay {
+  position:absolute; inset:0; pointer-events:none; overflow:visible;
+}
+.choko-sparkle {
+  position:absolute; font-size:12px; pointer-events:none;
+  animation:choko-sparkle-float 2.2s ease-in-out infinite;
+}
+.choko-sparkle.s1 { top:-10px; left:0px; animation-delay:0s; }
+.choko-sparkle.s2 { top:-12px; right:-6px; animation-delay:.8s; font-size:14px; }
+.choko-sparkle.s3 { bottom:4px; left:-8px; animation-delay:1.4s; font-size:11px; }
+
+@keyframes choko-float {
+  0%, 100% { transform:translateY(0) rotate(0deg); }
+  50%      { transform:translateY(-6px) rotate(2.5deg); }
+}
+@keyframes choko-sparkle-float {
+  0%   { opacity:0; transform:translateY(0) scale(0.6) rotate(0deg); }
+  50%  { opacity:0.95; transform:translateY(-8px) scale(1.2) rotate(15deg); }
+  100% { opacity:0; transform:translateY(-16px) scale(0.5) rotate(35deg); }
+}
+@keyframes choko-bounce-in {
+  0%   { transform:scale(0.6) rotate(-10deg); }
+  60%  { transform:scale(1.14) rotate(4deg); }
+  100% { transform:scale(1) rotate(0deg); }
+}
 .choko-bubble {
   background:#1a0f2e;
   border:1.5px solid rgba(244,114,182,.5);
@@ -930,14 +985,38 @@ html,body,#root { height:100%; background:var(--bg); color:var(--text); font-fam
 
 /* ── Code/Preview toggle (titlebar center) ── */
 .view-toggle { display:flex; background:var(--s3); border:1px solid var(--border); border-radius:7px; overflow:hidden; }
-.view-toggle-btn { padding:4px 16px; font-size:11.5px; font-weight:600; letter-spacing:.3px; border:none; cursor:pointer; transition:all .15s; display:flex; align-items:center; gap:5px; }
+.view-toggle-btn { padding:4px 14px; font-size:11.5px; font-weight:600; letter-spacing:.3px; border:none; cursor:pointer; transition:all .15s; display:flex; align-items:center; gap:5px; }
 .view-toggle-btn.off { background:transparent; color:var(--muted); }
 .view-toggle-btn.off:hover { color:var(--text); }
 .view-toggle-btn.on-code { background:var(--s4); color:var(--text); }
+.view-toggle-btn.on-split { background:rgba(124,58,237,.35); color:var(--accent2); }
 .view-toggle-btn.on-preview { background:var(--aglow); color:var(--accent2); }
 
-/* ── Full-screen preview overlay ── */
+/* ── Split & Full-screen preview ── */
+.split-preview-pane { flex:1; display:flex; flex-direction:column; min-width:340px; border-left:1px solid var(--border); background:var(--bg); position:relative; overflow:hidden; }
 .preview-fullscreen { position:fixed; inset:38px 0 22px 0; z-index:50; display:flex; flex-direction:column; background:var(--bg); }
+
+/* ── Live Console Drawer & Error Sniffer ── */
+.preview-console-drawer { background:#0d0d14; border-top:1px solid var(--border); display:flex; flex-direction:column; max-height:220px; flex-shrink:0; transition:all .2s ease; }
+.preview-console-header { display:flex; align-items:center; gap:8px; padding:5px 12px; background:var(--s2); border-bottom:1px solid var(--border); font-family:var(--mono); font-size:11px; cursor:pointer; user-select:none; }
+.preview-console-body { flex:1; overflow-y:auto; padding:6px 12px; font-family:var(--mono); font-size:11px; display:flex; flex-direction:column; gap:4px; }
+.console-log-row { display:flex; gap:8px; align-items:flex-start; padding:4px 8px; border-radius:4px; word-break:break-word; line-height:1.4; }
+.console-log-row.error { background:rgba(239,68,68,0.12); color:#f87171; border:1px solid rgba(239,68,68,0.25); }
+.console-log-row.warn { background:rgba(245,158,11,0.1); color:#fbbf24; border:1px solid rgba(245,158,11,0.2); }
+.console-log-row.info { background:transparent; color:var(--muted); }
+.btn-fix-max { margin-left:auto; padding:2px 8px; border-radius:4px; background:linear-gradient(135deg,#7c3aed,#a855f7); border:none; color:#fff; font-size:10.5px; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:4px; box-shadow:0 2px 8px rgba(124,58,237,0.4); transition:all .15s; }
+.btn-fix-max:hover { transform:scale(1.04); box-shadow:0 2px 12px rgba(168,85,247,0.6); }
+
+/* ── Click-to-Tweak Inspector Popover ── */
+.preview-tweak-bar { position:absolute; top:46px; left:14px; right:14px; z-index:60; background:var(--s2); border:1px solid var(--accent); border-radius:8px; padding:8px 12px; box-shadow:0 8px 30px rgba(0,0,0,0.6); display:flex; align-items:center; gap:10px; animation:popUp .15s ease; }
+.preview-tweak-tag { background:rgba(124,58,237,0.25); color:var(--accent2); padding:2px 6px; border-radius:4px; font-family:var(--mono); font-size:11px; font-weight:600; white-space:nowrap; max-width:240px; overflow:hidden; text-overflow:ellipsis; }
+.preview-tweak-input { flex:1; background:var(--s3); border:1px solid var(--border); border-radius:5px; color:var(--text); padding:5px 8px; font-size:11.5px; outline:none; font-family:var(--ui); }
+.preview-tweak-input:focus { border-color:var(--accent); }
+
+/* ── Version History Chips ── */
+.version-chip { padding:2px 6px; border-radius:4px; font-size:10px; font-family:var(--mono); background:var(--s3); border:1px solid var(--border); color:var(--muted); cursor:pointer; transition:all .12s; }
+.version-chip:hover { color:var(--text); border-color:var(--border2); }
+.version-chip.active { background:var(--aglow); color:var(--accent2); border-color:var(--accent); font-weight:700; }
 
 /* ── Floating MAX bubble ── */
 .float-bubble { position:fixed; bottom:30px; right:20px; z-index:100; display:flex; flex-direction:column; align-items:flex-end; gap:10px; }
@@ -2277,10 +2356,15 @@ const DEVICES = [
   { id:'phone',   label:'Phone',   w:390,  h:844,  icon:ICONS.phone   },
 ];
 
-function PreviewPane() {
+function PreviewPane({ sendMessage, activeTab, isSplit, onCloseSplit }) {
+  const defaultPreviewUrl = (() => {
+    const saved = localStorage.getItem('mx_preview_url');
+    if (saved && saved !== 'http://localhost:3000') return saved;
+    return `${window.location.origin}/satellite`;
+  })();
   const [device, setDevice] = useState('desktop');
-  const [url, setUrl] = useState(()=>localStorage.getItem('mx_preview_url')||'http://localhost:3000');
-  const [inputUrl, setInputUrl] = useState(()=>localStorage.getItem('mx_preview_url')||'http://localhost:3000');
+  const [url, setUrl] = useState(defaultPreviewUrl);
+  const [inputUrl, setInputUrl] = useState(defaultPreviewUrl);
   const [serverUp, setServerUp] = useState(false);
   // 'idle' | 'detecting' | 'starting' | 'waiting' | 'error'
   const [launchState, setLaunchState] = useState('idle');
@@ -2290,7 +2374,18 @@ function PreviewPane() {
   const autoTriggered = useRef(false);
   const d = DEVICES.find(x=>x.id===device);
 
-  // Poll the target URL every 2s while waiting for it to come up
+  // ── Claude Design Features State ──
+  const [consoleLogs, setConsoleLogs] = useState([]);
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [inspectActive, setInspectActive] = useState(false);
+  const [selectedElem, setSelectedElem] = useState(null);
+  const [tweakPrompt, setTweakPrompt] = useState('');
+  const [versions, setVersions] = useState(() => [
+    { id: 1, label: 'v1', url: defaultPreviewUrl, time: new Date().toLocaleTimeString() }
+  ]);
+  const [currentVersionId, setCurrentVersionId] = useState(1);
+
+  // Poll target URL
   useEffect(()=>{
     let mounted=true;
     const check=async()=>{
@@ -2307,7 +2402,7 @@ function PreviewPane() {
     return ()=>{mounted=false;clearInterval(t);};
   },[url, launchState]);
 
-  // Auto-detect & start dev server when preview first opens and server is down
+  // Auto-detect & start dev server
   useEffect(()=>{
     if(autoTriggered.current || serverUp) return;
     autoTriggered.current = true;
@@ -2315,8 +2410,154 @@ function PreviewPane() {
       if(!serverUp) autoLaunch();
     }, 1800);
     return ()=>clearTimeout(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
+
+  // ── Listen for Console Messages & Error Sniffer ──
+  useEffect(() => {
+    const handleMsg = (e) => {
+      if (e.data && e.data.type === 'MAX_PREVIEW_CONSOLE') {
+        setConsoleLogs(prev => [...prev.slice(-99), {
+          id: Date.now() + Math.random(),
+          type: e.data.level || 'info',
+          message: e.data.message || '',
+          stack: e.data.stack || '',
+          time: new Date().toLocaleTimeString()
+        }]);
+        if (e.data.level === 'error') {
+          setConsoleOpen(true);
+        }
+      }
+    };
+    window.addEventListener('message', handleMsg);
+    return () => window.removeEventListener('message', handleMsg);
+  }, []);
+
+  const handleIframeLoad = () => {
+    try {
+      const win = iframeRef.current?.contentWindow;
+      if (!win) return;
+      if (win.console && !win.__max_hooked) {
+        win.__max_hooked = true;
+        const origErr = win.console.error;
+        const origWarn = win.console.warn;
+        win.console.error = (...args) => {
+          try { origErr?.apply(win.console, args); } catch {}
+          const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+          window.postMessage({ type: 'MAX_PREVIEW_CONSOLE', level: 'error', message: msg, stack: (new Error().stack||'') }, '*');
+        };
+        win.console.warn = (...args) => {
+          try { origWarn?.apply(win.console, args); } catch {}
+          const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+          window.postMessage({ type: 'MAX_PREVIEW_CONSOLE', level: 'warn', message: msg }, '*');
+        };
+        win.addEventListener('error', (ev) => {
+          window.postMessage({ type: 'MAX_PREVIEW_CONSOLE', level: 'error', message: ev.message || 'Uncaught Error', stack: ev.error?.stack || `${ev.filename||'script'}:${ev.lineno||0}` }, '*');
+        });
+        win.addEventListener('unhandledrejection', (ev) => {
+          window.postMessage({ type: 'MAX_PREVIEW_CONSOLE', level: 'error', message: 'Unhandled Promise Rejection: ' + (ev.reason?.message || ev.reason || ''), stack: ev.reason?.stack || '' }, '*');
+        });
+      }
+    } catch {}
+  };
+
+  // ── Click-to-Tweak DOM Inspector ──
+  useEffect(() => {
+    if (!inspectActive) return;
+    try {
+      const doc = iframeRef.current?.contentDocument;
+      if (!doc) return;
+      let hovered = null;
+      const onOver = (e) => {
+        if (hovered && hovered !== e.target) {
+          hovered.style.outline = hovered.__prevOutline || '';
+        }
+        hovered = e.target;
+        hovered.__prevOutline = hovered.style.outline;
+        hovered.style.outline = '2px dashed #a855f7';
+      };
+      const onOut = (e) => {
+        if (e.target) e.target.style.outline = e.target.__prevOutline || '';
+      };
+      const onClick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const el = e.target;
+        if (el) {
+          el.style.outline = el.__prevOutline || '';
+          const tag = el.tagName.toLowerCase();
+          const cls = el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\s+/).join('.') : '';
+          const text = (el.innerText || el.textContent || '').trim().slice(0, 60);
+          setSelectedElem({ tag, cls, id: el.id, text, selector: `${tag}${cls}` });
+        }
+      };
+      doc.addEventListener('mouseover', onOver, true);
+      doc.addEventListener('mouseout', onOut, true);
+      doc.addEventListener('click', onClick, true);
+      return () => {
+        doc.removeEventListener('mouseover', onOver, true);
+        doc.removeEventListener('mouseout', onOut, true);
+        doc.removeEventListener('click', onClick, true);
+        if (hovered) hovered.style.outline = hovered.__prevOutline || '';
+      };
+    } catch {}
+  }, [inspectActive]);
+
+  const toggleInspector = () => {
+    const next = !inspectActive;
+    setInspectActive(next);
+    if (!next) setSelectedElem(null);
+  };
+
+  const submitTweak = () => {
+    if (!tweakPrompt.trim() || !selectedElem || !sendMessage) return;
+    const msg = `In the live preview (${url}), I selected element <${selectedElem.tag}${selectedElem.cls ? ' class="' + selectedElem.cls.replace(/^\./, '').replace(/\./g, ' ') + '"' : ''}>${selectedElem.text ? ` containing "${selectedElem.text}"` : ''}.\n\nDirective: ${tweakPrompt.trim()}\nPlease update the relevant component or styles.`;
+    sendMessage(msg);
+    setTweakPrompt('');
+    setSelectedElem(null);
+    setInspectActive(false);
+  };
+
+  const fixWithMax = (errLog) => {
+    if (!sendMessage) return;
+    const errText = errLog
+      ? `${errLog.message}\n${errLog.stack || ''}`
+      : consoleLogs.filter(l => l.type === 'error').map(e => `${e.message}\n${e.stack || ''}`).join('\n\n');
+    const prompt = `Preview Runtime Error at ${url} (Active Tab: ${activeTab || 'N/A'}):\n\n\`\`\`\n${errText.trim()}\n\`\`\`\nPlease analyze this error, explain the root cause, and fix it.`;
+    sendMessage(prompt);
+  };
+
+  const addSnapshot = (customLabel) => {
+    const nextId = versions.length + 1;
+    const v = { id: nextId, label: customLabel || `v${nextId}`, url, time: new Date().toLocaleTimeString() };
+    setVersions(vs => [...vs, v]);
+    setCurrentVersionId(nextId);
+  };
+
+  const openExternal = () => window.open(url, '_blank');
+
+  const exportStandalone = async () => {
+    try {
+      let html = '';
+      try {
+        const doc = iframeRef.current?.contentDocument;
+        if (doc) html = '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+      } catch {}
+      if (!html) {
+        const r = await fetch(url);
+        html = await r.text();
+      }
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `max-preview-${Date.now()}.html`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      alert('Export failed: ' + e.message);
+    }
+  };
 
   const detectDevCmd = async () => {
     // Ask MAX to check for package.json and figure out the right start command
@@ -2360,39 +2601,113 @@ function PreviewPane() {
     }
   };
 
-  const navigate=()=>{setUrl(inputUrl);localStorage.setItem('mx_preview_url',inputUrl);};
+  const navigate=()=>{setUrl(inputUrl);localStorage.setItem('mx_preview_url',inputUrl);addSnapshot();};
   const reload=()=>{ if(iframeRef.current) iframeRef.current.src=url; };
-  const iframeH = device==='desktop' ? 520 : d.h;
+  const iframeH = device==='desktop' ? (isSplit ? '100%' : 520) : d.h;
   const wrapStyle = device==='desktop'
     ? {width:'100%',height:'100%',minHeight:480,display:'flex',flexDirection:'column'}
     : {width:d.w,flexShrink:0,display:'flex',flexDirection:'column'};
 
   const launchBusy = launchState==='detecting'||launchState==='starting'||launchState==='waiting';
+  const errorsCount = consoleLogs.filter(l => l.type === 'error').length;
+  const warnsCount = consoleLogs.filter(l => l.type === 'warn').length;
 
   return (
-    <div style={{display:'flex',flexDirection:'column',flex:1,overflow:'hidden'}}>
+    <div style={{display:'flex',flexDirection:'column',flex:1,overflow:'hidden',position:'relative'}}>
+      {/* ── Toolbar ── */}
       <div className="preview-toolbar">
         <button className="preview-nav-btn" onClick={()=>iframeRef.current?.contentWindow?.history.back()}>{ICONS.back}</button>
         <button className="preview-nav-btn" onClick={()=>iframeRef.current?.contentWindow?.history.forward()}>{ICONS.forward}</button>
         <button className="preview-nav-btn" onClick={reload}>{ICONS.reload}</button>
-        <form onSubmit={e=>{e.preventDefault();navigate();}} style={{flex:1,display:'flex',maxWidth:340}}>
+        <form onSubmit={e=>{e.preventDefault();navigate();}} style={{flex:1,display:'flex',maxWidth:260}}>
           <input className="preview-url-bar" value={inputUrl} onChange={e=>setInputUrl(e.target.value)} onFocus={e=>e.target.select()} style={{width:'100%'}}/>
         </form>
-        <div style={{display:'flex',alignItems:'center',gap:5,fontSize:11}}>
-          <div style={{width:6,height:6,borderRadius:'50%',background:serverUp?'var(--green)':launchBusy?'var(--amber)':'var(--muted2)',flexShrink:0,
-            ...(launchBusy?{animation:'pulse 1.2s infinite'}:{})}}/>
-          <span style={{color:serverUp?'var(--green)':launchBusy?'var(--amber)':'var(--muted2)'}}>
-            {serverUp?'live':launchState==='waiting'?'starting…':launchBusy?launchState:'offline'}
-          </span>
+        <div style={{display:'flex',gap:3,margin:'0 4px'}}>
+          <button 
+            type="button" 
+            style={{padding:'2px 6px',fontSize:10,borderRadius:4,background:url.includes('/satellite')?'var(--accent)':'var(--s3)',border:'1px solid var(--border)',color:url.includes('/satellite')?'#fff':'var(--muted)',cursor:'pointer',display:'flex',alignItems:'center',gap:3,fontWeight:600}}
+            onClick={()=>{const u=`${window.location.origin}/satellite`;setInputUrl(u);setUrl(u);localStorage.setItem('mx_preview_url',u);addSnapshot('Satellite');}}
+          >
+            🛰️
+          </button>
+          <button 
+            type="button" 
+            style={{padding:'2px 6px',fontSize:10,borderRadius:4,background:url.includes(':3001')?'var(--accent)':'var(--s3)',border:'1px solid var(--border)',color:url.includes(':3001')?'#fff':'var(--muted)',cursor:'pointer',display:'flex',alignItems:'center',gap:3,fontWeight:600}}
+            onClick={()=>{const u='http://192.168.1.254:3001';setInputUrl(u);setUrl(u);localStorage.setItem('mx_preview_url',u);addSnapshot('SOMA');}}
+          >
+            👑
+          </button>
+          <button 
+            type="button" 
+            style={{padding:'2px 6px',fontSize:10,borderRadius:4,background:url.includes(':3000')?'var(--accent)':'var(--s3)',border:'1px solid var(--border)',color:url.includes(':3000')?'#fff':'var(--muted)',cursor:'pointer',display:'flex',alignItems:'center',gap:3,fontWeight:600}}
+            onClick={()=>{const u='http://localhost:3000';setInputUrl(u);setUrl(u);localStorage.setItem('mx_preview_url',u);addSnapshot('Dev');}}
+          >
+            💻
+          </button>
         </div>
+
+        {/* Version chips */}
+        <div style={{display:'flex',alignItems:'center',gap:3,margin:'0 4px'}}>
+          {versions.slice(-4).map(v=>(
+            <button key={v.id} className={`version-chip ${v.id===currentVersionId?'active':''}`} onClick={()=>{setCurrentVersionId(v.id);setUrl(v.url);}}>
+              {v.label}
+            </button>
+          ))}
+          <button className="version-chip" onClick={()=>addSnapshot()} title="Snapshot current view">📸</button>
+        </div>
+
+        {/* Feature Actions */}
+        <div style={{display:'flex',alignItems:'center',gap:4}}>
+          <button 
+            className={`preview-nav-btn ${inspectActive?'active':''}`}
+            onClick={toggleInspector}
+            title="Click-to-Tweak: Select element to prompt MAX"
+            style={{background:inspectActive?'var(--aglow)':'var(--s3)',color:inspectActive?'var(--accent2)':'var(--muted)',borderColor:inspectActive?'var(--accent)':'var(--border)'}}
+          >
+            🎯
+          </button>
+          <button className="preview-nav-btn" onClick={openExternal} title="Open in new window">↗</button>
+          <button className="preview-nav-btn" onClick={exportStandalone} title="Download standalone HTML">💾</button>
+          <button 
+            className="preview-nav-btn" 
+            onClick={()=>setConsoleOpen(o=>!o)} 
+            title="Toggle Console Drawer"
+            style={{display:'flex',alignItems:'center',gap:3,padding:'0 6px',width:'auto',fontSize:10,background:errorsCount>0?'rgba(239,68,68,0.15)':consoleOpen?'var(--aglow)':'var(--s3)',color:errorsCount>0?'var(--red)':consoleOpen?'var(--accent2)':'var(--muted)',borderColor:errorsCount>0?'rgba(239,68,68,0.4)':consoleOpen?'var(--accent)':'var(--border)'}}
+          >
+            🐞{errorsCount>0?` ${errorsCount}`:''}
+          </button>
+        </div>
+
         <div className="device-group">
           {DEVICES.map(dv=>(
             <button key={dv.id} className={`device-btn ${device===dv.id?'active':''}`} onClick={()=>setDevice(dv.id)}>
               {dv.icon} {dv.label}
             </button>
           ))}
+          {isSplit && (
+            <button className="preview-nav-btn" onClick={onCloseSplit} title="Close split preview" style={{marginLeft:6}}>✕</button>
+          )}
         </div>
       </div>
+
+      {/* ── Click-to-Tweak Popover ── */}
+      {selectedElem && (
+        <div className="preview-tweak-bar">
+          <div className="preview-tweak-tag">🎯 &lt;{selectedElem.tag}{selectedElem.cls}&gt; {selectedElem.text ? `"${selectedElem.text.slice(0, 24)}…"` : ''}</div>
+          <input 
+            className="preview-tweak-input" 
+            placeholder="How should MAX tweak this element? (e.g. 'Make it green gradient')"
+            value={tweakPrompt}
+            onChange={e=>setTweakPrompt(e.target.value)}
+            onKeyDown={e=>{ if(e.key==='Enter') submitTweak(); }}
+            autoFocus
+          />
+          <button className="btn-fix-max" onClick={submitTweak}>⚡ Prompt MAX</button>
+          <button className="preview-nav-btn" onClick={()=>{setSelectedElem(null);setInspectActive(false);}}>✕</button>
+        </div>
+      )}
+
+      {/* ── Stage ── */}
       <div className="preview-stage">
         <div className="preview-device-wrap" style={wrapStyle}>
           {device!=='desktop' && (
@@ -2406,7 +2721,15 @@ function PreviewPane() {
           )}
           <div className="preview-iframe-wrap" style={{height:iframeH,borderRadius:device!=='desktop'?'0 0 10px 10px':'0'}}>
             {serverUp ? (
-              <iframe ref={iframeRef} className="preview-iframe" src={url} style={{height:iframeH}} title="Preview" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"/>
+              <iframe 
+                ref={iframeRef} 
+                className="preview-iframe" 
+                src={url} 
+                onLoad={handleIframeLoad}
+                style={{height:iframeH}} 
+                title="Preview" 
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+              />
             ) : (
               <div className="preview-no-server">
                 <div style={{opacity:.25,display:'flex'}}>{ICONS.desktop}</div>
@@ -2435,6 +2758,41 @@ function PreviewPane() {
           </div>
         </div>
       </div>
+
+      {/* ── Live Console Drawer ── */}
+      {consoleOpen && (
+        <div className="preview-console-drawer">
+          <div className="preview-console-header" onClick={()=>setConsoleOpen(false)}>
+            <span>🐞 Console</span>
+            <span style={{color:errorsCount>0?'var(--red)':'var(--muted)',marginLeft:4}}>{errorsCount} error{errorsCount===1?'':'s'}</span>
+            <span style={{color:warnsCount>0?'var(--amber)':'var(--muted)',marginLeft:4}}>{warnsCount} warn{warnsCount===1?'':'s'}</span>
+            {errorsCount>0 && sendMessage && (
+              <button className="btn-fix-max" onClick={(e)=>{e.stopPropagation();fixWithMax();}}>
+                ⚡ Fix with MAX
+              </button>
+            )}
+            <button className="preview-nav-btn" style={{width:18,height:18,fontSize:10,marginLeft:errorsCount>0?8:'auto'}} onClick={(e)=>{e.stopPropagation();setConsoleLogs([]);}} title="Clear console">✕</button>
+          </div>
+          <div className="preview-console-body">
+            {consoleLogs.length===0 ? (
+              <div style={{color:'var(--muted)',fontStyle:'italic'}}>No console messages logged</div>
+            ) : (
+              consoleLogs.map(l=>(
+                <div key={l.id} className={`console-log-row ${l.type}`}>
+                  <span style={{opacity:0.6,fontSize:9.5}}>{l.time}</span>
+                  <span style={{fontWeight:700}}>[{l.type.toUpperCase()}]</span>
+                  <span style={{flex:1}}>{l.message}</span>
+                  {l.type==='error' && sendMessage && (
+                    <button className="btn-fix-max" style={{padding:'1px 5px',fontSize:9.5}} onClick={()=>fixWithMax(l)}>
+                      ⚡ Fix
+                    </button>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3224,54 +3582,8 @@ function GitPanel({ connected, maxUrl, gitStaged, setGitStaged, openFile, onRunI
 }
 
 
-// ── Choko SVG avatar ─────────────────────────────────────────
-const CHOKO_SVG = (
-  <svg viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
-    {/* Body */}
-    <ellipse cx="40" cy="52" rx="22" ry="20" fill="#2d1b4e"/>
-    <ellipse cx="40" cy="52" rx="22" ry="20" fill="url(#bodyGrad)" opacity=".7"/>
-    {/* Hoodie */}
-    <path d="M20 58 Q22 45 40 44 Q58 45 60 58 Q55 75 40 76 Q25 75 20 58Z" fill="#6d28d9"/>
-    <path d="M35 44 Q40 50 45 44" stroke="#9d4edd" strokeWidth="1.5" fill="none"/>
-    {/* Head */}
-    <ellipse cx="40" cy="32" rx="17" ry="16" fill="#2d1b4e"/>
-    <ellipse cx="40" cy="32" rx="17" ry="16" fill="url(#headGrad)" opacity=".5"/>
-    {/* Ears / cat */}
-    <path d="M24 22 L20 12 L30 18Z" fill="#6d28d9"/>
-    <path d="M56 22 L60 12 L50 18Z" fill="#6d28d9"/>
-    <path d="M24 22 L21 14 L28 19Z" fill="#f472b6" opacity=".6"/>
-    <path d="M56 22 L59 14 L52 19Z" fill="#f472b6" opacity=".6"/>
-    {/* Eyes */}
-    <ellipse cx="33" cy="31" rx="5" ry="6" fill="#0a0510"/>
-    <ellipse cx="47" cy="31" rx="5" ry="6" fill="#0a0510"/>
-    <ellipse cx="33" cy="31" rx="4" ry="5" fill="#1a0b30"/>
-    <ellipse cx="47" cy="31" rx="4" ry="5" fill="#1a0b30"/>
-    {/* Eye shine */}
-    <circle cx="35" cy="29" r="1.5" fill="white" opacity=".9"/>
-    <circle cx="49" cy="29" r="1.5" fill="white" opacity=".9"/>
-    <circle cx="32" cy="32" r=".8" fill="white" opacity=".5"/>
-    <circle cx="46" cy="32" r=".8" fill="white" opacity=".5"/>
-    {/* Blush */}
-    <ellipse cx="27" cy="35" rx="4" ry="2.5" fill="#f472b6" opacity=".35"/>
-    <ellipse cx="53" cy="35" rx="4" ry="2.5" fill="#f472b6" opacity=".35"/>
-    {/* Mouth */}
-    <path d="M37 38 Q40 41 43 38" stroke="#f472b6" strokeWidth="1.2" fill="none" strokeLinecap="round"/>
-    {/* Stars decoration */}
-    <text x="8" y="20" fontSize="8" fill="#f472b6" opacity=".7">✦</text>
-    <text x="64" y="18" fontSize="6" fill="#a78bfa" opacity=".6">✦</text>
-    <text x="62" y="68" fontSize="5" fill="#f472b6" opacity=".5">✦</text>
-    <defs>
-      <radialGradient id="headGrad" cx="40%" cy="30%">
-        <stop offset="0%" stopColor="#9d4edd"/>
-        <stop offset="100%" stopColor="#2d1b4e"/>
-      </radialGradient>
-      <radialGradient id="bodyGrad" cx="50%" cy="30%">
-        <stop offset="0%" stopColor="#7c3aed"/>
-        <stop offset="100%" stopColor="#1a0f2e"/>
-      </radialGradient>
-    </defs>
-  </svg>
-);
+// ── Choko Chibi Mascot (Assets in /assets/choko_*.jpg) ─────────
+
 
 const CHOKO_MESSAGES = [
   "psst! i found something interesting in your code. MAX will love this. 🍫",
@@ -3297,18 +3609,48 @@ const CHOKO_TENSION = "heads up! ⚡ MAX's tension is really high right now. he'
 // ── Choko Toast Component ─────────────────────────────────────
 function ChokoToast({ msg, onClose, typing, onSendToMax }) {
   const [closing, setClosing] = React.useState(false);
+  const [hat, setHat] = React.useState('hazelnut'); // Default to newly evolved Hazelnut!
+
   const close = () => {
     setClosing(true);
     setTimeout(onClose, 240);
   };
+
+  // Cycle hats on avatar click!
+  const cycleHat = (e) => {
+    e.stopPropagation();
+    const hats = ['hazelnut', 'strawberry', 'matcha', 'deepcacao'];
+    const nextIdx = (hats.indexOf(hat) + 1) % hats.length;
+    setHat(hats[nextIdx]);
+    playTone(520, 0.08, 0.15, 'triangle');
+  };
+
+  const hatInfo = {
+    hazelnut:   { name: 'Hazelnut Sentinel', emoji: '🌰', file: 'choko_hazelnut.jpg', color: '#eab308' },
+    strawberry: { name: 'Strawberry Helper', emoji: '🍓', file: 'choko_strawberry.jpg', color: '#f472b6' },
+    matcha:     { name: 'Matcha Zen',        emoji: '🍵', file: 'choko_matcha.jpg',     color: '#34d399' },
+    deepcacao:  { name: 'Deep Cacao',        emoji: '🍫', file: 'choko_deepcacao.jpg',  color: '#d97706' }
+  }[hat] || { name: 'Sentinel', emoji: '🌰', file: 'choko_hazelnut.jpg', color: '#eab308' };
+
   return (
     <div className={`choko-toast ${closing?'choko-out':''}`}>
-      <div className="choko-bubble">
+      <div className="choko-bubble" style={{borderColor: `${hatInfo.color}88`}}>
         <button className="choko-close" onClick={close}>×</button>
-        <div className="choko-name">
-          <div className="cn-dot"/>
-          Choko
-          <span style={{fontSize:9,color:'var(--muted)',fontWeight:400,letterSpacing:0}}>scout</span>
+        <div className="choko-name" style={{display:'flex',alignItems:'center',gap:6}}>
+          <div className="cn-dot" style={{background: hatInfo.color}}/>
+          <span>Choko</span>
+          <span 
+            onClick={cycleHat}
+            title="Click to cycle hats!"
+            style={{
+              fontSize:9.5, color:hatInfo.color, fontWeight:800, cursor:'pointer',
+              background:`${hatInfo.color}20`, border:`1px solid ${hatInfo.color}50`,
+              padding:'1.5px 6px', borderRadius:8, display:'flex', alignItems:'center', gap:3,
+              transition:'all .15s ease'
+            }}
+          >
+            {hatInfo.emoji} {hatInfo.name} · Lv.2
+          </span>
         </div>
         {typing
           ? <div className="choko-typing"><span/><span/><span/></div>
@@ -3322,8 +3664,21 @@ function ChokoToast({ msg, onClose, typing, onSendToMax }) {
             </>
         }
       </div>
-      <div className="choko-avatar" onClick={close} title="Choko — click to dismiss">
-        {CHOKO_SVG}
+      <div 
+        className="choko-avatar" 
+        onClick={cycleHat}
+        title={`Choko (${hatInfo.name}) — click to switch hat!`}
+      >
+        <div className="choko-sparkles-overlay">
+          <span className="choko-sparkle s1">✨</span>
+          <span className="choko-sparkle s2">✦</span>
+          <span className="choko-sparkle s3">💖</span>
+        </div>
+        <img 
+          className="choko-mascot-img" 
+          src={`/assets/${hatInfo.file}`} 
+          alt={hatInfo.name} 
+        />
       </div>
     </div>
   );
@@ -5105,7 +5460,8 @@ function App() {
       return next;
     });
   };
-  const [showPreview, setShowPreview] = useState(false);
+  const [viewMode, setViewMode] = useState('code'); // 'code' | 'split' | 'preview'
+  const showPreview = viewMode === 'preview';
   const [bubbleOpen, setBubbleOpen] = useState(false);
   const [bubbleInput, setBubbleInput] = useState('');
   const [showSettings, setShowSettings] = useState(false);
@@ -5509,6 +5865,20 @@ function App() {
     };
     window.addEventListener('keydown', handler);
     return ()=>window.removeEventListener('keydown', handler);
+  }, []);
+
+  // Auto-welcome from Choko on initial IDE load!
+  useEffect(()=>{
+    const t = setTimeout(()=>{
+      setChokoTyping(true);
+      setTimeout(()=>{
+        setChokoTyping(false);
+        playChokoPop();
+        setChokoMsg("hi Barry! 🐾 i'm Choko, your calico scout! click my hat anytime to cycle my wardrobe or get codebase intel! ✨");
+        setTimeout(()=>setChokoMsg(null), 10000);
+      }, 900);
+    }, 1200);
+    return ()=>clearTimeout(t);
   }, []);
 
   // Ctrl+K / Cmd+K palette
@@ -6097,14 +6467,15 @@ function App() {
   const runProblemsCheck = React.useCallback(async () => {
     setProblemLines([]);
     try {
+      const tscCmd = `node -e "const fs = require('fs'); const cmd = fs.existsSync('tsconfig.json') ? 'npx tsc --noEmit' : fs.existsSync('jsconfig.json') ? 'npx tsc --noEmit -p jsconfig.json --maxNodeModuleJsDepth 0' : 'echo no-config'; const cp = require('child_process'); cp.exec(cmd, (err, stdout, stderr) => { console.log(stdout || stderr); process.exit(err ? 1 : 0); })" 2>&1`;
       const r = await fetch(`${maxUrl}/api/tools/shell/run`, {
         method:'POST', headers:authHdrs(),
-        body: JSON.stringify({ command:'npx tsc --noEmit 2>&1', timeoutMs:30000 })
+        body: JSON.stringify({ command: tscCmd, timeoutMs:30000 })
       });
       const d = await r.json();
       const raw = (d.stdout||d.output||d.result||d.stderr||'').trim();
-      if (!raw || raw.includes('not found') || raw.includes('command not found')) {
-        setProblemLines([{type:'info',text:'No tsconfig.json found — TypeScript check skipped'}]);
+      if (!raw || raw.includes('not found') || raw.includes('command not found') || raw === 'no-config') {
+        setProblemLines([{type:'info',text:'No tsconfig.json or jsconfig.json found — check skipped'}]);
         setProblemCount(0); return;
       }
       const lines = raw.split('\n').filter(Boolean);
@@ -6476,6 +6847,35 @@ function App() {
           } : undefined}
         />
       )}
+      {/* ── Persistent Floating Choko Mascot Button ── */}
+      {!chokoMsg && !chokoTyping && viewMode !== 'preview' && (
+        <div 
+          className="choko-docked-pet"
+          onClick={()=>{
+            playChokoPop();
+            setChokoTyping(true);
+            setTimeout(()=>{
+              setChokoTyping(false);
+              const quotes = [
+                "scout report: all systems nominal! 🐾 click my hat to switch my outfit! ✨",
+                "ready for action! MAX and I are keeping your codebase safe. 🌰",
+                "strawberry, matcha, hazelnut or deep cacao? which hat do you like best? 🎀",
+                "tip: split mode lets you preview your code live while MAX works! ◫",
+                "psst! Barry, i found some clean code patterns today! 🍫"
+              ];
+              setChokoMsg(quotes[Math.floor(Math.random()*quotes.length)]);
+              setTimeout(()=>setChokoMsg(null), 8000);
+            }, 600);
+          }}
+          title="Choko 🐾 — Click to summon your calico scout!"
+        >
+          <div className="choko-sparkles-overlay">
+            <span className="choko-sparkle s1">✨</span>
+            <span className="choko-sparkle s2">✦</span>
+          </div>
+          <img src="/assets/choko_hazelnut.jpg" alt="Choko" className="choko-docked-img" />
+        </div>
+      )}
       {showPalette && (
         <CommandPalette
           files={realFiles && realFiles.length > 0 ? realFiles : DEMO_FILES}
@@ -6529,10 +6929,13 @@ function App() {
         {/* Centered toggle */}
         <div style={{position:'absolute',left:'50%',transform:'translateX(-50%)'}}>
           <div className="view-toggle">
-            <button className={`view-toggle-btn ${!showPreview?'on-code':'off'}`} onClick={()=>{setShowPreview(false);setBubbleOpen(false);}}>
+            <button className={`view-toggle-btn ${viewMode==='code'?'on-code':'off'}`} onClick={()=>{setViewMode('code');setBubbleOpen(false);}}>
               <span style={{display:'flex'}}>{ICONS.code}</span> Code
             </button>
-            <button className={`view-toggle-btn ${showPreview?'on-preview':'off'}`} onClick={()=>setShowPreview(true)}>
+            <button className={`view-toggle-btn ${viewMode==='split'?'on-split':'off'}`} onClick={()=>{setViewMode('split');setBubbleOpen(false);}}>
+              <span style={{display:'flex',fontSize:13}}>◫</span> Split
+            </button>
+            <button className={`view-toggle-btn ${viewMode==='preview'?'on-preview':'off'}`} onClick={()=>setViewMode('preview')}>
               <span style={{display:'flex'}}>{ICONS.globe}</span> Preview
             </button>
           </div>
@@ -6554,9 +6957,16 @@ function App() {
       </div>
 
       {/* ── Full-screen preview ── */}
-      {showPreview && (
+      {viewMode==='preview' && (
         <>
-          <div className="preview-fullscreen"><PreviewPane/></div>
+          <div className="preview-fullscreen">
+            <PreviewPane 
+              sendMessage={sendMessage} 
+              activeTab={activeTab} 
+              isSplit={false} 
+              onCloseSplit={()=>setViewMode('code')}
+            />
+          </div>
           <div className="float-bubble">
             {bubbleOpen && (
               <div className="float-window">
@@ -6568,16 +6978,18 @@ function App() {
                 </div>
                 <div className="fw-messages">
                   {messages.slice(-8).map(msg=>{
-                    const isUser=msg.role==='user';
-                    const p2=PERSONAS[msg.persona]||PERSONAS.muse;
-                    const preview=msg.text.replace(/```[\s\S]*?```/g,'[code]').slice(0,220);
+                    if (!msg) return null;
+                    const isUser = msg.role === 'user';
+                    const p2 = (msg.persona && PERSONAS?.[msg.persona]) || PERSONAS?.muse || { icon: '⚡', color: 'var(--accent)' };
+                    const rawText = typeof msg.text === 'string' ? msg.text : typeof msg.content === 'string' ? msg.content : (msg.details || msg.result || '');
+                    const preview = (rawText || '').replace(/```[\s\S]*?```/g, '[code]').slice(0, 220);
                     return (
-                      <div key={msg.id} style={{display:'flex',flexDirection:isUser?'row-reverse':'row',gap:6,alignItems:'flex-start'}}>
-                        <div style={{width:22,height:22,borderRadius:6,background:isUser?'var(--accent)':'var(--s3)',border:isUser?'none':'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:isUser?9:14,fontWeight:'bold',color:isUser?'#fff':p2.color,flexShrink:0,marginTop:1,fontFamily:'var(--mono)'}}>
-                          {isUser?'YOU':p2.icon}
+                      <div key={msg.id || Math.random()} style={{display:'flex',flexDirection:isUser?'row-reverse':'row',gap:6,alignItems:'flex-start'}}>
+                        <div style={{width:22,height:22,borderRadius:6,background:isUser?'var(--accent)':'var(--s3)',border:isUser?'none':'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:isUser?9:14,fontWeight:'bold',color:isUser?'#fff':(p2.color||'var(--accent)'),flexShrink:0,marginTop:1,fontFamily:'var(--mono)'}}>
+                          {isUser?'YOU':(p2.icon||'⚡')}
                         </div>
                         <div style={{background:isUser?'#1e1040':'var(--s2)',border:'1px solid '+(isUser?'#3d1f80':'var(--border)'),borderRadius:isUser?'7px 2px 7px 7px':'2px 7px 7px 7px',padding:'6px 10px',fontSize:11.5,lineHeight:1.6,maxWidth:'82%',wordBreak:'break-word'}}>
-                          {preview}{msg.text.length>220?'…':''}
+                          {preview}{rawText.length>220?'…':''}
                         </div>
                       </div>
                     );
@@ -6879,6 +7291,18 @@ function App() {
             </div>
           )}
         </div>
+
+        {/* ── Split Preview Live Canvas ── */}
+        {viewMode === 'split' && (
+          <div className="split-preview-pane">
+            <PreviewPane 
+              sendMessage={sendMessage} 
+              activeTab={activeTab} 
+              isSplit={true} 
+              onCloseSplit={()=>setViewMode('code')}
+            />
+          </div>
+        )}
 
         {/* ── MAX chat panel ── */}
         <div className="max-panel">
