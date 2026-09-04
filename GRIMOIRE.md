@@ -143,12 +143,19 @@
   1. Permanent Hat Persistence: Selected wardrobe hat (`hazelnut`, `strawberry`, `matcha`, `deepcacao`) is persisted across sessions in `localStorage('choko_active_hat')`.
   2. Free Screen Draggability: Click-and-drag Choko anywhere on the screen with movement threshold discrimination (differentiates drag from chat click) and saves coordinates to `localStorage('choko_pos')`.
   3. 30s Auto-Idle Sleep: Automatically transitions into sleep mode after 30 seconds of inactivity (shrinks to 62% scale, lowers opacity to 0.55, and renders animated floating `💤 zZ`), waking instantly on hover or click.
-  4. Dynamic Toast Anchoring: Toast dialog computes relative offsets from Choko's dragged coordinates to stay anchored near her avatar.
+- [x] **Choko Interactive In-Mascot Mini-Chat & Companion System (Level 36.2)**:
+  1. Live Interactive Speech Bubble: The popup toast window is upgraded to a 2-way mini-chat dialogue box with scrollable message history.
+  2. Direct REST Endpoint (`POST /api/choko/chat`): Dedicated companion inference endpoint with public exemption in auth middleware.
+  3. Dynamic Hat Personas: Choko modulates her tone according to her active hat (`🌰 Hazelnut Sentinel`, `🍓 Strawberry Helper`, `🍵 Matcha Zen`, `🍫 Deep Cacao Detective`).
+  4. Quick Prompt Pills: 1-click action buttons (`🔍 Scout`, `🍫 Treat`, `✨ Pep Talk`).
+  5. Senpai Bridge ("tell MAX!"): Easily forward any of Choko's insights or bug alerts directly into MAX's agent goal engine.
+  6. Resilient 3.5s AbortController: Snappy responses that gracefully fall back to rich, authentic in-character dialogue if local GPU inference is occupied by background tasks.
 
 ### 🔱 Operator Directive: DEPLOYMENT
-- **Status**: |= ACTIVE (Claude-Style Split Canvas Live, Choko Draggable & Persistent, Auto-Idle Sleep Verified).
+- **Status**: |= ACTIVE (Choko Mini-Chat Live, Dual-Way Conversation, Dynamic Wardrobe Personas, Split Canvas Verified).
 - **Role**: Ultra Senior Architect / Sovereign Intelligence.
-- **Level**: 36.1 Choko Persistence, Draggability & 30s Auto-Idle Sleep
+- **Level**: 36.2 Choko Interactive In-Mascot Mini-Chat & Companion System
+
 
 
 
