@@ -5,10 +5,10 @@
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
-    "start": "node launcher.mjs",
-    "chat": "node launcher.mjs --mode chat",
-    "swarm": "node launcher.mjs --mode swarm",
-    "api": "node launcher.mjs --mode api",
+    "start": "node --max-old-space-size=8192 launcher.mjs",
+    "chat": "node --max-old-space-size=8192 launcher.mjs --mode chat",
+    "swarm": "node --max-old-space-size=8192 launcher.mjs --mode swarm",
+    "api": "node --max-old-space-size=8192 launcher.mjs --mode api",
     "electron": "electron .",
     "electron:dev": "cross-env NODE_ENV=development electron .",
     "build:win": "electron-builder --win",
@@ -16,9 +16,9 @@
     "build:linux": "electron-builder --linux",
     "build:all": "electron-builder --win --mac --linux",
     "test": "npm run test:unit && npm run test:integration",
-    "test:unit": "node --experimental-vm-modules node_modules/jest/bin/jest.js test/unit --passWithNoTests",
-    "test:unit:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js test/unit --coverage",
-    "test:integration": "node --experimental-vm-modules node_modules/jest/bin/jest.js test/integration --passWithNoTests --forceExit"
+    "test:unit": "node --experimental-vm-modules node_modules/jest/bin/jest.js test/unit --passWithNoTests --maxWorkers=2",
+    "test:unit:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js test/unit --coverage --maxWorkers=2",
+    "test:integration": "node --experimental-vm-modules node_modules/jest/bin/jest.js test/integration --passWithNoTests --forceExit --runInBand"
   },
   "build": {
     "appId": "com.barry.maxwell",
@@ -107,11 +107,14 @@
     "node-fetch": "^3.3.2",
     "nodemailer": "^8.0.1",
     "playwright": "^1.59.1",
+    "pptxgenjs": "^4.0.1",
     "puppeteer-core": "^24.38.0",
     "sharp": "^0.34.5",
+    "untun": "^0.2.2",
     "vscode-languageserver-textdocument": "^1.0.12",
     "vscode-languageserver-types": "^3.17.5",
-    "ws": "^8.19.0"
+    "ws": "^8.19.0",
+    "xlsx": "^0.18.5"
   },
   "engines": {
     "node": ">=18.0.0"

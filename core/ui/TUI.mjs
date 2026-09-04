@@ -151,7 +151,7 @@ export class TUI {
     cleanReply(text) {
         return text
             .replace(/^(?:(?:\*\*|__)?(?:MAX|M\.A\.X)(?:\*\*|__)?[:.]\s*)*/i, '')
-            .replace(/^[^\w\n]{0,4}(?:Companion|Muse|Grinder|Architect|Paranoid|Breaker|Explainer|Devil(?:'s Advocate)?)\s+mode[^.\n]*[.\n]+\n*/i, '')
+            .replace(/^[^\w\n]{0,4}(?:Companion|Grinder|Architect|Paranoid|Breaker|Explainer|Devil(?:'s Advocate)?)\s+mode[^.\n]*[.\n]+\n*/i, '')
             .trimStart();
     }
 }

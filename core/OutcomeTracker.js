@@ -25,8 +25,7 @@ export class OutcomeTracker extends EventEmitter {
             avgReward: 0,
             totalTokens: 0,
             avgLatency: 0,
-            latencyCount: 0,
-            byAction: {},   // action → { count, successRate, avgReward, avgTokens, avgLatency, latencyCount }
+            byAction: {},   // action → { count, successRate, avgReward, avgTokens, avgLatency }
             byAgent:  {}    // agent  → { count, successRate, avgReward }
         };
 
@@ -37,9 +36,7 @@ export class OutcomeTracker extends EventEmitter {
     async initialize() {
         await fs.mkdir(this.storageDir, { recursive: true });
         await this._load();
-        if (this._persistTimer) clearInterval(this._persistTimer);
         this._persistTimer = setInterval(() => this._persist(), 60_000);
-        this._persistTimer.unref?.();
         this._ready = true;
         console.log(`[OutcomeTracker] ✅ ${this.stats.total} outcomes loaded`);
     }
@@ -69,9 +66,7 @@ export class OutcomeTracker extends EventEmitter {
         this.stats.avgReward = ((this.stats.avgReward * (n - 1)) + r) / n;
         
         if (duration) {
-            this.stats.latencyCount = (this.stats.latencyCount || 0) + 1;
-            const count = this.stats.latencyCount;
-            this.stats.avgLatency = ((this.stats.avgLatency * (count - 1)) + duration) / count;
+            this.stats.avgLatency = ((this.stats.avgLatency * (this.stats.total - 1)) + duration) / this.stats.total;
         }
 
         this._updateBucket(this.stats.byAction, action, ok, r, tokens, duration);
@@ -131,15 +126,14 @@ export class OutcomeTracker extends EventEmitter {
     }
 
     _updateBucket(obj, key, success, reward, tokens = 0, duration = 0) {
-        if (!obj[key]) obj[key] = { count: 0, successRate: 0, avgReward: 0, avgTokens: 0, avgLatency: 0, latencyCount: 0 };
+        if (!obj[key]) obj[key] = { count: 0, successRate: 0, avgReward: 0, avgTokens: 0, avgLatency: 0 };
         const b = obj[key];
         const n = b.count + 1;
         b.successRate = (b.successRate * b.count + (success ? 1 : 0)) / n;
         b.avgReward   = (b.avgReward   * b.count + reward)            / n;
         b.avgTokens   = (b.avgTokens   * b.count + tokens)            / n;
         if (duration) {
-            b.latencyCount = (b.latencyCount || 0) + 1;
-            b.avgLatency  = (b.avgLatency  * (b.latencyCount - 1) + duration) / b.latencyCount;
+            b.avgLatency  = (b.avgLatency  * b.count + duration)          / n;
         }
         b.count = n;
     }
@@ -168,12 +162,7 @@ export class OutcomeTracker extends EventEmitter {
             const file = path.join(this.storageDir, 'outcomes_current.json');
             const raw  = await fs.readFile(file, 'utf8');
             const data = JSON.parse(raw);
-            if (data.stats) {
-                this.stats = { ...this.stats, ...data.stats };
-                if (!this.stats.latencyCount && data.outcomes) {
-                    this.stats.latencyCount = data.outcomes.filter(o => o.duration).length;
-                }
-            }
+            if (data.stats) this.stats = data.stats;
             for (const o of (data.outcomes || [])) {
                 this._outcomes.set(o.id, o);
                 this._index(this._byAgent,  o.agent,  o.id);
@@ -184,10 +173,7 @@ export class OutcomeTracker extends EventEmitter {
     }
 
     async shutdown() {
-        if (this._persistTimer) {
-            clearInterval(this._persistTimer);
-            this._persistTimer = null;
-        }
+        clearInterval(this._persistTimer);
         await this._persist();
     }
 

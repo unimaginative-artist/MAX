@@ -463,33 +463,37 @@ export class MaxMemory {
 
     // ─── Auto-cleanup: prune old memories + evict hot tier ───────────────
     _cleanup() {
-        // ── Cold tier: prune low-importance memories older than decay window ──
-        const cutoff = Date.now() - IMPORTANCE_DECAY_DAYS * 24 * 60 * 60 * 1000;
-        const pruned = this._db.prepare(
-            'DELETE FROM memories WHERE accessed_at < ? AND importance < ?'
-        ).run(cutoff, MIN_IMPORTANCE);
+        try {
+            // ── Cold tier: prune low-importance memories older than decay window ──
+            const cutoff = Date.now() - IMPORTANCE_DECAY_DAYS * 24 * 60 * 60 * 1000;
+            const pruned = this._db.prepare(
+                'DELETE FROM memories WHERE accessed_at < ? AND importance < ?'
+            ).run(cutoff, MIN_IMPORTANCE);
 
-        if (pruned.changes > 0) {
-            console.log(`[Memory] Pruned ${pruned.changes} old memories`);
-            // Sync vector store — remove vectors whose memories were pruned
-            const livingIds = new Set(this._db.prepare('SELECT id FROM memories').all().map(r => r.id));
-            for (const id of this._vectors.keys()) {
-                if (!livingIds.has(id)) {
-                    this._vectors.delete(id);
-                    this._vectorsDirty = true;
+            if (pruned.changes > 0) {
+                console.log(`[Memory] Pruned ${pruned.changes} old memories`);
+                // Sync vector store — remove vectors whose memories were pruned
+                const livingIds = new Set(this._db.prepare('SELECT id FROM memories').all().map(r => r.id));
+                for (const id of this._vectors.keys()) {
+                    if (!livingIds.has(id)) {
+                        this._vectors.delete(id);
+                        this._vectorsDirty = true;
+                    }
                 }
             }
-        }
 
-        // ── Hot tier: cap at 200 entries — evict oldest ───────────────────
-        // Hot tier is session-level cache; unbounded growth is a memory leak
-        const HOT_MAX = 200;
-        if (this._hot.size > HOT_MAX) {
-            const sorted = [...this._hot.entries()].sort((a, b) => a[1].ts - b[1].ts);
-            const evictCount = this._hot.size - HOT_MAX;
-            for (const [id] of sorted.slice(0, evictCount)) {
-                this._hot.delete(id);
+            // ── Hot tier: cap at 200 entries — evict oldest ───────────────────
+            // Hot tier is session-level cache; unbounded growth is a memory leak
+            const HOT_MAX = 200;
+            if (this._hot.size > HOT_MAX) {
+                const sorted = [...this._hot.entries()].sort((a, b) => a[1].ts - b[1].ts);
+                const evictCount = this._hot.size - HOT_MAX;
+                for (const [id] of sorted.slice(0, evictCount)) {
+                    this._hot.delete(id);
+                }
             }
+        } catch (err) {
+            console.warn(`[Memory] ⚠️ Auto-cleanup failed: ${err.message}`);
         }
     }
 

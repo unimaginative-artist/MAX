@@ -23,9 +23,6 @@ const STOP = new Set([
     'know','going','want','need','make','take','get','got','let','say','said',
     'well','actually','literally','basically','thing','things','stuff','bit',
     'lot','way','mean','look','feel','feels','felt','seems','seem','seemed',
-    'const', 'let', 'var', 'function', 'class', 'import', 'export', 'return',
-    'await', 'async', 'yield', 'true', 'false', 'null', 'undefined', 'console',
-    'log', 'error', 'debug'
 ]);
 
 const ARC_WAVEFORM = {
@@ -142,7 +139,6 @@ export class MuseEngine extends EventEmitter {
     }
 
     markInsightPending() { this._insightPending = true; }
-    clearInsightPending() { this._insightPending = false; }
 
     // ── State snapshot ────────────────────────────────────────────────────────
 
@@ -165,14 +161,8 @@ export class MuseEngine extends EventEmitter {
         const recent = messages.slice(-16);
         const freq   = new Map();
 
-        for (let idx = 0; idx < recent.length; idx++) {
-            const m = recent[idx];
-            // Exponential decay: older messages (smaller idx) are decayed by 0.90 per message distance
-            const distance = recent.length - 1 - idx;
-            const decay = Math.pow(0.90, distance);
-            const baseWeight = m.role === 'user' ? 2.0 : 1.0;
-            const weight = baseWeight * decay;
-
+        for (const m of recent) {
+            const weight = m.role === 'user' ? 2.0 : 1.0;
             const words  = this._getText(m)
                 .toLowerCase()
                 .replace(/[^a-z0-9\s'-]/g, ' ')

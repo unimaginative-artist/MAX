@@ -59,6 +59,8 @@ export class UserProfile {
     get name()    { return this._name; }
     get hasProfile() { return !!this._user; }
 
+    getName() { return this._name; }
+
     // ─── Build the context block injected into every system prompt ─────────
     buildContextBlock() {
         if (!this._user && !this._tasks) return '';

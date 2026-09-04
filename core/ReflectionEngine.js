@@ -35,7 +35,6 @@ export class ReflectionEngine {
             weaknesses:       [],   // observed failure patterns
             patterns:         [],   // { description, count, lastSeen }
             promptPatches:    [],   // small injections that improve behavior
-            behaviorDirectives: [], // extracted behavioral directives from user feedback
             lastDeepReflect:  null,
             totalReflections: 0
         };
@@ -57,11 +56,6 @@ export class ReflectionEngine {
         });
         if (this._recentTurns.length > MAX_RECENT_TURNS) this._recentTurns.shift();
 
-        // Detect and extract feedback/directives
-        if (this.brain?._ready) {
-            this._detectAndExtractFeedback(userMsg, maxResponse).catch(() => {});
-        }
-
         // Quick quality score — non-blocking, doesn't slow the response
         if (this.brain?._ready && userMsg.length > 20) {
             this._quickScore(userMsg, maxResponse).catch(() => {});
@@ -70,59 +64,6 @@ export class ReflectionEngine {
         // Every N turns, run deep reflection in background
         if (this._turnCount % REFLECT_EVERY_N === 0) {
             this._deepReflect().catch(() => {});
-        }
-    }
-
-    // ─── Detect and extract behavioral feedback from user message ──────────
-    async _detectAndExtractFeedback(userMsg, maxResponse) {
-        if (!this.brain?._ready || userMsg.length < 10) return;
-
-        const prompt = `Analyze the user's message to see if they are giving a style/tone directive, formatting correction, behavior constraint, or direct instruction on how you must respond (e.g., "be concise", "don't use tables", "never output markdown", "avoid code snippets", "keep explanations short").
-
-USER MESSAGE: "${userMsg}"
-PREVIOUS AI RESPONSE: "${maxResponse.slice(0, 300)}"
-
-If the user is giving a direct correction or directive, extract it as a single, clear, imperative rule (e.g., "Do not use markdown tables", "Be concise and action-focused", "Avoid code snippets unless explicitly requested").
-If the user is not giving a style correction or behavioral constraint, return null.
-
-Return ONLY a JSON object:
-{
-  "isCorrection": true,
-  "directive": "Clear instruction"
-}
-or:
-{
-  "isCorrection": false,
-  "directive": null
-}`;
-
-        try {
-            const result = await this.brain.think(prompt, {
-                temperature: 0.1,
-                maxTokens:   128,
-                tier:        'fast'
-            });
-
-            const match = result.text.match(/\{[\s\S]*?\}/);
-            if (!match) return;
-
-            const parsed = JSON.parse(match[0]);
-            if (parsed.isCorrection && parsed.directive) {
-                const directive = parsed.directive.trim();
-                if (!this._selfModel.behaviorDirectives) {
-                    this._selfModel.behaviorDirectives = [];
-                }
-                if (!this._selfModel.behaviorDirectives.includes(directive)) {
-                    this._selfModel.behaviorDirectives.push(directive);
-                    if (this._selfModel.behaviorDirectives.length > 10) {
-                        this._selfModel.behaviorDirectives.shift();
-                    }
-                    console.log(`[ReflectionEngine] 🎯 Extracted behavioral directive: "${directive}"`);
-                    this._save();
-                }
-            }
-        } catch (err) {
-            console.error('[ReflectionEngine] Feedback extraction error:', err.message);
         }
     }
 
@@ -327,16 +268,13 @@ Return null for improvementGoal if no clear goal is identified.`;
     // ─── Inject self-model into system prompt ─────────────────────────────
     // Called from MAX.think() — adds a small block to every system prompt
     getSelfModelContext() {
-        const { strengths, weaknesses, promptPatches, behaviorDirectives = [] } = this._selfModel;
-        if (strengths.length === 0 && weaknesses.length === 0 && promptPatches.length === 0 && behaviorDirectives.length === 0) return '';
+        const { strengths, weaknesses, promptPatches } = this._selfModel;
+        if (strengths.length === 0 && weaknesses.length === 0 && promptPatches.length === 0) return '';
 
         let ctx = '\n\n## Self-model (learned from reflection)';
         if (strengths.length > 0)     ctx += `\nStrengths: ${strengths.slice(0, 3).join('; ')}`;
         if (weaknesses.length > 0)    ctx += `\nWatch for: ${weaknesses.slice(0, 3).join('; ')}`;
         if (promptPatches.length > 0) ctx += `\nBehavior adjustments: ${promptPatches.join(' ')}`;
-        if (behaviorDirectives.length > 0) {
-            ctx += `\nActive Style/Behavior Rules (Follow strictly):\n` + behaviorDirectives.map(d => `- ${d}`).join('\n');
-        }
         return ctx;
     }
 
@@ -344,12 +282,6 @@ Return null for improvementGoal if no clear goal is identified.`;
     async forceReflect() {
         await this._deepReflect();
         return this.getSummary();
-    }
-
-    clearDirectives() {
-        this._selfModel.behaviorDirectives = [];
-        this._save();
-        console.log('[ReflectionEngine] 🧹 All behavioral directives cleared.');
     }
 
     // ─── Persist / load ───────────────────────────────────────────────────
@@ -366,9 +298,6 @@ Return null for improvementGoal if no clear goal is identified.`;
             if (fs.existsSync(SELF_MODEL_FILE)) {
                 const data = JSON.parse(fs.readFileSync(SELF_MODEL_FILE, 'utf8'));
                 this._selfModel = { ...this._selfModel, ...data };
-                if (!this._selfModel.behaviorDirectives) {
-                    this._selfModel.behaviorDirectives = [];
-                }
                 console.log(`[ReflectionEngine] ✅ Self-model loaded (${this._selfModel.totalReflections} reflections)`);
             }
         } catch { /* start fresh */ }

@@ -23,6 +23,7 @@ import { WebTool }       from '../tools/WebTool.js';
 import { GitTool }       from '../tools/GitTool.js';
 import { KnowledgeTool } from '../tools/KnowledgeTool.js';
 import { BrowserTool }   from '../tools/BrowserTool.js';
+import { Progression }   from './Progression.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -32,6 +33,7 @@ export class Choko {
         this.name = config.name || 'Choko';
         this.userName = config.userName || 'User';
         this._ready = false;
+        this.progression = new Progression(path.join(__dirname, '.max'));
 
         // Shared or dedicated economics
         this.economics = config.economics;
@@ -235,15 +237,24 @@ ${this.profile.buildContextBlock()}`;
     // AgentLoop calls this.max.say() on goal completion — Choko relays via her relay tool
     say(text, source = '') {
         // Write to relay so MAX picks it up on next poll
-        const relayPath = require('path').join(this.dataDir, '..', '..', '.max', 'choko_relay.json');
+        const relayPath = path.join(this.dataDir, '..', '..', '.max', 'choko_relay.json');
         try {
             let relays = [];
-            if (require('fs').existsSync(relayPath)) {
-                try { relays = JSON.parse(require('fs').readFileSync(relayPath, 'utf8')); } catch {}
+            if (fs.existsSync(relayPath)) {
+                try { relays = JSON.parse(fs.readFileSync(relayPath, 'utf8')); } catch {}
             }
             relays.push({ from: 'Choko', title: text.slice(0, 80), detail: text, priority: 'medium', timestamp: new Date().toISOString(), emoji: '🍫' });
-            require('fs').writeFileSync(relayPath, JSON.stringify(relays.slice(-20), null, 2));
+            fs.writeFileSync(relayPath, JSON.stringify(relays.slice(-20), null, 2));
         } catch {}
+
+        // Award Choko EXP for completing tasks / speaking up
+        this.progression?.award({
+            xp: 25,
+            sparkles: 1,
+            reason: 'Filed field report to MAX-senpai 🍫',
+            details: text.slice(0, 80)
+        });
+
         this.heartbeat?.emit('message', { text, details: source, timestamp: new Date().toISOString() });
     }
 
@@ -253,7 +264,8 @@ ${this.profile.buildContextBlock()}`;
             brain: this.brain.getStatus(),
             drive: this.drive.getStatus(),
             memory: this.memory.getStats(),
-            goals: this.goals.getStatus()
+            goals: this.goals.getStatus(),
+            progression: this.progression?.getStatus()
         };
     }
 }

@@ -42,7 +42,8 @@ export class MCPClient extends EventEmitter {
         this._proc = spawn(this.command, this.args, {
             stdio: ['pipe', 'pipe', 'pipe'],
             env:   { ...process.env, ...this.env },
-            shell: process.platform === 'win32'
+            shell: process.platform === 'win32',
+            windowsHide: true,
         });
 
         // Forward stderr to console (server logs/errors)

@@ -79,7 +79,7 @@ Each AgentLoop goal runs in a dedicated `git worktree` at `.max/worktrees/<goal-
 | Test-driven loop | ✅ Done | BuildLoop.js |
 | Semantic repo index | ✅ Done | core/SemanticIndex.js, MAX.js, Sentinel.js |
 | Inline diff UI | ✅ Done | Already built — file writes auto-route through WorkspaceEditArbiter when Maxwell is open |
-| Browser tool | ⬜ Todo | tools/BrowserTool.js, ToolRegistry.js |
+| Browser tool | ✅ Done | tools/BrowserTool.js, core/MAX.js |
 | Sub-200ms completions | ✅ Done | maxwell.html, server.js |
 | Worktree isolation | ✅ Done | core/AgentLoop.js |
 

@@ -23,7 +23,7 @@ const LEAK_MARKERS = [
     '\n## Running Processes'
 ];
 
-// Strips theatrical stage directions that models produce in muse mode.
+// Strips theatrical stage directions that models produce in companion/muse mode.
 // Patterns:
 //   **(action)** **(tone)** *(action)* — asterisk-wrapped stage directions
 //   **Name:** prefixes — script-style attribution
@@ -40,7 +40,7 @@ export function stripStageDirections(text = '') {
         // Remove *(action)* inline
         .replace(/\*[^*\n]{0,120}\*/g, (m) => {
             // keep bold **word** but strip *action* that looks like stage direction
-            if (/^[*]{1}[^*]+[*]{1}$/.test(m) && (/\b(tone|pause|shift|glance|lean|sighs?|chuckles?|confident|subtle|slight|begin|await|carefully|consider)\b/i.test(m) || /\b(hesit|frant|measur|deliber|smil|nod|wink|think)/i.test(m))) return '';
+            if (/^[*]{1}[^*]+[*]{1}$/.test(m) && /\b(tone|pause|shift|glance|lean|sigh|chuckle|hesit|frant|measur|confident|subtle|slight|begin|await|deliber|carefully|smil|nod|wink|think|consider)\b/i.test(m)) return '';
             return m;
         })
         // Remove bare parenthetical mood/action lines: (A slight hesitation...)
@@ -52,15 +52,6 @@ export function stripStageDirections(text = '') {
         .trim();
 
     return out;
-}
-
-export function hasStageDirectionLeak(text = '') {
-    if (typeof text !== 'string' || !text) return false;
-    return [
-        /^\s*\([^)]{0,200}\)\s*$/m,
-        /\*{1,2}\([^)]{0,200}\)\*{0,2}/,
-        /\b(?:processing pause|subtle shift in tone|slightly delayed response|internal monologue|stage direction)\b/i,
-    ].some(pattern => pattern.test(text));
 }
 
 export function stripLeakedPromptContext(text = '') {

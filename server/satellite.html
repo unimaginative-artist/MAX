@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Maxwell Satellite — Sovereign Desktop Orb</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: rgba(18, 24, 38, 0.85);
+      --border: rgba(56, 189, 248, 0.2);
+      --accent: #38bdf8;
+      --accent-glow: rgba(56, 189, 248, 0.4);
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body {
+      background: transparent;
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      overflow: hidden;
+    }
+
+    /* Floating Capsule Container */
+    .satellite-container {
+      width: 440px;
+      max-width: 95vw;
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 30px var(--accent-glow);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    /* Top Orb Header */
+    .orb-header {
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      cursor: grab;
+      user-select: none;
+    }
+
+    /* The Living Orb */
+    .living-orb {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 35%, #7dd3fc, #0284c7 60%, #0369a1 90%);
+      box-shadow: 0 0 16px var(--accent-glow), inset 0 0 8px rgba(255, 255, 255, 0.8);
+      position: relative;
+      flex-shrink: 0;
+      animation: breathe 4s ease-in-out infinite alternate;
+    }
+
+    .living-orb.thinking {
+      animation: pulse-spin 1.2s linear infinite;
+      background: radial-gradient(circle at 35% 35%, #f472b6, #ec4899 60%, #be185d 90%);
+      box-shadow: 0 0 22px rgba(244, 114, 182, 0.7);
+    }
+
+    .living-orb.success {
+      background: radial-gradient(circle at 35% 35%, #34d399, #10b981 60%, #047857 90%);
+      box-shadow: 0 0 22px rgba(52, 211, 153, 0.7);
+    }
+
+    @keyframes breathe {
+      0% { transform: scale(0.95); box-shadow: 0 0 14px var(--accent-glow); }
+      100% { transform: scale(1.05); box-shadow: 0 0 26px var(--accent-glow); }
+    }
+
+    @keyframes pulse-spin {
+      0% { transform: rotate(0deg) scale(0.95); }
+      50% { transform: rotate(180deg) scale(1.1); }
+      100% { transform: rotate(360deg) scale(0.95); }
+    }
+
+    .orb-meta { flex: 1; }
+    .orb-title { font-size: 15px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 6px; }
+    .orb-subtitle { font-size: 12px; color: var(--text-muted); }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); display: inline-block; }
+
+    /* Drag and Drop Zone */
+    .drop-zone {
+      margin: 16px 20px;
+      padding: 16px;
+      border: 2px dashed rgba(56, 189, 248, 0.3);
+      border-radius: 16px;
+      text-align: center;
+      background: rgba(15, 23, 42, 0.6);
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+
+    .drop-zone:hover, .drop-zone.dragover {
+      border-color: var(--accent);
+      background: rgba(56, 189, 248, 0.08);
+      transform: translateY(-1px);
+    }
+
+    .drop-icon { font-size: 24px; margin-bottom: 4px; }
+    .drop-text { font-size: 13px; font-weight: 600; color: #e2e8f0; }
+    .drop-subtext { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+    /* Action Pills */
+    .action-pills {
+      display: flex;
+      gap: 8px;
+      padding: 0 20px 14px;
+      overflow-x: auto;
+    }
+
+    .pill {
+      padding: 6px 12px;
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      font-size: 12px;
+      color: var(--text-muted);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+
+    .pill:hover {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    /* Output Stream Box */
+    .stream-box {
+      max-height: 240px;
+      overflow-y: auto;
+      padding: 0 20px 14px;
+      font-size: 13px;
+      line-height: 1.5;
+      color: #cbd5e1;
+      display: none;
+    }
+
+    .stream-box.active { display: block; }
+    .stream-box pre { white-space: pre-wrap; word-break: break-word; font-family: inherit; }
+
+    /* Results Card */
+    .result-card {
+      margin: 0 20px 14px;
+      padding: 12px 16px;
+      border-radius: 14px;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      display: none;
+    }
+
+    .result-card.active { display: block; }
+    .result-title { font-size: 13px; font-weight: 700; color: #34d399; margin-bottom: 4px; }
+    .result-desc { font-size: 12px; color: #94a3b8; margin-bottom: 8px; }
+    .btn-download {
+      display: inline-block;
+      padding: 6px 12px;
+      border-radius: 8px;
+      background: var(--success);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: opacity 0.2s;
+    }
+    .btn-download:hover { opacity: 0.9; }
+
+    /* Input Bar */
+    .input-bar {
+      padding: 14px 20px;
+      background: rgba(11, 15, 25, 0.9);
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .input-field {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 10px 14px;
+      color: #fff;
+      font-size: 13px;
+      outline: none;
+      transition: border 0.2s;
+    }
+
+    .input-field:focus { border-color: var(--accent); }
+
+    .btn-send {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: none;
+      color: #0b0f19;
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: transform 0.2s;
+    }
+
+    .btn-send:hover { transform: scale(1.08); }
+
+    /* GMN Tier Badge */
+    .tier-badge {
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      background: rgba(56, 189, 248, 0.15);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      color: var(--accent);
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .tier-badge:hover {
+      background: rgba(56, 189, 248, 0.3);
+      transform: scale(1.04);
+    }
+
+    .tier-badge.tier1 {
+      background: rgba(16, 185, 129, 0.15);
+      border-color: rgba(16, 185, 129, 0.4);
+      color: #34d399;
+    }
+
+    .tier-badge.tier2 {
+      background: rgba(59, 130, 246, 0.15);
+      border-color: rgba(59, 130, 246, 0.4);
+      color: #60a5fa;
+    }
+
+    .tier-badge.tier3 {
+      background: rgba(168, 85, 247, 0.15);
+      border-color: rgba(168, 85, 247, 0.4);
+      color: #c084fc;
+    }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+
+    .modal-backdrop.active { display: flex; }
+
+    .modal-box {
+      width: 380px;
+      max-width: 90vw;
+      background: #111827;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      border-radius: 20px;
+      padding: 20px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.8);
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .modal-title { font-size: 15px; font-weight: 700; color: #fff; }
+    .modal-close { background: none; border: none; color: #94a3b8; font-size: 20px; cursor: pointer; }
+
+    .tier-row {
+      margin-bottom: 12px;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .tier-label { font-size: 11px; font-weight: 700; color: #94a3b8; margin-bottom: 4px; display: flex; justify-content: space-between; }
+    .tier-val { font-size: 12px; color: #f1f5f9; font-family: monospace; word-break: break-all; }
+  </style>
+</head>
+<body>
+
+  <div class="satellite-container" id="container">
+    <!-- Header with Living Orb -->
+    <div class="orb-header">
+      <div class="living-orb" id="orb"></div>
+      <div class="orb-meta">
+        <div class="orb-title">Maxwell Satellite <span class="status-dot"></span></div>
+        <div class="orb-subtitle" id="status-text">Connected to GMN Cluster</div>
+      </div>
+      <div class="tier-badge tier1" id="tier-badge" onclick="toggleSettingsModal()" title="Click to view GMN Connection Matrix">
+        ⚡ TIER 1: LAN
+      </div>
+    </div>
+
+    <!-- GMN Connection Matrix Modal -->
+    <div class="modal-backdrop" id="settings-modal" onclick="if(event.target === this) toggleSettingsModal()">
+      <div class="modal-box">
+        <div class="modal-header">
+          <div class="modal-title">🛸 GMN Connection Matrix</div>
+          <button class="modal-close" onclick="toggleSettingsModal()">&times;</button>
+        </div>
+        <div class="tier-row">
+          <div class="tier-label"><span>Tier 1: Home Wi-Fi (LAN)</span><span id="t1-status" style="color: #34d399">ACTIVE</span></div>
+          <div class="tier-val" id="t1-val">http://192.168.1.250:3100</div>
+        </div>
+        <div class="tier-row">
+          <div class="tier-label"><span>Tier 2: Tailscale Mesh</span><span id="t2-status" style="color: #94a3b8">STANDBY</span></div>
+          <div class="tier-val" id="t2-val">Private Sovereign WireGuard Mesh</div>
+        </div>
+        <div class="tier-row">
+          <div class="tier-label"><span>Tier 3: Cloud Relay (Global)</span><span id="t3-status" style="color: #c084fc">READY</span></div>
+          <div class="tier-val" id="t3-val">Encrypted Zero-Trust Cloudflare Tunnel</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Drop Zone -->
+    <div class="drop-zone" id="drop-zone">
+      <div class="drop-icon">📊</div>
+      <div class="drop-text">Drop an Excel Spreadsheet here</div>
+      <div class="drop-subtext">Automated formula audit, SUM gap healing & reports</div>
+      <input type="file" id="file-input" accept=".xlsx,.xls,.csv" style="display: none;">
+    </div>
+
+    <!-- Action Pills -->
+    <div class="action-pills">
+      <div class="pill" onclick="quickAction('audit')">🔍 Audit Sheet</div>
+      <div class="pill" onclick="quickAction('repair')">🩹 Auto-Heal Formulas</div>
+      <div class="pill" onclick="quickAction('deck')">🎨 Create Presentation</div>
+    </div>
+
+    <!-- Output Stream Box -->
+    <div class="stream-box" id="stream-box">
+      <pre id="stream-content"></pre>
+    </div>
+
+    <!-- Result Card -->
+    <div class="result-card" id="result-card">
+      <div class="result-title" id="result-title">Action Complete</div>
+      <div class="result-desc" id="result-desc">Repaired workbook ready.</div>
+      <a href="#" class="btn-download" id="btn-download" download>Download File</a>
+    </div>
+
+    <!-- Chat Input -->
+    <div class="input-bar">
+      <input type="text" class="input-field" id="prompt-input" placeholder="Ask Maxwell or type instructions...">
+      <button class="btn-send" id="btn-send" onclick="sendPrompt()">➔</button>
+    </div>
+  </div>
+
+  <script>
+    const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/satellite';
+    let socket = null;
+    let lastUploadedFile = null;
+
+    const orb = document.getElementById('orb');
+    const statusText = document.getElementById('status-text');
+    const streamBox = document.getElementById('stream-box');
+    const streamContent = document.getElementById('stream-content');
+    const resultCard = document.getElementById('result-card');
+    const resultTitle = document.getElementById('result-title');
+    const resultDesc = document.getElementById('result-desc');
+    const btnDownload = document.getElementById('btn-download');
+    const promptInput = document.getElementById('prompt-input');
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+
+    function connectWs() {
+      socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        statusText.innerText = "GMN Cluster Linked (Machine A + B)";
+        orb.className = 'living-orb';
+      };
+
+      socket.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        handleMessage(msg);
+      };
+
+      socket.onclose = () => {
+        statusText.innerText = "Cluster Reconnecting...";
+        setTimeout(connectWs, 3000);
+      };
+    }
+
+    function handleMessage(msg) {
+      if (msg.type === 'token') {
+        streamBox.classList.add('active');
+        streamContent.textContent += msg.token;
+        streamBox.scrollTop = streamBox.scrollHeight;
+      } else if (msg.type === 'status') {
+        orb.className = 'living-orb thinking';
+        statusText.innerText = msg.status.replace(/_/g, ' ');
+      } else if (msg.type === 'complete') {
+        orb.className = 'living-orb success';
+        statusText.innerText = "Ready";
+        setTimeout(() => { orb.className = 'living-orb'; }, 2000);
+      } else if (msg.type === 'audit_result') {
+        orb.className = 'living-orb success';
+        statusText.innerText = `Audit Complete: ${msg.criticalCount} critical, ${msg.highCount} high`;
+        streamBox.classList.add('active');
+        let report = `📊 SPREADSHEET AUDIT: ${msg.fileName}\n`;
+        report += `Total Findings: ${msg.totalFindings} (${msg.criticalCount} Critical, ${msg.highCount} High)\n\n`;
+        for (const sheet of msg.sheets || []) {
+          report += `Sheet: [${sheet.sheetName}]\n`;
+          for (const f of sheet.findings || []) {
+            report += `  - [${f.severity.toUpperCase()}] ${f.cell}: ${f.message}\n`;
+          }
+        }
+        streamContent.textContent = report;
+      } else if (msg.type === 'repair_result') {
+        orb.className = 'living-orb success';
+        statusText.innerText = `Repaired ${msg.repairsCount} formula(s)`;
+        resultCard.classList.add('active');
+        resultTitle.innerText = "Spreadsheet Healed";
+        resultDesc.innerText = msg.summary;
+        if (msg.fileBase64) {
+          btnDownload.href = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${msg.fileBase64}`;
+          btnDownload.download = msg.fileName || 'Repaired_Workbook.xlsx';
+        }
+      } else if (msg.type === 'deck_result') {
+        orb.className = 'living-orb success';
+        statusText.innerText = "Presentation Generated";
+        resultCard.classList.add('active');
+        resultTitle.innerText = "Slide Deck Ready";
+        resultDesc.innerText = msg.summary;
+        if (msg.fileBase64) {
+          btnDownload.href = `data:application/vnd.openxmlformats-officedocument.presentationml.presentation;base64,${msg.fileBase64}`;
+          btnDownload.download = msg.fileName || 'Presentation.pptx';
+        }
+      }
+    }
+
+    function sendPrompt() {
+      const text = promptInput.value.trim();
+      if (!text || !socket || socket.readyState !== WebSocket.OPEN) return;
+
+      streamContent.textContent = '';
+      streamBox.classList.add('active');
+      resultCard.classList.remove('active');
+      orb.className = 'living-orb thinking';
+      statusText.innerText = "Thinking...";
+
+      socket.send(JSON.stringify({
+        type: 'prompt',
+        payload: { text }
+      }));
+
+      promptInput.value = '';
+    }
+
+    promptInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendPrompt();
+    });
+
+    // File Drag and Drop Handling
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files.length > 0) {
+        handleFileUpload(e.dataTransfer.files[0]);
+      }
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) handleFileUpload(e.target.files[0]);
+    });
+
+    function handleFileUpload(file) {
+      lastUploadedFile = file;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result.split(',')[1];
+        orb.className = 'living-orb thinking';
+        statusText.innerText = `Auditing ${file.name}...`;
+
+        socket.send(JSON.stringify({
+          type: 'audit_sheet',
+          payload: {
+            fileName: file.name,
+            fileBase64: base64
+          }
+        }));
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function quickAction(action) {
+      if (!lastUploadedFile && (action === 'audit' || action === 'repair')) {
+        fileInput.click();
+        return;
+      }
+
+      if (action === 'repair' && lastUploadedFile) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const base64 = reader.result.split(',')[1];
+          socket.send(JSON.stringify({
+            type: 'repair_sheet',
+            payload: {
+              fileName: lastUploadedFile.name,
+              fileBase64: base64,
+              autoHealGaps: true
+            }
+          }));
+        };
+        reader.readAsDataURL(lastUploadedFile);
+      } else if (action === 'deck') {
+        socket.send(JSON.stringify({
+          type: 'generate_deck',
+          payload: {
+            title: "Q3 Business Update",
+            subtitle: "Prepared autonomously by Maxwell Satellite",
+            slides: [
+              { header: "Key Highlights", bullets: ["Revenue up 18% quarter-over-quarter", "Formula variances reconciled with zero audit errors", "Cash flow projections locked"] },
+              { header: "Next Steps", bullets: ["Deploy automated weekly reconciliation", "Finalize team roll-forward schedules"] }
+            ]
+          }
+        }));
+      }
+    }
+
+    function toggleSettingsModal() {
+      const modal = document.getElementById('settings-modal');
+      modal.classList.toggle('active');
+      if (modal.classList.contains('active')) {
+        loadTierMatrix();
+      }
+    }
+
+    async function loadTierMatrix() {
+      try {
+        const res = await fetch('/api/satellite/tier-matrix');
+        const data = await res.json();
+        if (data.ok && data.tiers) {
+          if (data.tiers.tier1_lan) document.getElementById('t1-val').innerText = data.tiers.tier1_lan;
+          if (data.tiers.tier2_mesh) {
+            document.getElementById('t2-val').innerText = data.tiers.tier2_mesh;
+            document.getElementById('t2-status').innerText = 'CONNECTED';
+            document.getElementById('t2-status').style.color = '#60a5fa';
+          }
+          if (data.tiers.tier3_relay) {
+            document.getElementById('t3-val').innerText = data.tiers.tier3_relay;
+            document.getElementById('t3-status').innerText = 'LIVE RELAY';
+            document.getElementById('t3-status').style.color = '#c084fc';
+          }
+        }
+      } catch {}
+    }
+
+    loadTierMatrix();
+    connectWs();
+  </script>
+</body>
+</html>

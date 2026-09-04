@@ -77,7 +77,6 @@ export class Scheduler extends EventEmitter {
         this._statePath = path.join(process.cwd(), '.max', 'schedules.json');
         this._timer    = null;
         this._running  = false;
-        this._inFlight = new Set();
 
         this.stats = { ticks: 0, jobsRun: 0, errors: 0 };
     }
@@ -124,10 +123,7 @@ export class Scheduler extends EventEmitter {
     }
 
     stop() {
-        if (this._timer) {
-            clearInterval(this._timer);
-            this._timer = null;
-        }
+        if (this._timer) clearInterval(this._timer);
         this._running = false;
         this._saveState();
     }
@@ -138,18 +134,14 @@ export class Scheduler extends EventEmitter {
         const now = Date.now();
 
         for (const [id, job] of this.jobs) {
-            if (this._inFlight.has(id)) continue;
             const lastRun = this._lastRun[id] || 0;
             const due     = (now - lastRun) >= job.intervalMs;
             if (!due) continue;
 
             // Don't await — run jobs concurrently, non-blocking
-            this._inFlight.add(id);
             this._runJob(job, now).catch(err => {
                 console.error(`[Scheduler] Job "${id}" error:`, err.message);
                 this.stats.errors++;
-            }).finally(() => {
-                this._inFlight.delete(id);
             });
         }
     }

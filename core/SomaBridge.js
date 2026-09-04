@@ -7,6 +7,10 @@
 // The HTTP bridge AND WebSocket signal bridge will both reach SOMA over LAN.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { applyProposal } from './SomaController.js';
+import { BridgeTaskLedger } from './BridgeTaskLedger.js';
+import { createHash } from 'crypto';
+
 export class SomaBridge {
     constructor(config = {}) {
         this.baseUrl     = config.url || process.env.SOMA_URL || 'http://localhost:3001';
@@ -15,7 +19,9 @@ export class SomaBridge {
         this._lastCheck  = 0;
         this._checkEvery = 60_000;  // re-probe every 60s if it was down
         this.stats       = { calls: 0, hits: 0, errors: 0, avgLatencyMs: 0 };
+        this.tasks       = new BridgeTaskLedger(config.taskLedger);
         this._offlineLogged = false;
+        this._lastStartAttempt = 0;
 
         // ── Signal bridge (WebSocket — works cross-machine over LAN) ─────
         this._signalWs            = null;
@@ -34,17 +40,32 @@ export class SomaBridge {
         return this;
     }
 
-    async _probe() {
+    async _probe({ autoStart = true } = {}) {
         try {
             const { default: fetch } = await import('node-fetch');
             const r = await Promise.race([
                 fetch(`${this.baseUrl}/health`),
-                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000))
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000))
             ]);
             this._available = r.ok;
         } catch {
             this._available = false;
         }
+
+        if (!this._available) {
+            const isLocal = this.baseUrl.includes('localhost') || this.baseUrl.includes('127.0.0.1');
+            if (isLocal && autoStart) {
+                const now = Date.now();
+                if (now - this._lastStartAttempt > 60000) {
+                    this._lastStartAttempt = now;
+                    console.log('[SomaBridge] 🛰️ SOMA offline. Attempting to auto-start SOMA...');
+                    import('./SomaController.js').then(({ startSoma }) => {
+                        startSoma().catch(err => console.error('[SomaBridge] Auto-start SOMA failed:', err.message));
+                    }).catch(() => {});
+                }
+            }
+        }
+
         const wasAvailable = this._ready;
         this._ready     = this._available;
         this._lastCheck = Date.now();
@@ -63,6 +84,16 @@ export class SomaBridge {
         }
 
         return this._available;
+    }
+
+    async checkHealth({ startIfOffline = false } = {}) {
+        const available = await this._probe({ autoStart: startIfOffline });
+        return {
+            available,
+            action: !available && startIfOffline ? 'start_requested' : 'none',
+            baseUrl: this.baseUrl,
+            checkedAt: Date.now()
+        };
     }
 
     get available() {
@@ -240,7 +271,10 @@ export class SomaBridge {
      */
     async injectGoal(goal) {
         if (!this._available) return { success: false, error: 'SOMA offline' };
+        const { task, created } = this.tasks.create({ type: 'goal.inject', payload: goal });
+        if (!created) return { success: true, deduplicated: true, taskId: task.id, status: task.status };
         try {
+            this.tasks.beginAttempt(task.id);
             const { default: fetch } = await import('node-fetch');
             const r = await Promise.race([
                 fetch(`${this.baseUrl}/api/goals`, {
@@ -250,12 +284,14 @@ export class SomaBridge {
                 }),
                 new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000))
             ]);
-            if (!r.ok) return { success: false, error: `SOMA ${r.status}` };
+            if (!r.ok) throw new Error(`SOMA ${r.status}`);
             const data = await r.json();
+            this.tasks.transition(task.id, 'accepted', { evidence: { goalId: data.id || null, httpStatus: r.status } });
             console.log(`[SomaBridge] 🎯 Goal injected into SOMA: "${goal.title}"`);
-            return { success: true, goalId: data.id };
+            return { success: true, goalId: data.id, taskId: task.id, status: 'accepted' };
         } catch (err) {
-            return { success: false, error: err.message };
+            const updated = this.tasks.retry(task.id, err.message);
+            return { success: false, error: err.message, taskId: task.id, status: updated.status };
         }
     }
 
@@ -390,10 +426,35 @@ export class SomaBridge {
      */
     async deployToSoma(moduleName, code) {
         if (!this._available) return { success: false, error: 'SOMA offline' };
-        
-        console.log(`[SomaBridge] 🚀 Deploying hot-patch to SOMA: ${moduleName}`);
-        // This is where Section 14 (Seal of SOMA) binding would happen
-        return { success: true, message: "Patch staged for SOMA kernel arbitration." };
+
+        const { task, created } = this.tasks.create({
+            type: 'code.deploy',
+            payload: {
+                moduleName,
+                codeHash: createHash('sha256').update(String(code || '')).digest('hex')
+            }
+        });
+        if (!created) return { success: false, deduplicated: true, taskId: task.id, status: task.status };
+
+        try {
+            this.tasks.beginAttempt(task.id);
+            const result = await applyProposal({
+                taskId: task.id,
+                file: moduleName,
+                newCode: code,
+                rationale: 'MAX to SOMA verified bridge deployment'
+            });
+            if (!result.applied) {
+                this.tasks.transition(task.id, 'failed', { evidence: result, error: result.error || result.reason || 'deployment rejected' });
+                return { success: false, taskId: task.id, ...result };
+            }
+            this.tasks.transition(task.id, 'accepted', { evidence: { receiptPath: result.receiptPath } });
+            this.tasks.transition(task.id, 'completed', { evidence: result });
+            return { success: true, taskId: task.id, ...result };
+        } catch (err) {
+            const updated = this.tasks.retry(task.id, err.message);
+            return { success: false, error: err.message, taskId: task.id, status: updated.status };
+        }
     }
 
     // ── SOMA → MAX curiosity goal sync ───────────────────────────────────

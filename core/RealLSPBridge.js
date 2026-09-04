@@ -30,7 +30,6 @@ class LSPClient extends EventEmitter {
         this._pending = new Map();   // id -> { resolve, reject }
         this._buf    = '';
         this._ready  = false;
-        this._stopping = false;
         this.capabilities = {};
     }
 
@@ -52,11 +51,14 @@ class LSPClient extends EventEmitter {
         this._proc.on('error', err => {
             console.warn(`[LSP:${this.langId}] spawn error: ${err.message}`);
             this._ready = false;
-            this._rejectPending(err);
         });
         this._proc.on('exit', code => {
             this._ready = false;
-            this._rejectPending(new Error(`LSP server exited (code ${code})`));
+            // reject all pending requests cleanly
+            for (const { reject } of this._pending.values()) {
+                reject(new Error(`LSP server exited (code ${code})`));
+            }
+            this._pending.clear();
         });
 
         try {
@@ -138,9 +140,6 @@ class LSPClient extends EventEmitter {
     }
 
     _req(method, params) {
-        if (!this._proc?.stdin?.writable) {
-            return Promise.reject(new Error(`LSP unavailable: ${method}`));
-        }
         return new Promise((resolve, reject) => {
             const id = this._nextId++;
             const timer = setTimeout(() => {
@@ -149,9 +148,7 @@ class LSPClient extends EventEmitter {
                     reject(new Error(`LSP timeout: ${method}`));
                 }
             }, 10000);
-            timer.unref?.();
             this._pending.set(id, {
-                timer,
                 resolve: v => { clearTimeout(timer); resolve(v); },
                 reject:  e => { clearTimeout(timer); reject(e);  }
             });
@@ -203,23 +200,8 @@ class LSPClient extends EventEmitter {
     }
 
     stop() {
-        if (this._stopping) return;
-        this._stopping = true;
+        this._proc?.kill('SIGTERM');
         this._ready = false;
-        this._rejectPending(new Error('LSP client stopped'));
-        if (this._proc && !this._proc.killed) {
-            this._notify('exit', {});
-            this._proc.kill('SIGTERM');
-        }
-        this._proc = null;
-    }
-
-    _rejectPending(err) {
-        for (const pending of this._pending.values()) {
-            clearTimeout(pending.timer);
-            pending.reject(err);
-        }
-        this._pending.clear();
     }
 }
 

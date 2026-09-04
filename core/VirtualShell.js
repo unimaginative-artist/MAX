@@ -26,8 +26,8 @@ export class VirtualShell extends EventEmitter {
 
         this.proc = spawn(
             this.isWin ? 'cmd.exe' : 'bash',
-            [],
-            { env: process.env, shell: true }
+            this.isWin ? ['/Q', '/D'] : [],
+            { env: process.env, shell: false, windowsHide: true }
         );
 
         this.proc.stdout.on('data', (data) => {
@@ -57,15 +57,17 @@ export class VirtualShell extends EventEmitter {
     _stripCmdEcho(output, command) {
         if (!this.isWin) return output;
         // cmd.exe echoes the command + our wrapper lines — strip them
-        const lines = output.split(/\r?\n/);
+        // cmd.exe's initial prompt has no trailing newline, so it can be
+        // concatenated directly with the first command's real output.
+        const lines = output.replace(/^[A-Za-z]:[\\/][^>\r\n]*>/gm, '').split(/\r?\n/);
         const cmdFirst = command.trim().split(/\r?\n/)[0].trim().toLowerCase();
         return lines.filter(l => {
             const t = l.trim().toLowerCase();
             if (!t) return true; // keep blank lines (they're intentional output)
             if (t === cmdFirst) return false;
             if (t.startsWith('echo __exit_code_') || t.startsWith('echo __max_shell_done_')) return false;
-            // Filter prompt echoes like "C:\Users\barry\Desktop\MAX>"
-            if (/^[a-z]:[\\\/].*>/.test(t)) return false;
+            if (t.startsWith('microsoft windows [version ')) return false;
+            if (t.startsWith('(c) microsoft corporation.')) return false;
             return true;
         }).join('\n');
     }
@@ -107,14 +109,14 @@ export class VirtualShell extends EventEmitter {
         }
     }
 
-    async run(command, timeoutMs = 120000, signal = null, isInteractive = false) {
+    async run(command, timeoutMs = 120000, signal = null, isInteractive = false, cwd = null) {
         if (!this.ready) this.start();
         if (signal?.aborted) {
             return { success: false, code: -1, stdout: '', stderr: '', error: 'Aborted' };
         }
 
         return new Promise((resolve, reject) => {
-            this._queue.push({ command, timeoutMs, signal, resolve, reject, isInteractive });
+            this._queue.push({ command, timeoutMs, signal, resolve, reject, isInteractive, cwd });
             if (!this._currentResolver) {
                 this._processQueue();
             }
@@ -124,7 +126,7 @@ export class VirtualShell extends EventEmitter {
     async _processQueue() {
         if (this._queue.length === 0 || this._currentResolver) return;
 
-        const { command, timeoutMs, signal, resolve, isInteractive } = this._queue.shift();
+        const { command, timeoutMs, signal, resolve, isInteractive, cwd } = this._queue.shift();
         if (signal?.aborted) {
             resolve({ success: false, code: -1, stdout: '', stderr: '', error: 'Aborted' });
             this._processQueue();
@@ -158,9 +160,17 @@ export class VirtualShell extends EventEmitter {
         }
 
         // Wrap the command to echo the exit code and the strict delimiter
-        const wrappedCmd = this.isWin
-            ? `${command}\r\necho __EXIT_CODE_%errorlevel%__\r\necho ${this._delimiter}\r\n`
-            : `${command}\necho "__EXIT_CODE_$?__"\necho "${this._delimiter}"\n`;
+        let wrappedCmd;
+        if (this.isWin && cwd) {
+            wrappedCmd = `set "__MAX_OLD_CWD=%CD%"\r\ncd /d "${cwd}"\r\n${command}\r\nset "__MAX_EXIT=%errorlevel%"\r\ncd /d "%__MAX_OLD_CWD%"\r\necho __EXIT_CODE_%__MAX_EXIT%__\r\necho ${this._delimiter}\r\n`;
+        } else if (cwd) {
+            const safeCwd = cwd.replace(/'/g, `'"'"'`);
+            wrappedCmd = `(cd -- '${safeCwd}' && ${command})\necho "__EXIT_CODE_$?__"\necho "${this._delimiter}"\n`;
+        } else {
+            wrappedCmd = this.isWin
+                ? `${command}\r\necho __EXIT_CODE_%errorlevel%__\r\necho ${this._delimiter}\r\n`
+                : `${command}\necho "__EXIT_CODE_$?__"\necho "${this._delimiter}"\n`;
+        }
 
         this.proc.stdin.write(wrappedCmd);
 

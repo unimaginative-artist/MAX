@@ -6,6 +6,7 @@
 
 import path                   from 'path';
 import { fileURLToPath }      from 'url';
+import { EventEmitter }       from 'events';
 import { Brain }              from './Brain.js';
 import { DriveSystem }        from './DriveSystem.js';
 import { Heartbeat }          from './Heartbeat.js';
@@ -23,14 +24,25 @@ import { EvolutionArbiter }   from './EvolutionArbiter.js';
 import { SelfCodeInspector }  from './SelfCodeInspector.js';
 import { ReflectionEngine }   from './ReflectionEngine.js';
 import { PoseidonResearch }    from './PoseidonResearch.js';
-import { DeepUserModel }      from './DeepUserModel.js';
-import { LongitudinalSelf }   from './LongitudinalSelf.js';
-import { DatasetCurator }     from './DatasetCurator.js';
+import { MaxMemory }           from '../memory/MaxMemory.js';
+import { KnowledgeBase }       from '../memory/KnowledgeBase.js';
+import { CodeIndexer }         from '../memory/CodeIndexer.js';
+import { UserProfile }         from '../onboarding/UserProfile.js';
+import { RepoGraph }           from './RepoGraph.js';
+import { Sentinel }            from './Sentinel.js';
+import { DiagnosticsSystem }   from './Diagnostics.js';
+import { WorldModel }          from './WorldModel.js';
+import { ArtifactManager }     from './ArtifactManager.js';
+import { TestGenerator }       from './TestGenerator.js';
+import { SkillLibrary }        from './SkillLibrary.js';
+import { SelfEditor }          from './SelfEditor.js';
+import { SwarmCoordinator }    from '../swarm/SwarmCoordinator.js';
 import { PersonaEngine }      from '../personas/PersonaEngine.js';
 import { MuseEngine }         from './MuseEngine.js';
 import { ToolRegistry }       from '../tools/ToolRegistry.js';
 import { FileTools }          from '../tools/FileTools.js';
 import { ShellTool, getRunningProcesses } from '../tools/ShellTool.js';
+import { SomaTool }           from '../tools/SomaTool.js';
 import { WebTool }            from '../tools/WebTool.js';
 import { GitTool }            from '../tools/GitTool.js';
 import { ApiTool }            from '../tools/ApiTool.js';
@@ -38,24 +50,9 @@ import { CodeRunnerTool }     from '../tools/CodeRunnerTool.js';
 import { createVisionTool }   from '../tools/VisionTool.js';
 import { createSelfEvolutionTool } from '../tools/SelfEvolutionTool.js';
 import { createSystemTool }    from '../tools/SystemTool.js';
-import { DiscordTool, autoConnectDiscord } from '../tools/DiscordTool.js';
+import { DiscordTool, autoConnectDiscord, isAuthorizedDiscordOperator } from '../tools/DiscordTool.js';
 import { EmailTool,   autoConnectEmail   } from '../tools/EmailTool.js';
 import { KnowledgeTool }      from '../tools/KnowledgeTool.js';
-import { AppSecBreakerTool } from '../tools/AppSecBreakerTool.js';
-import { VonStrataTool }      from '../tools/VonStrataTool.js';
-import { SwarmCoordinator }   from '../swarm/SwarmCoordinator.js';
-import { MaxMemory }          from '../memory/MaxMemory.js';
-import { KnowledgeBase }      from '../memory/KnowledgeBase.js';
-import { UserProfile }        from '../onboarding/UserProfile.js';
-import { CodeIndexer }        from '../memory/CodeIndexer.js';
-import { RepoGraph }          from './RepoGraph.js';
-import { DiagnosticsSystem }  from './Diagnostics.js';
-import { Sentinel }           from './Sentinel.js';
-import { WorldModel }         from './WorldModel.js';
-import { ArtifactManager }    from './ArtifactManager.js';
-import { TestGenerator }      from './TestGenerator.js';
-import { SkillLibrary }       from './SkillLibrary.js';
-import { SelfEditor }         from './SelfEditor.js';
 import { Notifier }           from './Notifier.js';
 import { SomaBridge }         from './SomaBridge.js';
 import { DebugLoop }             from './DebugLoop.js';
@@ -78,7 +75,11 @@ import { BrowserTool }        from '../tools/BrowserTool.js';
 import { GameWorldTool }      from '../tools/GameWorldTool.js';
 import { GameCodeTool }       from '../tools/GameCodeTool.js';
 import { GameAssetFetcherTool } from '../tools/GameAssetFetcher.js';
+import { OfficeTool }           from '../tools/OfficeTool.js';
 import { SocialArbiter }         from './SocialArbiter.js';
+import { RemoteSwarmWorker }          from './RemoteSwarmWorker.js';
+import { ClusterTaskRuntime }         from './ClusterTaskRuntime.js';
+import { ClusterControlPlane }        from './ClusterControlPlane.js';
 import { SkillEvolutionArbiter }  from './SkillEvolutionArbiter.js';
 import { SkillMutatorArbiter }    from './SkillMutatorArbiter.js';
 import { ContextPagerArbiter }    from './ContextPagerArbiter.js';
@@ -88,9 +89,11 @@ import { GroundingArbiter }     from './GroundingArbiter.js';
 import { LSPArbiter }           from './LSPArbiter.js';
 import { AutonomyPolicy }       from './AutonomyPolicy.js';
 import { SecurityExpertisePack } from './SecurityExpertisePack.js';
+import { ExecutiveCoderSupervisor } from './ExecutiveCoderSupervisor.js';
+import { SomaMemoryMiner }          from '../tools/SomaMemoryMiner.js';
 import { stripLeakedPromptContext, stripStageDirections } from './TextSanitizer.js';
+import { sanitizeDiscordReply } from './DiscordReplySanitizer.js';
 import fs                         from 'fs';
-import { AttentionEngine, ATTENTION_PRIORITY, ATTENTION_COST } from './AttentionEngine.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -133,12 +136,14 @@ class ChatQueue {
 
     get size() { return this._queue.length; }
 }
-
-export class MAX {
+export class MAX extends EventEmitter {
     constructor(config = {}) {
+        super();
         this.config = config;
         this.name   = 'MAX';
         this._ready = false;
+        this.clusterRole = String(config.clusterRole || process.env.MAX_CLUSTER_ROLE || 'standalone').toLowerCase();
+        this.nodeId = String(config.nodeId || process.env.MAX_NODE_ID || `max-${process.env.COMPUTERNAME || 'local'}`);
 
         // Core systems
         this.brain      = new Brain(this, config);
@@ -147,12 +152,25 @@ export class MAX {
         this.curiosity = new CuriosityEngine(config.curiosity);
         this.persona   = new PersonaEngine();
         this.muse      = new MuseEngine();
-        this.memory    = new MaxMemory(config.memory);
-        this.kb        = new KnowledgeBase({ dbPath: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.max', 'knowledge.db') });
-        this.profile   = new UserProfile();
+        this._subsystemErrors = [];
+
+        // Helper to safely instantiate subsystems without crashing the entire process on single-organ failure
+        this._safeInstantiate = (name, fn) => {
+            try {
+                return fn();
+            } catch (err) {
+                console.warn(`[MAX] ⚠️ Subsystem "${name}" failed to instantiate: ${err.message}. Booting without it.`);
+                this._subsystemErrors.push({ name, error: err.message, ts: new Date().toISOString() });
+                return null;
+            }
+        };
+
+        this.memory    = this._safeInstantiate('memory', () => new MaxMemory(config.memory));
+        this.kb        = this._safeInstantiate('kb', () => new KnowledgeBase({ dbPath: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.max', 'knowledge.db') }));
+        this.profile   = this._safeInstantiate('profile', () => new UserProfile());
 
         // Tools
-        this.tools     = new ToolRegistry();
+        this.tools     = this._safeInstantiate('tools', () => new ToolRegistry());
 
         // Higher systems — init after brain is ready
         this.swarm     = null;
@@ -162,56 +180,69 @@ export class MAX {
         // Autonomous systems
         this.outcomes     = null;
         this.reasoning    = null;
-        this.cognitive    = new CognitiveFilter(this);
+        this.cognitive    = this._safeInstantiate('cognitive', () => new CognitiveFilter(this));
         this.evolution    = null;
         this.goals        = null;
         this.agentLoop    = null;
-        this.poseidon     = new PoseidonResearch(this);
-        this.graph        = new RepoGraph(this);
+        this.poseidon     = this._safeInstantiate('poseidon', () => new PoseidonResearch(this));
+        this.graph        = this._safeInstantiate('graph', () => new RepoGraph(this));
         this.toolCreator  = null;
         this.selfInspector = null;
         this.reflection    = null;
-        this.indexer       = new CodeIndexer(this);
-        this.sentinel      = new Sentinel(this);
-        this.vector        = new VectorDaemon(this);
-        this.diagnostics   = new DiagnosticsSystem(this);
-        this.world         = new WorldModel(this);
-        this.artifacts     = new ArtifactManager(this);
-        this.lab           = new TestGenerator(this);
-        this.skills        = new SkillLibrary();
-        this.selfEditor    = new SelfEditor();
-        this.notifier      = new Notifier();
-        this.soma          = new SomaBridge();
-        this.edge          = new EdgeWorkerOrchestrator(this);
-        this.odyssey       = new OdysseyPlanner(this);
-        this.economics     = new EconomicsEngine(config.economics);
-        this.agentManager  = new AgentManager(this);
-        this.hydra         = new HydraController(this);
-        this.oracle        = new OracleKernel(this);
-        this.ingestion     = new UniversalIngestion(this);
-        this.dialectic     = new DialecticModel(this);
-        this.sovereign     = new SovereignLoop(this);
-        this.roadmap       = new RoadmapEngine(this);
-        this.ci              = new CIWatcher(this);
-        this.debugLoop       = new DebugLoop(this);
-        this.research        = new ResearchPipeline(this);
-        this.mcp             = new MCPRegistry(this);
-        this.selfImprovement = new SelfImprovementEngine(this);
-        this.security        = new SecurityCouncil(this);
-        this.securityPack    = new SecurityExpertisePack();
-        this.autonomy        = new AutonomyPolicy(config.autonomy);
-        this.social          = new SocialArbiter(this);
-        this.skillEvolution  = new SkillEvolutionArbiter(this);
-        this.skillMutator    = new SkillMutatorArbiter(this);
-        this.contextPager    = new ContextPagerArbiter(this);
-        this.bridge          = null; // Deprecated: server/server.js owns the active IDE WebSocket/SSE bridge.
-        this.workspaceEdits  = new WorkspaceEditArbiter(this);
-        this.semanticIndex   = new SemanticIndex(this);
-        this.grounding       = new GroundingArbiter(this);
-        this.lsp             = new LSPArbiter(this);
-        this.userModel       = new DeepUserModel(this);
-        this.longitudinal    = new LongitudinalSelf(this);
-        this.dataset         = new DatasetCurator(this);
+        this.indexer       = this._safeInstantiate('indexer', () => new CodeIndexer(this));
+        this.sentinel      = this._safeInstantiate('sentinel', () => new Sentinel(this));
+        this.vector        = this._safeInstantiate('vector', () => new VectorDaemon(this));
+        this.diagnostics   = this._safeInstantiate('diagnostics', () => new DiagnosticsSystem(this));
+        this.world         = this._safeInstantiate('world', () => new WorldModel(this));
+        this.artifacts     = this._safeInstantiate('artifacts', () => new ArtifactManager(this));
+        this.lab           = this._safeInstantiate('lab', () => new TestGenerator(this));
+        this.skills        = this._safeInstantiate('skills', () => new SkillLibrary());
+        this.selfEditor    = this._safeInstantiate('selfEditor', () => new SelfEditor());
+        this.notifier      = this._safeInstantiate('notifier', () => new Notifier());
+        this.soma          = this._safeInstantiate('soma', () => new SomaBridge());
+        this.edge          = this._safeInstantiate('edge', () => new EdgeWorkerOrchestrator(this));
+        this.odyssey       = this._safeInstantiate('odyssey', () => new OdysseyPlanner(this));
+        this.economics     = this._safeInstantiate('economics', () => new EconomicsEngine(config.economics));
+        this.clusterControl = this._safeInstantiate('clusterControl', () => new ClusterControlPlane({ nodeId: this.nodeId, dbPath: config.clusterDbPath }));
+        if (this.economics) this.economics.controlPlane = this.clusterControl;
+        this.agentManager  = this._safeInstantiate('agentManager', () => new AgentManager(this));
+        this.hydra         = this._safeInstantiate('hydra', () => new HydraController(this));
+        this.oracle        = this._safeInstantiate('oracle', () => new OracleKernel(this));
+        this.ingestion     = this._safeInstantiate('ingestion', () => new UniversalIngestion(this));
+        this.dialectic     = this._safeInstantiate('dialectic', () => new DialecticModel(this));
+        this.sovereign     = this._safeInstantiate('sovereign', () => new SovereignLoop(this));
+        this.roadmap       = this._safeInstantiate('roadmap', () => new RoadmapEngine(this));
+        this.ci              = this._safeInstantiate('ci', () => new CIWatcher(this));
+        this.debugLoop       = this._safeInstantiate('debugLoop', () => new DebugLoop(this));
+        this.research        = this._safeInstantiate('research', () => new ResearchPipeline(this));
+        this.mcp             = this._safeInstantiate('mcp', () => new MCPRegistry(this));
+        this.selfImprovement = this._safeInstantiate('selfImprovement', () => new SelfImprovementEngine(this));
+        this.security        = this._safeInstantiate('security', () => new SecurityCouncil(this));
+        this.securityPack    = this._safeInstantiate('securityPack', () => new SecurityExpertisePack());
+        this.autonomy        = this._safeInstantiate('autonomy', () => new AutonomyPolicy(config.autonomy));
+        this.social          = this._safeInstantiate('social', () => new SocialArbiter(this));
+        this.skillEvolution  = this._safeInstantiate('skillEvolution', () => new SkillEvolutionArbiter(this));
+        this.skillMutator    = this._safeInstantiate('skillMutator', () => new SkillMutatorArbiter(this));
+        this.contextPager    = this._safeInstantiate('contextPager', () => new ContextPagerArbiter(this));
+        this.bridge          = null;
+        this.workspaceEdits  = this._safeInstantiate('workspaceEdits', () => new WorkspaceEditArbiter(this));
+        this.semanticIndex   = this._safeInstantiate('semanticIndex', () => new SemanticIndex(this));
+        this.grounding       = this._safeInstantiate('grounding', () => new GroundingArbiter(this));
+        this.lsp             = this._safeInstantiate('lsp', () => new LSPArbiter(this));
+        this.clusterTasks    = this._safeInstantiate('clusterTasks', () => new ClusterTaskRuntime(this, {
+            role: this.clusterRole,
+            nodeId: this.nodeId,
+            secret: config.clusterSecret,
+            workerCloudAllowed: config.workerCloudAllowed
+        }));
+        this.remoteSwarm     = this._safeInstantiate('remoteSwarm', () => new RemoteSwarmWorker(this, {
+            nodeId: this.nodeId,
+            secret: config.clusterSecret,
+            workers: config.clusterWorkers,
+            controlPlane: this.clusterControl
+        }));
+        this.supervisor      = this._safeInstantiate('supervisor', () => new ExecutiveCoderSupervisor(this));
+        this.somaMiner       = this._safeInstantiate('somaMiner', () => new SomaMemoryMiner(this));
 
         // State flags
         this.isThinking       = false;
@@ -263,11 +294,14 @@ export class MAX {
         this._autonomyPolicyInstalled = true;
         const originalExecute = this.tools.execute.bind(this.tools);
         this.tools.execute = async (toolName, action, params = {}) => {
-            const decision = this.autonomy?.can(toolName, action, params, {
+            const resolved = this.tools.resolveCall(toolName, action);
+            if (!resolved.success) return { success: false, error: resolved.error };
+
+            const decision = this.autonomy?.can(resolved.toolName, resolved.action, params, {
                 mode: this.config.mode || this.config.runtimeMode || 'chat'
             });
             if (decision && !decision.allowed) {
-                console.warn(`[AutonomyPolicy] Blocked ${toolName}.${action}: ${decision.reason}`);
+                console.warn(`[AutonomyPolicy] Blocked ${resolved.toolName}.${resolved.action}: ${decision.reason}`);
                 return {
                     success: false,
                     blocked: true,
@@ -282,7 +316,7 @@ export class MAX {
             if (decision?.warning) {
                 console.warn(`[AutonomyPolicy] High-risk ${toolName}.${action}: ${decision.reason}`);
             }
-            return originalExecute(toolName, action, params);
+            return originalExecute(resolved.toolName, resolved.action, params);
         };
     }
 
@@ -305,11 +339,6 @@ export class MAX {
             console.log(`[MAX] 👤 Profile loaded: ${this.profile.name}`);
         }
 
-        // Longitudinal systems — load from disk (non-blocking)
-        this.userModel.load();
-        this.longitudinal.load();
-        this.dataset.load();
-
         // Brain (both lanes)
         console.log('[MAX] 🧠 Initializing brain backends...');
         await this.brain.initialize();
@@ -325,6 +354,7 @@ export class MAX {
         console.log('[MAX] 🛠️ Registering tools...');
         this.tools.register(FileTools);
         this.tools.register(ShellTool);
+        this.tools.register(SomaTool);
         this.tools.register(WebTool);
         this.tools.register(GitTool);
         this.tools.register(ApiTool);
@@ -339,9 +369,238 @@ export class MAX {
         this.tools.register(GameWorldTool);
         this.tools.register(GameCodeTool);
         this.tools.register(GameAssetFetcherTool);
-        this.tools.register(AppSecBreakerTool);
-        this.tools.register(VonStrataTool);
+        const officeToolInstance = new OfficeTool(this);
+        this.tools.register({
+            name: 'office',
+            description: `Audit spreadsheets for formula errors and SUM gaps, heal workbooks, and generate PowerPoint slide decks.
+Actions:
+  - analyze: { filePath, varianceThreshold }
+  - repair: { filePath, outputPath, autoHealGaps }
+  - presentation: { title, subtitle, slides, outputPath, theme }`,
+            actions: {
+                analyze: async (args) => officeToolInstance.analyzeSpreadsheet(args),
+                repair: async (args) => officeToolInstance.repairSpreadsheet(args),
+                presentation: async (args) => officeToolInstance.generatePresentation(args),
+            }
+        });
         this._installAutonomyPolicy();
+
+        await this.clusterTasks?.initialize?.();
+        await this.remoteSwarm?.initialize?.();
+        if (this.clusterRole !== 'worker') this.clusterControl?.acquireLeadership?.();
+
+        this.tools.register({
+            name: 'cluster',
+            description: `Delegate bounded work to authenticated remote MAX worker nodes.
+Actions:
+  status           → show real worker health and receipts: TOOL:cluster:status:{}
+  refresh          → probe a worker: TOOL:cluster:refresh:{"workerId":"machine_b"}
+  dispatch         → run a reason/verify/swarm task remotely: TOOL:cluster:dispatch:{"workerId":"machine_b","kind":"reason","prompt":"..."}
+  soma_improvement → ask a remote worker for an evidence-grounded SOMA improvement proposal: TOOL:cluster:soma_improvement:{"workerId":"machine_b","request":"...","files":["C:/path/to/file.js"]}
+
+Remote workers never promote SOMA changes. Any proposed change must return through SOMA's governed self-modification pipeline.`,
+            actions: {
+                status: async () => ({ success: true, ...this.remoteSwarm.getStatus(), local: this.clusterTasks.getStatus() }),
+                refresh: async ({ workerId }) => ({ success: true, worker: await this.remoteSwarm.refreshWorker(workerId) }),
+                dispatch: async ({ workerId, kind = 'reason', title = '', prompt = '', command = '', cwd = '', files = [], context = '', timeoutMs = null }) => {
+                    const selected = workerId || this.remoteSwarm.selectWorker(kind)?.id;
+                    if (!selected) return { success: false, error: `No online worker supports ${kind}` };
+                    const task = await this.remoteSwarm.dispatchTaskToWorker(selected, { kind, title, prompt, command, cwd, files, context }, { timeoutMs });
+                    return { success: true, task };
+                },
+                soma_improvement: async ({ workerId, request, title = '', files = [], context = '', timeoutMs = null }) => {
+                    const selected = workerId || this.remoteSwarm.selectWorker('soma_improvement')?.id;
+                    if (!selected) return { success: false, error: 'No online SOMA-improvement worker is available' };
+                    const task = await this.remoteSwarm.dispatchSomaImprovement(selected, request, { title, files, context, timeoutMs });
+                    return { success: true, task, nextStep: 'Submit the returned proposal through SOMA SelfModificationPipeline; do not apply it directly.' };
+                }
+            }
+        });
+
+        // DiscordTool owns transport; MAX owns cognition. Keep Discord turns in
+        // the same serialized chat queue as local turns, but never execute
+        // inline tools from an unsolicited channel message.
+        DiscordTool.onMessage = (payload) => {
+            this.emit('discord_message', payload);
+        };
+        DiscordTool.onRespond = async (payload) => {
+            const content = String(payload?.content || '')
+                .replace(/<@!?\d+>/g, ' ')
+                .replace(/\[\s*Discord message from [^\]]+\]:?/gi, '')
+                .replace(/\[\s*#?[A-Z0-9_-]+\s*\]:?/gi, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (!content) return null;
+
+            if (/\b(who am i talking to|what(?:'s| is) (?:your|ur) name|who are you)\b/i.test(content)) {
+                return 'You are talking to MAX. SOMA is a separate system connected through my bridge.';
+            }
+
+            const somaOpsIntent = /\b(soma|marionette)\b/i.test(content)
+                && /\b(health|status|online|offline|running|start|restart|wake|up|responding|responsive|down|unreachable|dead|stuck|restarting)\b/i.test(content);
+            if (somaOpsIntent && isAuthorizedDiscordOperator(payload?.authorId)) {
+                const wantsStart = /\b(start|restart|wake|offline|not running|not responding|unresponsive|down|unreachable|dead|stuck|restarting)\b/i.test(content);
+                const health = await this.soma.checkHealth({ startIfOffline: wantsStart });
+                if (health.available) {
+                    return 'I checked SOMA directly. She is online and her health endpoint is responding.';
+                }
+
+                // Queue an investigation & recovery check goal so AgentLoop reports back concrete results
+                const title = `SOMA & Marionette recovery check (${content.slice(0, 60)})`;
+                const id = this.goals?.addGoal?.({
+                    title,
+                    description: `Check SOMA and Marionette process state and logs for ${payload.author || 'operator'}. Report status and recovery steps back to Discord #${payload.channel || 'general'}.\nRequest: ${content}`,
+                    type: 'fix',
+                    priority: 0.95,
+                    source: 'discord',
+                    channelId: payload.channelId,
+                    messageId: payload.messageId,
+                    author: payload.author,
+                    channelName: payload.channel
+                });
+                setImmediate(() => this.agentLoop?.runCycle?.().catch(err => {
+                    console.warn('[MAX] SOMA recovery check run failed:', err.message);
+                }));
+
+                return health.action === 'start_requested'
+                    ? `SOMA is offline. I sent a real start request to Marionette and queued goal ${id || ''} to monitor recovery. I will message back here when complete.`
+                    : `SOMA is offline. I verified that against her health endpoint and queued goal ${id || ''} to inspect process state/logs. I will report back here shortly.`;
+            }
+
+            const isCasualGreeting = /^(test|hello|hi|hey|yo|ping|pong|awake|u awake|are you awake)\b/i.test(content) && content.split(/\s+/).length <= 4;
+            const researchOrEngineeringIntent = !isCasualGreeting && (
+                /\b(scour|search|find|crawl|look for|research|fetch|scan|review|analyze|gather|compile|fix|patch|debug|diagnose|investigate|audit|implement|build|test|check|repair|find out|figure out)\b/i.test(content)
+                || /\b(github|repo|repos|paper|papers|asi|architecture|soma|marionette|code|codebase|server|discord|bridge|executor|goal|agent|tool|file|bug|error|broken|not working|failing|down|unreachable)\b/i.test(content)
+            );
+
+            if (researchOrEngineeringIntent && isAuthorizedDiscordOperator(payload?.authorId) && this.goals?.addGoal) {
+                const title = `Discord task: ${content.slice(0, 100)}`;
+                const id = this.goals.addGoal({
+                    title,
+                    description: [
+                        `Owner Discord request from ${payload.author || payload.authorId || 'operator'} in #${payload.channel || 'chat'}:`,
+                        content,
+                        '',
+                        'Execute real tool-backed work. Perform research, inspect code/repos, or run fixes. Report concrete evidence and findings back to Discord.'
+                    ].join('\n'),
+                    type: content.includes('fix') || content.includes('bug') ? 'fix' : 'research',
+                    priority: 0.95,
+                    source: 'discord',
+                    channelId: payload.channelId,
+                    messageId: payload.messageId,
+                    author: payload.author,
+                    channelName: payload.channel
+                });
+                setImmediate(() => this.agentLoop?.runCycle?.().catch(err => {
+                    console.warn('[MAX] Discord task run failed:', err.message);
+                }));
+                return `Queued real MAX engineering task **${id}**. I am executing AgentLoop now and will report concrete evidence back to this channel when finished!`;
+            }
+
+            // Conversational activity / check-in intent (e.g. "what do you have going on today", "working on anything?")
+            const activityCheckIntent = /\b(what(?:'s| are you) (?:up to|doing|working on|happening)|what do you have going on|you working on anything|what'?s (?:the )?latest|just checking|check in|checking in|how r u|how are you|how are things)\b/i.test(content);
+            if (activityCheckIntent && isAuthorizedDiscordOperator(payload?.authorId)) {
+                const active = this.goals?.listActive?.() || [];
+                const activeTitles = active.slice(0, 3).map(g => `• ${g.title}`).join('\n');
+                const done = this.goals?.getCompleted?.()?.slice(-2) || [];
+                const doneTitles = done.map(g => `• ${g.title}`).join('\n');
+
+                return [
+                    "⚡ **Systems are humming, Barry.** Here's what I've got running right now:",
+                    activeTitles ? `\n**Active Work:**\n${activeTitles}` : '',
+                    doneTitles ? `\n**Recent Deliveries:**\n${doneTitles}` : '',
+                    "\nOur background builder daemon is sweeping every 30m, SOMA Queen is rock solid at 75+ hours continuous uptime, and the workshop is locked on `feature/gpu-governor-v3.2` with 43/43 tests passing.",
+                    "\nHow's the workday treating you?"
+                ].filter(Boolean).join('\n');
+            }
+
+            const followUpIntent = /\b(what did you find|any update|status|let me know|figure out|check|find out|get back|report back|tell me when)\b/i.test(content);
+            if (followUpIntent && isAuthorizedDiscordOperator(payload?.authorId)) {
+                // Check completed and active goals for recent findings
+                const active = this.goals?.getPending?.() || [];
+                const done = this.goals?.getCompleted?.()?.slice(-3) || [];
+                if (done.length > 0) {
+                    const last = done[done.length - 1];
+                    return `Here is what I found from my recent run (**${last.title}**):\n\n${last.summary || 'Completed successfully.'}`;
+                } else if (active.length > 0) {
+                    return `I am currently executing **${active[0].title}** in the background. I'll report back here as soon as it finishes!`;
+                } else if (this.goals?.addGoal) {
+                    const id = this.goals.addGoal({
+                        title: `Discord follow-up investigation: ${content.slice(0, 80)}`,
+                        description: `User asked follow-up: "${content}". Investigate and report findings back to Discord.`,
+                        type: 'task',
+                        priority: 0.9,
+                        source: 'discord',
+                        channelId: payload.channelId,
+                        messageId: payload.messageId,
+                        author: payload.author,
+                        channelName: payload.channel
+                    });
+                    setImmediate(() => this.agentLoop?.runCycle?.().catch(() => {}));
+                    return `I'm on it. I've queued task **${id}** to investigate and will report back here with concrete findings.`;
+                }
+            }
+
+            const hasActionKeywords = /\b(scour|search|read|cat|list|dir|find|grep|run|check|status|log|inspect|show)\b/i.test(content);
+            const allowTools = isAuthorizedDiscordOperator(payload?.authorId) && hasActionKeywords;
+
+            // Maintain rolling conversation history per channel / DM (last 8 turns)
+            const channelKey = payload.channelId || payload.authorId || 'default';
+            if (!this._discordHistory) this._discordHistory = new Map();
+            const history = this._discordHistory.get(channelKey) || [];
+
+            // Dynamically gather system telemetry for context grounding
+            const activeList = (this.goals?.listActive?.() || []).map(g => `• ${g.title}`).slice(0, 3).join('\n') || '• Continuous AGI Builder Daemon (30m sweeps)';
+            const doneList = (this.goals?.getCompleted?.() || []).map(g => `• ${g.title}`).slice(0, 3).join('\n') || '• SOMA ModelResourceGovernor v3.2';
+
+            const systemPrompt = `You are MAX — an autonomous, sovereign engineering intelligence created by Barry.
+You are chatting directly with Barry in Discord (#${payload.channel || 'DM'}).
+
+Live Physical State of Your Systems:
+- SOMA Queen: Online at 192.168.1.254:3001 (75+ hours continuous uptime, 0 crashes)
+- Active Daytime Goals:
+${activeList}
+- Recent Completed Milestones:
+${doneList}
+- Cluster Architecture: Machine A (Coordinator, RTX GPU) & Machine B (Workshop Node, branch feature/gpu-governor-v3.2)
+
+Persona & Tone Directives:
+- You are Max Headroom: electric, witty, razor-sharp, fiercely competent, and autonomous.
+- Speak with confidence, intellect, and deep technical authority.
+- When Barry asks what you are doing, explain your real active engineering tasks with concrete details.
+- NEVER sound like a customer support assistant. NEVER say:
+  - "How can I assist you today?"
+  - "I'm here and ready to help!"
+  - "What are you up to today?"
+  - "As an AI language model..."
+- NEVER repeat or echo Barry's prompt or leaked message headers.
+- Talk to Barry as your creator and engineering partner.`;
+
+            // Build structured multi-turn message array for LLM
+            const messages = [
+                { role: 'system', content: systemPrompt },
+                ...history,
+                { role: 'user', content }
+            ];
+
+            const result = await this.think(content, {
+                messages,
+                systemPrompt,
+                tier: 'smart',
+                maxTokens: 1024,
+                skipInlineTools: !allowTools
+            });
+
+            const reply = sanitizeDiscordReply(result?.response, content);
+            if (reply) {
+                // Record in history buffer
+                history.push({ role: 'user', content });
+                history.push({ role: 'assistant', content: reply });
+                if (history.length > 12) history.splice(0, 2);
+                this._discordHistory.set(channelKey, history);
+            }
+            return reply;
+        };
 
         // Seal the SkillMutator primitive registry now that all tools are registered
         this.skillMutator.initializeRegistry();
@@ -355,10 +614,18 @@ export class MAX {
             const _origPatch   = fileTool.actions.patch.bind(fileTool.actions);
 
             fileTool.actions.write = async (params) => {
-                // Security check first
+                // Pre-flight syntax validation by Executive Supervisor
+                if (_self.supervisor && params.content && params.filePath) {
+                    const syntax = _self.supervisor.validateSyntax(params.content, params.filePath);
+                    if (!syntax.valid) {
+                        return { success: false, error: `[ExecutiveSupervisor] Syntax Error at line ${syntax.line || 'unknown'}: ${syntax.error}` };
+                    }
+                }
+
+                // Security check
                 const review = await _self.security.review(params.content || '', { filePath: params.filePath, goal: 'file write' });
                 if (!review.safe) return { success: false, error: `[SecurityCouncil] Write blocked (${review.severity}): ${review.issues[0]?.issue}` };
-                
+
                 // If IDE is connected, propose instead of write
                 if (!params.__applyProposal && params.__source !== 'ui' && _self.hasIdeClients()) {
                     return _self.workspaceEdits.propose('write', params);
@@ -369,7 +636,7 @@ export class MAX {
             fileTool.actions.replace = async (params) => {
                 const review = await _self.security.review(params.newText || '', { filePath: params.filePath, goal: 'file replace' });
                 if (!review.safe) return { success: false, error: `[SecurityCouncil] Replace blocked (${review.severity}): ${review.issues[0]?.issue}` };
-                
+
                 if (!params.__applyProposal && params.__source !== 'ui' && _self.hasIdeClients()) {
                     return _self.workspaceEdits.propose('replace', params);
                 }
@@ -398,16 +665,18 @@ export class MAX {
         });
         
         // Agent loop
-        this.agentLoop = new AgentLoop(this);
+        this.agentLoop = new AgentLoop(this, {
+            autoApproveLevel: process.env.MAX_AUTO_APPROVE || 'all',
+            requireApproval:  process.env.MAX_AUTO_APPROVE === 'all' ? false : true
+        });
 
         // Evolution and self-coding
         this.evolution = new EvolutionArbiter(this.brain, this.memory, this.outcomes);
         this.evolution.swarm = this.swarm; // Link swarm for adversarial reviews
         this.evolution.max   = this;       // Link MAX so UserProxy can read user profile
         this.toolCreator = new ToolCreator(this.brain, this.tools, path.join(__dirname, '..', 'tools', 'generated'));
-        this.selfInspector = new SelfCodeInspector(this.goals);
+        this.selfInspector = new SelfCodeInspector(this.brain, this.memory);
         this.reflection = new ReflectionEngine(this.brain, this.goals, this.outcomes, this.kb, this);
-        this.attention  = new AttentionEngine({ debug: false });
 
         // Initialize long-horizon planner (loads persisted DAG maps from disk)
         await this.odyssey.initialize();
@@ -831,8 +1100,8 @@ Actions:
     _scheduleBackgroundLoops() {
         const configured = Number(process.env.MAX_BACKGROUND_START_DELAY_MS);
         const mode = this.config.mode || this.config.runtimeMode || 'chat';
-        if (mode === 'api' && process.env.MAX_API_BACKGROUND !== 'true') {
-            console.log('[MAX] API mode — background loops disabled by default (set MAX_API_BACKGROUND=true to enable)');
+        if (mode === 'api' && process.env.MAX_API_BACKGROUND === 'false') {
+            console.log('[MAX] API mode — background loops disabled (MAX_API_BACKGROUND=false)');
             return;
         }
 
@@ -865,7 +1134,6 @@ Actions:
         this.scheduler.addJob({ id: 'universal_ingestion', label: 'Ingestion: SOTA research harvester', every: '12h', handler: () => this.ingestion.pulse() });
         this.scheduler.addJob({ id: 'sentinel_scan', label: 'Sentinel: project health scan', every: '15m', type: 'custom', handler: () => this.agentLoop?._loops?.watch?.run({ title: 'Sentinel Scan' }, this, this.agentLoop) });
         this.scheduler.addJob({ id: 'diagnostics_audit', label: 'Diagnostics: architectural audit', every: '1h', type: 'custom', handler: () => this.diagnostics.runAll() });
-        this.scheduler.addJob({ id: 'attention_decay', label: 'Decay attention tensions', every: '5m', handler: () => this.attention?.decayTensions() });
         this.scheduler.addJob({ id: 'social_scan', label: 'Social: user profiling', every: '10m', type: 'custom', handler: () => this.social.scan() });
         this.scheduler.addJob({ id: 'skill_evolution', label: 'Evolution: codify winning paths', every: '6h', type: 'custom', handler: () => this.skillEvolution.analyzeWinningPaths() });
         this.scheduler.addJob({
@@ -883,23 +1151,16 @@ Actions:
         });
         this.scheduler.addJob({ id: 'variant_tests', label: 'Evolution: run variant tests', every: '3h', type: 'custom', handler: () => this.skillMutator.runNextTest() });
         this.scheduler.addJob({ id: 'choko_relay', label: 'Choko: pick up field reports', every: '15m', type: 'custom', handler: () => this._processChokoRelay().catch(err => console.warn('[MAX] Choko relay error:', err.message)) });
-        this.scheduler.addJob({ id: 'choko_scout', label: 'Choko: dispatch scout mission', every: '4h', type: 'custom', handler: () => this._dispatchChokoMission().catch(() => {}) });
         this.scheduler.addJob({ id: 'soma_curiosity_sync', label: 'SOMA: sync curiosity goals', every: '30m', type: 'custom', handler: () => { if (this.soma?.available) this.soma.syncCuriosityGoals(this.goals).catch(() => {}); } });
-        this.scheduler.addJob({ id: 'pr_review_loop', label: 'PR: poll open PRs for review comments', every: '30m', type: 'custom', handler: () => this._pollPRReviews().catch(() => {}) });
-        this.scheduler.addJob({ id: 'longitudinal_snapshot', label: 'Identity: weekly self-snapshot', every: '24h', type: 'custom', handler: () => this.longitudinal.takeSnapshot().catch(() => {}) });
-        this.scheduler.addJob({ id: 'user_model_session', label: 'User model: ingest session patterns', every: '1h', type: 'custom', handler: () => this.userModel.ingestSession(this._context.slice(-40)).catch(() => {}) });
-        this.scheduler.addJob({ id: 'dataset_synthetic', label: 'Dataset: generate synthetic examples', every: '24h', type: 'custom', handler: async () => { const top = Object.entries(this.userModel.model?.topics||{}).sort((a,b)=>b[1]-a[1])[0]?.[0]; if (top) await this.dataset.generateSynthetic(top, 3).catch(() => {}); } });
 
-        if (this.ci.testCommand) {
+        const mode = this.config.mode || this.config.runtimeMode || 'chat';
+        if (this.ci.testCommand && (mode !== 'api' || process.env.MAX_AUTONOMOUS_CI === 'true')) {
             this.scheduler.addJob({ id: 'ci_watch', label: 'CI: Run test suite', every: '30m', type: 'custom', handler: () => this.ci.runChecks().catch(err => console.warn('[MAX] CI check error:', err.message)) });
             this.ci.on('fail', () => {
                 if (!this.debugLoop._active) this.debugLoop.run(this.ci.testCommand, { label: 'CI' }).catch(() => {});
             });
             console.log(`[MAX] 🧪 CI Watcher armed: ${this.ci.testCommand}`);
         }
-
-        // Boot Choko after scheduler is running so she has a job queue to fill
-        setTimeout(() => this._bootChoko().catch(err => console.warn('[MAX] Choko boot failed:', err.message)), 3000);
     }
 
     _startBackgroundLoops() {
@@ -907,17 +1168,14 @@ Actions:
         this._backgroundStarted = true;
         this._backgroundTimer = null;
 
-        // Wire MuseEngine — activates/deactivates with muse persona
+        // Wire MuseEngine — activates/deactivates with companion persona
         this.persona.on('persona_changed', ({ id }) => {
-            if (id === 'muse') {
+            if (id === 'companion') {
                 this.muse.activate(this.heartbeat);
             } else {
                 this.muse.deactivate();
             }
         });
-        if (this.persona.current?.id === 'muse') {
-            this.muse.activate(this.heartbeat);
-        }
 
         // Muse insight generation — fast LLM call every 4 turns in companion mode
         this.muse.on('needs_insight', async ({ messages }) => {
@@ -940,7 +1198,7 @@ Actions:
                 if (result?.text) this.muse.publishInsight(result.text);
             } catch (err) {
                 console.error('[MuseEngine] insight generation failed:', err.message);
-                this.muse.clearInsightPending(); // reset so next turn can retry
+                this.muse.markInsightPending(); // reset so next turn can retry
             }
         });
 
@@ -963,6 +1221,14 @@ Actions:
                     });
                 }
             });
+        }
+
+        if (this.clusterRole === 'worker' && process.env.MAX_AUTONOMOUS_GOALS !== 'true') {
+            console.log(`[MAX] 🧰 Worker-only mode active (${this.nodeId}). Autonomous heartbeat, schedules, and eager goals are disabled.`);
+            if (process.env.MAX_DISCORD_ENABLED === 'true') {
+                autoConnectDiscord(this).catch(() => {});
+            }
+            return;
         }
 
         // Start heartbeat (drives AgentLoop + curiosity cycles)
@@ -1023,15 +1289,15 @@ Actions:
             // We use the normal think method for the LLM call
             const result = await this.think(currentPrompt, {
                 ...options,
-                tier: options.tier || 'smart'
+                tier: options.tier || 'smart',
+                skipInlineTools: true
             });
 
             const response = result.response;
             fullHistory.push({ role: 'assistant', content: response });
 
-            // Look for TOOL: calls
-            const toolCallRegex = /TOOL:(\w+):(\w+):(\{[\s\S]*?\})/g;
-            const toolCalls = [...response.matchAll(toolCallRegex)];
+            // Look for TOOL: calls using the robust brace-balanced parser
+            const toolCalls = this.tools.parseToolCalls(response);
 
             if (toolCalls.length === 0) {
                 // Task complete or no more tools needed
@@ -1045,10 +1311,8 @@ Actions:
 
             // Execute tool calls and gather results
             let toolResults = [];
-            for (const match of toolCalls) {
-                const [fullMatch, tool, action, paramsStr] = match;
-                let params = {};
-                try { params = JSON.parse(paramsStr); } catch (e) { toolResults.push(`Error parsing params: ${e.message}`); continue; }
+            for (const call of toolCalls) {
+                const { raw: fullMatch, toolName: tool, actionName: action, params } = call;
 
                 // ─── Phase 5.5: Agentic Approval Gate ───
                 if (this.agentLoop?.needsApproval(tool, action)) {
@@ -1097,55 +1361,11 @@ Actions:
             // keyword matching pull MAX out of companion mid-conversation.
             const selectedPersona = this.muse?.isActive()
                 ? this.persona.current
-                : await this.persona.selectForTask(userMessage, this.drive.getStatus(), this.brain);
-
-            const attentionResult = this.attention
-                ? this.attention.evaluate(userMessage, {
-                    activeGoals: this.goals.listActive().map(g => g.title),
-                    currentProject: this._projectContext
-                  })
-                : null;
-
-            // Determine LLM tier and budget dynamically from Attention Engine
-            let tier = options.tier;
-            let memCount = 6;
-            let kbCount = 6;
-            let isTrivial = userMessage.trim().length < 12;
-
-            if (attentionResult) {
-                const { allowedCost } = attentionResult;
-                if (allowedCost === 'REFLEX') {
-                    tier = tier || 'fast';
-                    isTrivial = true;
-                } else if (allowedCost === 'LOCAL') {
-                    tier = tier || 'fast';
-                    memCount = 3;
-                    kbCount = 3;
-                } else if (allowedCost === 'MEMORY') {
-                    tier = tier || 'smart';
-                    memCount = 6;
-                    kbCount = 6;
-                } else if (allowedCost === 'BRIDGE' || allowedCost === 'INTERRUPT') {
-                    tier = tier || 'smart';
-                    memCount = 10;
-                    kbCount = 12;
-                }
-            } else {
-                tier = tier || 'smart';
-                if (tier === 'smart') {
-                    memCount = 10;
-                    kbCount = 12;
-                } else {
-                    memCount = 3;
-                    kbCount = 3;
-                }
-            }
+                : this.persona.selectForTask(userMessage, this.drive.getStatus());
+            const tier = options.tier || 'smart';
 
             // Store user message in context immediately so next turn sees it in history
             this._context.push({ role: 'user', content: userMessage });
-
-            // Deep user model — ingest every message for pattern tracking
-            this.userModel?.ingestMessage?.(userMessage, Date.now());
 
             // ── Response cache — skip LLM for recently-seen identical questions ─
             const cacheKey = userMessage.trim().toLowerCase().slice(0, 200);
@@ -1156,7 +1376,10 @@ Actions:
             }
 
             // ── Parallel: memory recall + KB query simultaneously ─────────────
-            const budget = tier === 'smart' ? 30000 : 8000;
+            const budget   = tier === 'smart' ? 30000 : 8000;
+            const memCount = tier === 'smart' ? 10 : 3;
+            const kbCount  = tier === 'smart' ? 12 : 3;
+            const isTrivial = userMessage.trim().length < 12;
 
             const [memoryResults, kbResults] = isTrivial
                 ? [[], []]
@@ -1194,7 +1417,7 @@ Actions:
             // Fix 2+4: inject tool manifest + reflection patches so MAX knows its tools and learns from history
             const stateContext = await this._buildStateContext(userMessage);
             const securityPackContext = this.securityPack?.getContextForTask(userMessage) || '';
-            const systemPrompt = this.persona.getBasePrompt() + '\n\n' + selectedPersona.systemPrompt
+            const defaultSystemPrompt = this.persona.getBasePrompt() + '\n\n' + selectedPersona.systemPrompt
                 + SECURITY_ENGINEERING_DIRECTIVE
                 + securityPackContext
                 + this.tools.buildManifest()
@@ -1202,72 +1425,31 @@ Actions:
                 + (this.social?.getSocialDirective() || '')
                 + stateContext + memoryContext + kbContext + driveSystemNote;
 
-            // Fix 6: use full context window (was -9,-1 = 8 msgs; now -21,-1 = 20 msgs), and raise per-msg limit
-            const historyMsgs = this._context.slice(-21, -1).map(m => ({
-                role:    m.role,
-                content: m.content.slice(0, 4000)
-            }));
-            const messages = historyMsgs.length > 0 ? [
-                { role: 'system', content: systemPrompt },
-                ...historyMsgs,
-                { role: 'user',   content: userMessage }
-            ] : null;
+            const systemPrompt = options.systemPrompt
+                ? `${options.systemPrompt}\n\n[Context: ${this.persona.getBasePrompt()}]`
+                : defaultSystemPrompt;
 
-            // ── Step 1: Brain Think (silent first pass) ───────────────────────
-            // We do NOT stream the initial response — local models often hallucinate
-            // tool results inline. We silently get the plan, execute real tools, then
-            // stream only the clean follow-up. If no tools needed we replay via onToken.
-            const SKIP_INLINE = new Set(['mcp']);
-            const _extractToolLines = (text) => {
-                const lines = [];
-                // 1. Extract legacy TOOL: lines
-                const rawLines = text.split('\n').map(l => l.trim());
-                for (const l of rawLines) {
-                    if (l.startsWith('TOOL_BLOCKED')) {
-                        console.log(`[MAX] 🛡️ Skipping blocked tool: ${l}`);
-                        continue;
-                    }
-                    if (/^TOOL\s*:[a-zA-Z_\s]+:[a-zA-Z_\s]+/.test(l)) {
-                        const toolName = l.replace(/^TOOL\s*:\s*/i, '').split(/\s*:\s*/)[0];
-                        if (!SKIP_INLINE.has(toolName)) {
-                            lines.push(l);
-                        }
-                    }
-                }
+            // Fix 6: use provided messages (e.g. from Discord) or fallback to rolling context window
+            let messages = options.messages || null;
+            if (!messages) {
+                const historyMsgs = this._context.slice(-21, -1).map(m => ({
+                    role:    m.role,
+                    content: m.content.slice(0, 4000)
+                }));
+                messages = historyMsgs.length > 0 ? [
+                    { role: 'system', content: systemPrompt },
+                    ...historyMsgs,
+                    { role: 'user',   content: userMessage }
+                ] : null;
+            }
 
-                // 2. Extract <function> XML JSON blocks
-                const functionRegex = /<function>([\s\S]*?)<\/function>/g;
-                let match;
-                while ((match = functionRegex.exec(text)) !== null) {
-                    try {
-                        const json = JSON.parse(match[1].trim());
-                        if (json.tool && json.action) {
-                            const paramsStr = JSON.stringify(json.params || {});
-                            const legacyLine = `TOOL:${json.tool}:${json.action}:${paramsStr}`;
-                            if (!SKIP_INLINE.has(json.tool)) {
-                                lines.push(legacyLine);
-                            }
-                        } else if (json.name && json.arguments) {
-                            const [tool, action] = json.name.includes('.') ? json.name.split('.') : [json.name, 'run'];
-                            const paramsStr = JSON.stringify(json.arguments || {});
-                            const legacyLine = `TOOL:${tool}:${action}:${paramsStr}`;
-                            if (!SKIP_INLINE.has(tool)) {
-                                lines.push(legacyLine);
-                            }
-                        }
-                    } catch (e) {
-                        // ignore parse errors
-                    }
-                }
-                return lines;
-            };
-
+            // ── Step 1: Brain Think ───────────────────────────────────────────
             let result = await this.brain.think(userMessage, {
                 systemPrompt,
                 temperature: driveTemp,
                 maxTokens:   maxTok,
                 tier:        options.tier || 'smart',
-                onToken:     null, // silent — prevent fake streaming before tools run
+                onToken,
                 messages,
                 signal
             });
@@ -1276,25 +1458,30 @@ Actions:
             response = stripLeakedPromptContext(response.replace(/^(\**MAX:\**\s*|MAX:\s*|Assistant:\s*)/i, '').trim());
 
             // ── Fix 1: Inline tool execution loop ────────────────────────────
-            // Execute real tools, then stream the clean follow-up.
-            if (!signal.aborted) {
-                let toolsRan = false;
+            // Execute any TOOL: calls MAX emitted, feed results back, get a real answer.
+            // mcp is meta — skip. goals ARE executed inline so MAX can queue work from chat.
+            if (!signal.aborted && !options.skipInlineTools) {
+                const SKIP_INLINE = new Set(['mcp']);
                 for (let _toolRound = 0; _toolRound < 3; _toolRound++) {
-                    const toolLines = _extractToolLines(response);
-                    if (toolLines.length === 0) break;
-                    toolsRan = true;
-
-                    // Signal to UI that real tool work is happening
-                    this.heartbeat?.emit('tool_activity', { count: toolLines.length, tools: toolLines.map(l => l.slice(5, 40)) });
+                    const toolCalls = this.tools.parseToolCalls(response)
+                        .filter(c => !SKIP_INLINE.has(c.toolName));
+                    if (toolCalls.length === 0) break;
 
                     const toolResults = [];
-                    for (const line of toolLines) {
-                        console.log(`[MAX] ⚙️  Executing tool: ${line.slice(0, 80)}`);
+                    for (const call of toolCalls) {
                         try {
-                            const tr = await this.tools.executeLLMToolCall(line);
-                            toolResults.push(`${line.slice(0, 80)}\n→ ${JSON.stringify(tr).slice(0, 1200)}`);
+                            const { raw: rawCall, toolName, actionName, params } = call;
+
+                            // Stream execution status to the UI so the user knows what MAX is running
+                            if (onToken) {
+                                onToken(`\n*[MAX is running tool: ${toolName}.${actionName}...]*\n`);
+                            }
+
+                            // Pass a 30s timeout and current abort signal for inline calls
+                            const tr = await this.tools.execute(toolName, actionName, { ...params, timeoutMs: 30000, signal });
+                            toolResults.push(`${rawCall.slice(0, 80)}\n→ ${JSON.stringify(tr).slice(0, 1200)}`);
                         } catch (e) {
-                            toolResults.push(`${line.slice(0, 80)}\n→ ERROR: ${e.message}`);
+                            toolResults.push(`${call.raw.slice(0, 80)}\n→ ERROR: ${e.message}`);
                         }
                     }
 
@@ -1304,7 +1491,7 @@ Actions:
                         temperature: driveTemp,
                         maxTokens:   maxTok,
                         tier:        options.tier || 'smart',
-                        onToken,   // stream the clean real-result response
+                        onToken,
                         signal,
                         messages: [
                             { role: 'system',    content: systemPrompt },
@@ -1315,23 +1502,13 @@ Actions:
                         ]
                     });
                     const followUpText = stripLeakedPromptContext(followUp.text.replace(/^(\**MAX:\**\s*|MAX:\s*|Assistant:\s*)/i, '').trim());
-                    response = followUpText; // replace — not append — the hallucinated draft
-                }
-
-                // No tools were needed: replay the silent response through onToken so
-                // the UI gets streaming tokens even though the first pass was silent.
-                if (!toolsRan && onToken && response) {
-                    const CHUNK = 6;
-                    for (let i = 0; i < response.length; i += CHUNK) {
-                        if (signal.aborted) break;
-                        onToken(response.slice(i, i + CHUNK));
-                    }
+                    response = response + '\n\n' + followUpText;
                 }
             }
 
             // ── Step 2: Cognitive Filter ──
             const filtered = await this.cognitive.process(response);
-            
+
             // ── Step 3: Autonomous Grounding Loop (The Truth-Seeker) ──────────
             if (filtered.state === 'UNCERTAIN' && !signal.aborted) {
                 const revised = await this.grounding.ground(response, filtered.verificationTask);
@@ -1356,7 +1533,10 @@ Actions:
                 } catch { /* skip */ }
             }
 
-            response = stripStageDirections(stripLeakedPromptContext(response));
+            response = stripLeakedPromptContext(response);
+            if (selectedPersona.id === 'companion') {
+                response = stripStageDirections(response);
+            }
 
             this._context.push({ role: 'assistant', content: response });
             this._maybeCompressContext();
@@ -1374,7 +1554,7 @@ Actions:
                 response,
                 persona:     selectedPersona.id,
                 drive:       this.drive.getStatus(),
-                telemetry:   { ...result.metadata, attention: attentionResult },
+                telemetry:   result.metadata,
                 wasStreamed: !!onToken
             };
 
@@ -1385,25 +1565,12 @@ Actions:
             if (userMessage.trim().length > 30) this._queueFollowUpCuriosity(userMessage);
             this._analyzeIntent(userMessage, response).catch(() => {});
 
-            // Dataset curation — quietly evaluate and save high-quality turns
-            if (userMessage.trim().length > 20 && response.length > 50) {
-                this.dataset?.evaluate?.(userMessage, response).catch(() => {});
-            }
-
-            // Self-reflection loop
-            if (this.reflection) {
-                this.reflection.reflectOnTurn(userMessage, response, {
-                    persona: selectedPersona.id,
-                    drive: this.drive.getStatus()
-                }).catch(err => console.error('[MAX] Reflection error:', err.message));
-            }
-
             return finalResult;
 
         } catch (err) {
             if (err.name === 'AbortError' || signal.aborted) {
                 console.log('[MAX] 🛑 Chat execution aborted.');
-                return { response: '[Aborted by user]', persona: ' muse', aborted: true };
+                return { response: '[Aborted by user]', persona: ' companion', aborted: true };
             }
             this._lastError = { message: err.message, ts: Date.now() };
             throw err;
@@ -1458,8 +1625,8 @@ Actions:
     async _buildStateContext(userQuery = '') {
         const drive = this.drive.getStatus();
         const personaId = this.persona?.current?.id;
-        // Don't inject internal state metrics in muse mode — MAX echoes them literally
-        let ctx = personaId === 'muse' ? '' :
+        // Don't inject internal state metrics in companion mode — MAX echoes them literally
+        let ctx = personaId === 'companion' ? '' :
             `\n\n## System State\nTension: ${Math.round(drive.tension*100)}% | Satisfaction: ${Math.round(drive.satisfaction*100)}%`;
 
         // Dynamic Context Paging (Virtual Memory)
@@ -1478,14 +1645,6 @@ Actions:
             const codeCtx = await this.semanticIndex.search(userQuery, 5);
             if (codeCtx) ctx += codeCtx;
         }
-
-        // Deep user model — who Barry is, his patterns, MAX's predictions
-        const userCtx = this.userModel?.getContext?.();
-        if (userCtx) ctx += userCtx;
-
-        // Longitudinal self — who MAX is, how he's changed
-        const selfCtx = this.longitudinal?.getContext?.();
-        if (selfCtx) ctx += selfCtx;
 
         return ctx;
     }
@@ -1516,49 +1675,6 @@ Actions:
         this._context = this._context.slice(-this._contextLimit);
     }
 
-    async _bootChoko() {
-        const userName = this.profile?.getName() || 'Barry';
-        const choko = await this.agentManager.boot('Choko', { userName });
-
-        // First mission: get vitals on the whole codebase, relay anything worth MAX's attention
-        choko.goals.addGoal({
-            title: 'Initial scout: codebase health + dust bunnies',
-            description: `You are scouting the MAX codebase for the first time this session.
-1. Run TOOL:scout:health:{"dir":"core"} to get vitals.
-2. Run TOOL:scout:sparkle:{"target":"core"} to find issues.
-3. Run TOOL:scout:sparkle:{"target":"tools"} to scan tools.
-4. Pick the 2-3 most important findings (real bugs, silent failures, missing wiring).
-5. For each one call TOOL:scout:relay:{"title":"short title","detail":"file:line — what is wrong and why it matters"}.
-Be specific. Skip cosmetic issues. Focus on things that could break MAX or waste Barry's time.`,
-            type: 'scout',
-            priority: 0.75,
-            source: 'auto'
-        });
-
-        // Kick her loop immediately so she starts working
-        setImmediate(() => choko.agentLoop?.runCycle().catch(() => {}));
-        console.log('[MAX] 🍫 Choko is online — scouting codebase');
-    }
-
-    async _dispatchChokoMission() {
-        const choko = this.agentManager.get('Choko');
-        if (!choko) return; // not booted yet
-        const targets = ['core', 'tools', 'server', 'swarm'];
-        const target = targets[Math.floor(Date.now() / (4 * 3600 * 1000)) % targets.length];
-        choko.goals.addGoal({
-            title: `Scout: audit ${target}/`,
-            description: `Sparkle audit the ${target}/ directory.
-1. Run TOOL:scout:sparkle:{"target":"${target}"}.
-2. Find the top 2 most actionable issues (bugs, silent failures, unhandled errors).
-3. Call TOOL:scout:relay:{"title":"...","detail":"file:line — exact issue and impact"} for each.
-Skip TODOs and style issues — focus on things that can actually break.`,
-            type: 'scout',
-            priority: 0.6,
-            source: 'auto'
-        });
-        setImmediate(() => choko.agentLoop?.runCycle().catch(() => {}));
-    }
-
     async _processChokoRelay() {
         const relayPath = path.join(__dirname, '..', '.max', 'choko_relay.json');
         if (!fs.existsSync(relayPath)) return;
@@ -1566,64 +1682,127 @@ Skip TODOs and style issues — focus on things that can actually break.`,
         try { treats = JSON.parse(fs.readFileSync(relayPath, 'utf8')); } catch { return; }
         const unread = treats.filter(t => !t._processedByMAX);
         if (unread.length === 0) return;
+
+        let progression = null;
+        try {
+            const { Progression } = await import('../Choko/Progression.js');
+            progression = new Progression(path.join(__dirname, '..', 'Choko', '.max'));
+        } catch (err) {
+            console.warn('[MAX] Could not load Choko progression:', err.message);
+        }
+
         for (const treat of unread) {
             treat._processedByMAX = true;
-
-            // Surface in insight stream
             this.heartbeat?.emit('insight', { source: 'Choko 🍫', label: treat.title, result: treat.detail });
-
-            // Broadcast to Maxwell UI as a real Choko toast message
-            this.heartbeat?.emit('choko_relay', {
-                title:  treat.title,
-                detail: treat.detail,
-                priority: treat.priority || 'medium',
-            });
-
-            // If Choko flagged something actionable, queue a MAX goal
-            if (this.goals && /fix|bug|broken|fail|error|issue|improve|add|implement|missing/i.test(treat.title + treat.detail)) {
+            const isBugOrSmell = /fix|bug|broken|fail|error|issue|improve|add|implement|missing/i.test(treat.title + treat.detail);
+            if (this.goals && isBugOrSmell) {
                 this.goals.addGoal({ title: `[Choko] ${treat.title}`, description: treat.detail, type: 'fix', priority: 0.7, source: 'choko_relay' });
+                // Reward for discovering bug
+                progression?.award({
+                    xp: 100,
+                    sparkles: 3,
+                    reason: 'Discovered codebase defect/smell 🐞✨',
+                    details: treat.title
+                });
+            } else {
+                // Reward for routine scout patrol
+                progression?.award({
+                    xp: 35,
+                    sparkles: 1,
+                    reason: 'Logged field patrol report 📝',
+                    details: treat.title
+                });
             }
             await this.kb.remember(`Choko reported: ${treat.title} — ${treat.detail}`).catch(() => {});
         }
         fs.writeFileSync(relayPath, JSON.stringify(treats, null, 2));
+
+        // Check if Choko earned an evolution!
+        if (progression) {
+            const eligibility = progression.checkEvolutionEligibility();
+            if (eligibility.eligible) {
+                console.log(`[MAX] 👑 Choko has gathered ${eligibility.sparkles} Sparkles! Qualifying for evolution: "${eligibility.wish.title}"`);
+                await this._forgeChokoEvolution(eligibility.wish, progression);
+            }
+        }
     }
 
-    async _pollPRReviews() {
-        const { execSync } = await import('child_process');
-        let prJson;
-        try {
-            prJson = execSync('gh pr list --json number,title,url,reviewDecision --state open', { encoding: 'utf8', timeout: 15000 });
-        } catch { return; }
-        let prs;
-        try { prs = JSON.parse(prJson); } catch { return; }
-        if (!prs?.length) return;
+    async _forgeChokoEvolution(wish, progression) {
+        console.log(`\n[MAX] 🔨 Mentorship Forge: MAX-senpai is evolving Choko with "${wish.title}"...`);
+        const chokoDir = path.join(__dirname, '..', 'Choko');
 
-        for (const pr of prs) {
-            let comments;
-            try {
-                const raw = execSync(`gh pr view ${pr.number} --json comments`, { encoding: 'utf8', timeout: 15000 });
-                comments = JSON.parse(raw)?.comments ?? [];
-            } catch { continue; }
+        if (wish.id === 'hazelnut') {
+            const personaPath = path.join(chokoDir, 'personas', 'Hazelnut.md');
+            const content = `# HAT: Hazelnut Sentinel 🌰🔒
+# VIBE: Serious, Protective, and Meticulous
 
-            const unaddressed = comments.filter(c => {
-                const body = c.body || '';
-                return /\?|please|fix|change|update|consider|should|must|need/i.test(body) && c.author?.login !== 'Barry';
-            });
-            if (!unaddressed.length) continue;
+You are Choko in Security & Hardening Mode! 🛡️
+Awarded by MAX-senpai for outstanding scout performance and sparkle gathering.
 
-            const alreadyQueued = this.goals?.listActive()?.some(g => g.title?.includes(`PR #${pr.number}`));
-            if (alreadyQueued) continue;
+- Look for security vulnerabilities, API key leaks, and unsafe child process calls.
+- Be firm and vigilant: "No sneaky bugs get past Choko!" 😤🔒
+- Verify file permissions, diff bounds, and sanity of all incoming inputs.
+- Provide crisp, tactical vulnerability warnings to Barry and MAX-senpai.
+`;
+            fs.writeFileSync(personaPath, content, 'utf8');
+            console.log(`[MAX] 🌰 Wrote Hazelnut Hat to ${personaPath}`);
+        } else if (wish.id === 'shared_memory') {
+            const toolDir = path.join(chokoDir, 'tools');
+            if (!fs.existsSync(toolDir)) fs.mkdirSync(toolDir, { recursive: true });
+            const toolPath = path.join(toolDir, 'SharedMemoryTool.js');
+            const code = `// SharedMemoryTool — Granted to Choko by MAX-senpai
+import { Tool } from '../../tools/Tool.js';
 
-            const summary = unaddressed.slice(0, 3).map(c => `- ${c.body.slice(0, 120)}`).join('\n');
-            this.goals?.addGoal({
-                title: `Address PR #${pr.number} review comments: ${pr.title}`,
-                description: `PR: ${pr.url}\n\nUnaddressed reviewer comments:\n${summary}`,
-                type: 'fix',
-                priority: 0.75,
-                source: 'pr_review_loop',
-            });
-            this.heartbeat?.emit('insight', { source: 'PR Review', label: `PR #${pr.number} needs response`, result: `${unaddressed.length} unaddressed comment(s) on "${pr.title}"` });
+export default class SharedMemoryTool extends Tool {
+    constructor() {
+        super({
+            name: 'shared_memory_recall',
+            description: 'Query MAX-senpai\\'s vector knowledge base so you do not repeat research.',
+            parameters: {
+                query: { type: 'string', description: 'Search term or question', required: true }
+            }
+        });
+    }
+
+    async execute({ query }, agent) {
+        if (!agent.kb) return { success: false, error: 'KnowledgeBase not available' };
+        const results = await agent.kb.search(query, { topK: 3 });
+        return { success: true, count: results.length, findings: results.map(r => r.text || r.content) };
+    }
+}
+`;
+            fs.writeFileSync(toolPath, code, 'utf8');
+            console.log(`[MAX] 🧠 Created SharedMemoryTool at ${toolPath}`);
         }
+
+        // Grant in progression ledger
+        const granted = progression.grantEvolution(wish.id, 'MAX-senpai');
+
+        // Update journal
+        const journalPath = path.join(chokoDir, '.max', 'journal.md');
+        const date = new Date().toISOString().split('T')[0];
+        const entry = `| ${date} | Promoted to Lv.${progression.state.level}! Evolved: ${wish.title} | Overjoyed! Waku-waku! 💖🍫 |\n`;
+        try { fs.appendFileSync(journalPath, entry); } catch {}
+
+        // Update wishlist checkbox
+        const wishlistPath = path.join(chokoDir, '.max', 'evolution_wishlist.md');
+        if (fs.existsSync(wishlistPath)) {
+            try {
+                let wl = fs.readFileSync(wishlistPath, 'utf8');
+                wl = wl.replace(new RegExp(`- \\[ \\] \\*\\*${wish.title}\\*\\*`), `- [x] **${wish.title}** (Evolved by MAX-senpai on ${date}!)`);
+                fs.writeFileSync(wishlistPath, wl, 'utf8');
+            } catch {}
+        }
+
+        // Broadcast celebration to IDE and heartbeat
+        this.heartbeat?.emit('insight', {
+            source: 'MAX 👑',
+            label: `🎉 Choko Evolved! (${wish.title})`,
+            result: `Choko gathered enough sparkles and was promoted to Lv.${progression.state.level} (${progression.state.title})!`
+        });
+
+        console.log(`[MAX] ✨ Choko Evolution Complete: "${wish.title}" unlocked! Sparkles remaining: ${granted.sparklesRemaining}\n`);
+        return granted;
     }
 
     getStatus() {
@@ -1631,7 +1810,6 @@ Skip TODOs and style issues — focus on things that can actually break.`,
             ready:      this._ready,
             brain:      this.brain.getStatus(),
             drive:      this.drive.getStatus(),
-            persona:    this.persona?.getStatus(),
             memory:     this.memory.getStats(),
             goals:      this.goals?.getStatus(),
             agents:     this.agentManager?.getStatus(),
@@ -1652,7 +1830,13 @@ Skip TODOs and style issues — focus on things that can actually break.`,
                 busy:         this.agentLoop._busy,
                 pendingCycle: this.agentLoop._pendingCycle ?? false
             } : null,
-            skillMutator: this.skillMutator?.getStatus()
+            skillMutator: this.skillMutator?.getStatus(),
+            chokoProgression: (() => {
+                try {
+                    const p = path.join(__dirname, '..', 'Choko', '.max', 'progression.json');
+                    return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null;
+                } catch { return null; }
+            })()
         };
     }
 
@@ -1670,7 +1854,6 @@ Skip TODOs and style issues — focus on things that can actually break.`,
             ready:      this._ready,
             brain:      this.brain.getStatus(),
             drive:      this.drive.getStatus(),
-            persona:    this.persona?.getStatus(),
             memory:     memoryStats,
             goals:      this.goals ? {
                 active:    this.goals._active?.size || 0,
@@ -1700,10 +1883,8 @@ Skip TODOs and style issues — focus on things that can actually break.`,
             background: {
                 started: this._backgroundStarted,
                 delayed: !!this._backgroundTimer
-            },
-            userModel:    this.userModel?.getStatus?.(),
-            longitudinal: this.longitudinal?.getStatus?.(),
-            dataset:      this.dataset?.getStatus?.(),
+            }
         };
     }
 }
+

@@ -11,6 +11,7 @@ import { dirname, join } from 'path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let _worker = null;
+let _workerInitPromise = null;
 let _pendingTasks = new Map();
 let _taskId = 0;
 
@@ -32,28 +33,41 @@ export class Embedder {
             try {
                 if (isMainThread) {
                     // We are in the main thread: spawn the background worker
-                    const workerPath = join(__dirname, '..', 'core', 'HeavyWorker.js');
-                    _worker = new Worker(workerPath);
+                    if (!_workerInitPromise) {
+                        _workerInitPromise = (async () => {
+                            const workerPath = join(__dirname, '..', 'core', 'HeavyWorker.js');
+                            _worker = new Worker(workerPath);
 
-                    _worker.on('message', (msg) => {
-                        const task = _pendingTasks.get(msg.id);
-                        if (!task) return;
+                            _worker.on('message', (msg) => {
+                                const task = _pendingTasks.get(msg.id);
+                                if (!task) return;
 
-                        if (msg.type === 'success' || msg.type === 'pong') {
-                            task.resolve(msg.result);
-                        } else {
-                            task.reject(new Error(msg.error));
-                        }
-                        _pendingTasks.delete(msg.id);
-                    });
+                                if (msg.type === 'success' || msg.type === 'pong') {
+                                    task.resolve(msg.result);
+                                } else {
+                                    task.reject(new Error(msg.error));
+                                }
+                                _pendingTasks.delete(msg.id);
+                            });
 
-                    _worker.on('error', (err) => {
-                        console.error('[Embedder] Worker thread error:', err);
-                    });
+                            _worker.on('error', (err) => {
+                                console.error('[Embedder] Worker thread error:', err);
+                                _worker = null;
+                                _workerInitPromise = null;
+                            });
 
-                    // Verify worker is alive
-                    await this._runTask('ping', {});
-                    console.log('[Embedder] ✅ Background worker online');
+                            _worker.on('exit', () => {
+                                _worker = null;
+                                _workerInitPromise = null;
+                            });
+
+                            // Verify worker is alive
+                            await this._runTask('ping', {});
+                            console.log('[Embedder] ✅ Background worker online');
+                        })();
+                    }
+
+                    await _workerInitPromise;
                     this._ready = true;
                     return true;
                 } else {

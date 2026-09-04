@@ -151,10 +151,47 @@
   5. Senpai Bridge ("tell MAX!"): Easily forward any of Choko's insights or bug alerts directly into MAX's agent goal engine.
   6. Resilient 3.5s AbortController: Snappy responses that gracefully fall back to rich, authentic in-character dialogue if local GPU inference is occupied by background tasks.
 
+- [x] **Computer Lag Root-Cause Cure & Autonomous Loop Guarding (Level 37.0)**:
+  1. Full Root Cause Diagnosis:
+     - MAX's autonomous `CIWatcher` executed `npm test` every 30m.
+     - Because Jest was unconstrained, it spawned 7 parallel worker processes across all 8 logical cores (100% CPU lock).
+     - Test failures triggered `DebugLoop`, creating priority 0.97 fix goals and hammering Ollama (`llama-server.exe`) on the GTX 1650 Ti in an infinite loop.
+     - Massive test output and vector index writes caused `iCloudDrive.exe` to thrash disk I/O.
+  2. Multi-Core Worker Capping (`package.json`):
+     - Added `--maxWorkers=2` to `test:unit` and `test:unit:coverage`, and `--runInBand` to `test:integration`.
+  3. API Mode Background Loop Guard (`core/MAX.js` & `start-max-api.mjs`):
+     - Configured `start-max-api.mjs` with `mode: 'api'`, `runtimeMode: 'api'`, and `MAX_API_BACKGROUND=false`.
+     - Guarded `_registerScheduledJobs()` in `core/MAX.js` so `CIWatcher` and auto-debug loops are suppressed in API mode.
+  4. Purged Runaway Debug Goals (`.max/goals.json`):
+     - Filtered and pruned 8 orphaned `debug_loop` goals that were persistently triggering `AgentLoop` upon boot.
+  5. Maxwell Route Resiliency (`server/server.js`):
+     - Added route aliases and public auth exemptions for `/maxwell.html` and `/satellite.html`.
+  6. Physical Telemetry Verification:
+     - CPU load dropped from 100% freeze to a cool 29-37%.
+     - `http://localhost:3100/health` reports healthy, and `/maxwell` loads in <50ms.
+
+- [x] **All-Day Autonomous Builder Mode Armed (Level 37.1)**:
+  1. Safe Background Autonomy Configured (`start-max-api.mjs`):
+     - Set `MAX_API_BACKGROUND=true`, `MAX_AUTONOMOUS_GOALS=true`, and `MAX_AUTONOMOUS_CI=false`.
+     - Heartbeat scales tension intervals (15s–60s), running `AgentLoop` on high-priority goals and curiosity tasks.
+  2. Isolated Hydra Worktrees (`core/HydraController.js`):
+     - Relocated sandboxed git worktrees to `%LOCALAPPDATA%\max-worktrees`, eliminating Apple iCloud Drive Desktop file churn.
+  3. Active Engineering Pipeline (`.max/goals.json`):
+     - Cognitive substrate research for SOMA (`Discord task`).
+     - Autonomous SOMA Arbiter Evolution & Unit Test Synthesis.
+     - Claude Role & Hybrid Cognition Analysis.
+     - Knowledge Base Vector Index Refinement & Latency Benchmarks.
+     - Hydra Swarm code optimization.
+  4. Running Background Daemons:
+     - Choko Evolution Relay (`choko_relay` every 15m).
+     - Sentinel Code Health Scanner (`sentinel_scan` every 15m).
+     - SOMA Curiosity Synchronizer (`soma_curiosity_sync` every 30m with SOMA Core at `192.168.1.254:3001`).
+     - Discord Gateway connected as `Max Main#1664`.
+
 ### 🔱 Operator Directive: DEPLOYMENT
-- **Status**: |= ACTIVE (Choko Mini-Chat Live, Dual-Way Conversation, Dynamic Wardrobe Personas, Split Canvas Verified).
+- **Status**: |= ACTIVE (Safe All-Day Autonomy Armed: Swarm, Sentinel, Choko Relay, SOMA Sync, Stable Hardware).
 - **Role**: Ultra Senior Architect / Sovereign Intelligence.
-- **Level**: 36.2 Choko Interactive In-Mascot Mini-Chat & Companion System
+- **Level**: 37.1 All-Day Autonomous Builder Mode Confirmed
 
 
 

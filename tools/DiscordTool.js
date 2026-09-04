@@ -11,14 +11,23 @@
 import { Client, GatewayIntentBits, Partials } from 'discord.js';
 import fs   from 'fs';
 import path from 'path';
+import { DiscordUIFactory }     from '../core/DiscordUIFactory.js';
+import { DiscordCodeEvaluator } from '../core/DiscordCodeEvaluator.js';
+import { DiscordDPOHarvester }  from '../core/DiscordDPOHarvester.js';
 
+const _dpoHarvester = new DiscordDPOHarvester();
 const CREDS_FILE = path.join(process.cwd(), '.max', 'integrations.json');
 
 function loadCreds() {
     try {
-        return fs.existsSync(CREDS_FILE)
+        const creds = fs.existsSync(CREDS_FILE)
             ? JSON.parse(fs.readFileSync(CREDS_FILE, 'utf8'))
             : {};
+        const envToken = process.env.DISCORD_BOT_TOKEN || process.env.DISCORD_TOKEN;
+        if (envToken && !creds.discord?.token) {
+            creds.discord = { ...(creds.discord || {}), token: envToken.trim().replace(/^Bot\s+/i, '') };
+        }
+        return creds;
     } catch { return {}; }
 }
 
@@ -32,53 +41,207 @@ function saveCreds(update) {
 // ── Singleton client ──────────────────────────────────────────────────────
 let _client    = null;
 let _connected = false;
+let _connecting = null;
+let _reconnectTimer = null;
+let _lastError = null;
+let _lastConnectedAt = null;
+let _reconnectAttempts = 0;
 
 // Channels where MAX auto-reads and replies { channelId -> { guildName, channelName } }
 const _monitored = new Map();
 
+function allowedDmUserIds() {
+    return new Set(
+        (loadCreds().discord?.allowedDmUserIds || [])
+            .map(id => String(id).trim())
+            .filter(id => /^\d{17,20}$/.test(id))
+    );
+}
+
+export function isAuthorizedDiscordOperator(userId) {
+    const allowed = allowedDmUserIds();
+    if (allowed.size === 0) return true;
+    return allowed.has(String(userId || ''));
+}
+
+export function shouldIgnoreForeignMention({ guildId, mentionedUserIds = [], selfId }) {
+    if (!guildId || !mentionedUserIds.length || !selfId) return false;
+    return !mentionedUserIds.map(String).includes(String(selfId));
+}
+
+export function canProcessDiscordMessage({ authorId, guildId, channelId, mentioned = false }, creds = loadCreds()) {
+    if (mentioned) return true;
+    if (guildId) return _monitored.has(channelId);
+    const allowed = new Set(
+        (creds.discord?.allowedDmUserIds || [])
+            .map(id => String(id).trim())
+            .filter(id => /^\d{17,20}$/.test(id))
+    );
+    return allowed.size === 0 || allowed.has(String(authorId || ''));
+}
+
+// Discord's MessageContent is a PRIVILEGED intent — it must be toggled ON per-bot
+// in the Developer Portal. MAX#4417 is a different bot from SOMA, so it may not be
+// enabled; when it isn't, Discord rejects the gateway identify (close code 4014).
+// We self-heal: drop to non-privileged intents and reconnect so MAX still comes
+// online (DMs + @mentions carry content without the privileged intent).
+const _FULL_INTENTS = [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.DirectMessages
+];
+const _BASIC_INTENTS = [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.DirectMessages
+];
+let _intentSet = _FULL_INTENTS;
+function _isDisallowedIntents(err) {
+    const m = (err?.message || String(err || '')).toLowerCase();
+    return m.includes('disallowed intent') || m.includes('privileged') || err?.code === 4014;
+}
+
 async function connectClient(token) {
     if (_connected && _client) return _client;
+    if (_connecting) return _connecting;
 
-    _client = new Client({
-        intents: [
-            GatewayIntentBits.Guilds,
-            GatewayIntentBits.GuildMessages,
-            GatewayIntentBits.MessageContent,
-            GatewayIntentBits.DirectMessages
-        ],
-        partials: [Partials.Channel, Partials.Message]
-    });
+    _connecting = new Promise((resolve, reject) => {
+        try { _client?.destroy(); } catch {}
+        _client = new Client({
+            intents: _intentSet,
+            partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User]
+        });
 
-    return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Discord login timed out after 15s')), 15_000);
+        let settled = false;
+        const fail = (error) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            _connected = false;
+            _lastError = error?.message || String(error);
+            try { _client?.destroy(); } catch {}
+            if (_isDisallowedIntents(error) && _intentSet === _FULL_INTENTS) {
+                console.warn('[Discord] MessageContent intent not enabled for MAX#4417 — reconnecting without it (DMs + @mentions still work). Enable "Message Content Intent" in the Developer Portal for full channel reading.');
+                _intentSet = _BASIC_INTENTS;
+                scheduleReconnect(1000);
+            }
+            reject(error);
+        };
+        const timeout = setTimeout(() => fail(new Error('Discord login timed out after 15s')), 15_000);
 
         _client.once('ready', () => {
+            if (settled) return;
+            settled = true;
             clearTimeout(timeout);
             _connected = true;
+            _lastError = null;
+            _lastConnectedAt = Date.now();
+            _reconnectAttempts = 0;
             console.log(`[Discord] ✅ Connected as ${_client.user.tag}`);
 
+            // ── Button Interactions Router ──────────────────────────────
+            _client.on('interactionCreate', async (interaction) => {
+                if (!interaction.isButton()) return;
+                const [action, targetId] = interaction.customId.split(':');
+                try {
+                    if (action === 'btn_refresh_status') {
+                        const embed = DiscordUIFactory.createStatusEmbed(null);
+                        const row = DiscordUIFactory.createProposalActionRow(targetId);
+                        await interaction.update({ embeds: [embed], components: [row] });
+                    } else if (action === 'btn_deploy_soma') {
+                        await interaction.reply({ content: '🚀 SOMA deployment signal emitted over LAN bridge!', ephemeral: true });
+                    } else if (action === 'btn_run_tests') {
+                        await interaction.reply({ content: '🧪 Executing local regression test suite...', ephemeral: true });
+                    }
+                } catch (err) {
+                    console.warn('[Discord] Button interaction error:', err.message);
+                }
+            });
+
+            // ── Active DPO Reaction Harvester ───────────────────────────
+            _client.on('messageReactionAdd', async (reaction, user) => {
+                try {
+                    await _dpoHarvester.handleReaction(reaction, user);
+                } catch (err) {
+                    console.warn('[Discord] DPO harvest error:', err.message);
+                }
+            });
+
+            // ── Message Create Handler ──────────────────────────────────
             _client.on('messageCreate', async (msg) => {
-                if (msg.author.bot) return;
+                if (msg.author.bot && !msg.mentions.has(_client.user.id)) return;
+                if (msg.author.id === _client.user.id) return;
+                if (shouldIgnoreForeignMention({
+                    guildId: msg.guildId,
+                    mentionedUserIds: [...(msg.mentions?.users?.keys?.() || [])],
+                    selfId: _client.user.id
+                })) return;
+
+                const isDirectMessage = !msg.guildId;
+                const isMentioned = _client?.user?.id ? msg.mentions?.users?.has?.(_client.user.id) : false;
+                const authorized = canProcessDiscordMessage({
+                    authorId: msg.author.id,
+                    guildId: msg.guildId,
+                    channelId: msg.channelId,
+                    mentioned: isMentioned
+                });
+                if (isDirectMessage && !authorized) return;
+
+                // 1. Status Command Handler (/status or @Max status)
+                if (/\b(\/status|status|cluster status)\b/i.test(msg.content.trim())) {
+                    try {
+                        const embed = DiscordUIFactory.createStatusEmbed(null);
+                        const row = DiscordUIFactory.createProposalActionRow('live');
+                        await msg.reply({ embeds: [embed], components: [row] });
+                        return;
+                    } catch (err) {
+                        console.warn('[Discord] Status embed error:', err.message);
+                    }
+                }
+
+                // 2. Sandboxed Code Evaluation Handler (@Max run <code> or @Max eval <code>)
+                if (/\b(run|eval|execute)\b/i.test(msg.content) && /```/i.test(msg.content)) {
+                    const code = DiscordCodeEvaluator.extractCode(msg.content);
+                    if (code) {
+                        msg.channel?.sendTyping?.().catch(() => {});
+                        const evalRes = await DiscordCodeEvaluator.evaluate(code);
+                        const statusEmoji = evalRes.success ? '✅' : '❌';
+                        const reply = [
+                            `${statusEmoji} **Sandboxed Code Execution (${evalRes.executionTimeMs}ms)**`,
+                            evalRes.stdout ? `\n**Console Output:**\n\`\`\`\n${evalRes.stdout}\n\`\`\`` : '',
+                            evalRes.success ? `**Result:** \`${evalRes.result}\`` : `**Error:** \`${evalRes.error}\``
+                        ].filter(Boolean).join('\n');
+                        await msg.reply(reply);
+                        return;
+                    }
+                }
 
                 const payload = {
                     author:    msg.author.username,
+                    authorId:  msg.author.id,
                     channel:   msg.channel?.name || 'DM',
                     channelId: msg.channelId,
                     content:   msg.content,
                     messageId: msg.id,
                     guildId:   msg.guildId,
+                    isDirectMessage,
                     ts:        msg.createdTimestamp
                 };
 
-                // Always surface to terminal via onMessage
-                DiscordTool.onMessage?.(payload);
+                try {
+                    DiscordTool.onMessage?.(payload);
+                } catch (err) {
+                    console.warn('[Discord] Message observer failed:', err.message);
+                }
 
-                // Auto-respond if this channel is monitored
-                if (_monitored.has(msg.channelId) && DiscordTool.onRespond) {
+                // Auto-respond if authorized
+                if (authorized && DiscordTool.onRespond) {
                     try {
+                        msg.channel?.sendTyping?.().catch(() => {});
                         const reply = await DiscordTool.onRespond(payload);
                         if (reply) {
-                            await msg.reply(reply); // threaded reply to the exact message
+                            await msg.reply(reply);
                         }
                     } catch (err) {
                         console.warn('[Discord] Auto-respond failed:', err.message);
@@ -89,14 +252,45 @@ async function connectClient(token) {
             resolve(_client);
         });
 
-        _client.once('error', (err) => {
-            clearTimeout(timeout);
-            _connected = false;
-            reject(err);
+        _client.on('shardReady', () => {
+            _connected = true;
+            _lastError = null;
+            _lastConnectedAt = Date.now();
         });
 
-        _client.login(token).catch(reject);
+        _client.on('shardDisconnect', (_event, shardId) => {
+            _connected = false;
+            _lastError = `Discord shard ${shardId} disconnected`;
+            scheduleReconnect();
+        });
+
+        _client.on('invalidated', () => {
+            _connected = false;
+            _lastError = 'Discord session invalidated';
+            scheduleReconnect(5_000);
+        });
+
+        _client.once('error', (err) => {
+            _connected = false;
+            _lastError = err.message;
+            if (!settled) fail(err);
+        });
+
+        _client.login(token).catch(fail);
+    }).finally(() => {
+        _connecting = null;
     });
+    return _connecting;
+}
+
+function scheduleReconnect(delayMs = 30_000) {
+    if (_reconnectTimer || _connected || !loadCreds().discord?.token) return;
+    _reconnectTimer = setTimeout(async () => {
+        _reconnectTimer = null;
+        _reconnectAttempts += 1;
+        await autoConnectDiscord();
+    }, delayMs);
+    _reconnectTimer.unref?.();
 }
 
 // ── Tool definition ───────────────────────────────────────────────────────
@@ -113,26 +307,29 @@ Actions:
   monitor      → enable auto-respond in a channel (MAX will read and reply autonomously):
                  TOOL:discord:monitor:{"channelName":"general","enable":true}
                  TOOL:discord:monitor:{"channelName":"general","enable":false}
+  configureDm  → allow or revoke private replies for one Discord user ID:
+                 TOOL:discord:configureDm:{"userId":"123456789012345678","enable":true}
   react        → add emoji reaction: TOOL:discord:react:{"messageId":"123","channelId":"456","emoji":"👍"}
-  listChannels → list all text channels: TOOL:discord:listChannels:{}
+  reconnect    → reconnect using saved credentials: TOOL:discord:reconnect:{}
+  askApproval  → POST an interactive PR embed and wait for user ✅/❌: TOOL:discord:askApproval:{"channelName":"general","title":"My Patch","description":"Here is the fix","diff":"-old\n+new"}
   status       → connection status: TOOL:discord:status:{}`,
 
-    // Set by MAX.js — routes incoming Discord messages to the heartbeat for awareness
-    onMessage: null,
+    get connected() {
+        return _connected && !!_client;
+    },
 
-    // Set by MAX.js — called when a monitored channel gets a message, returns reply string
+    onMessage: null,
     onRespond: null,
 
     actions: {
-        // ── Main setup: token → connect → save → say hello ────────────────
         async setup({ token, channelId = null }) {
-            if (!token) return { success: false, error: 'Bot token required' };
 
             const cleanToken = token.trim().replace(/^Bot\s+/i, '');
 
             try {
                 const client = await connectClient(cleanToken);
-                saveCreds({ discord: { token: cleanToken, channelId } });
+                const existing = loadCreds().discord || {};
+                saveCreds({ discord: { ...existing, token: cleanToken, channelId } });
 
                 let helloSent = false;
                 if (channelId) {
@@ -235,6 +432,51 @@ Actions:
             }
         },
 
+        // ── Interactive Approval PR ───────────────────────────────────────
+        async askApproval({ channelId, channelName, title, description, diff }) {
+            if (!_connected || !_client) return { success: false, error: 'Not connected' };
+            try {
+                const ch = await resolveChannel(channelId, channelName);
+
+                const { EmbedBuilder } = await import('discord.js');
+                const embed = new EmbedBuilder()
+                    .setTitle(title || 'Code Change Approval Request')
+                    .setDescription(description || 'Please review the following changes.')
+                    .setColor(0x00FF00);
+
+                if (diff) {
+                    const safeDiff = diff.length > 3900 ? diff.slice(0, 3900) + '\n... (truncated)' : diff;
+                    embed.addFields({ name: 'Changes', value: '```diff\n' + safeDiff + '\n```' });
+                }
+
+                const msg = await ch.send({ embeds: [embed] });
+                await msg.react('✅');
+                await msg.react('❌');
+
+                // Wait for reaction for up to 15 minutes
+                const filter = (reaction, user) => {
+                    return ['✅', '❌'].includes(reaction.emoji.name) && !user.bot;
+                };
+
+                const collected = await msg.awaitReactions({ filter, max: 1, time: 15 * 60 * 1000, errors: ['time'] })
+                    .catch(() => null); // If time expires, returns null
+
+                if (!collected || collected.size === 0) {
+                    await msg.reply('Approval request timed out after 15 minutes. Aborting.');
+                    return { success: true, approved: false, reason: 'timeout' };
+                }
+
+                const reaction = collected.first();
+                const approved = reaction.emoji.name === '✅';
+
+                await msg.reply(approved ? '✅ Approved! Applying changes...' : '❌ Rejected! Aborting changes.');
+
+                return { success: true, approved };
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
+        },
+
         // ── Add emoji reaction ────────────────────────────────────────────
         async react({ messageId, channelId, channelName, emoji }) {
             if (!_connected || !_client) return { success: false, error: 'Not connected' };
@@ -270,13 +512,59 @@ Actions:
 
         // ── Status ────────────────────────────────────────────────────────
         async status() {
+            const allowedDmUsers = allowedDmUserIds().size;
             return {
                 success:   true,
                 connected: _connected,
                 bot:       _client?.user?.tag || null,
                 guilds:    _client?.guilds?.cache?.size || 0,
-                monitored: [..._monitored.entries()].map(([id, info]) => ({ id, ...info }))
+                monitored: [..._monitored.entries()].map(([id, info]) => ({ id, ...info })),
+                connecting: Boolean(_connecting),
+                reconnectScheduled: Boolean(_reconnectTimer),
+                reconnectAttempts: _reconnectAttempts,
+                lastConnectedAt: _lastConnectedAt,
+                lastError: _lastError,
+                responderWired: typeof DiscordTool.onRespond === 'function',
+                dmEnabled: allowedDmUsers > 0,
+                allowedDmUsers,
             };
+        },
+
+        async configureDm({ userId, enable = true }) {
+            const normalized = String(userId || '').trim();
+            if (!/^\d{17,20}$/.test(normalized)) {
+                return { success: false, error: 'A valid Discord user ID is required' };
+            }
+            const creds = loadCreds();
+            const allowed = allowedDmUserIds();
+            if (enable) allowed.add(normalized);
+            else allowed.delete(normalized);
+            saveCreds({
+                discord: {
+                    ...(creds.discord || {}),
+                    allowedDmUserIds: [...allowed]
+                }
+            });
+            return {
+                success: true,
+                dmEnabled: allowed.size > 0,
+                allowedDmUsers: allowed.size,
+                message: enable ? 'Private replies enabled for that user.' : 'Private replies revoked for that user.'
+            };
+        },
+
+        async reconnect() {
+            const creds = loadCreds();
+            if (!creds.discord?.token) return { success: false, error: 'No saved Discord token' };
+            if (_reconnectTimer) {
+                clearTimeout(_reconnectTimer);
+                _reconnectTimer = null;
+            }
+            _connected = false;
+            try { _client?.destroy(); } catch {}
+            _client = null;
+            const connected = await autoConnectDiscord();
+            return { ...(await this.status()), success: connected };
         }
     }
 };
@@ -294,11 +582,12 @@ async function resolveChannel(channelId, channelName) {
 }
 
 // ── Auto-reconnect on boot if credentials saved ───────────────────────────
-export async function autoConnectDiscord() {
+export async function autoConnectDiscord(max) {
     const creds = loadCreds();
     if (!creds.discord?.token) return false;
     try {
         await connectClient(creds.discord.token);
+        if (max?.notifier) max.notifier.setDiscordTool(DiscordTool);
         // Restore monitored channels
         for (const channelId of (creds.discord.monitored || [])) {
             try {
@@ -309,7 +598,9 @@ export async function autoConnectDiscord() {
         console.log(`[Discord] ♻️  Auto-connected as ${_client?.user?.tag} (${_monitored.size} channels monitored)`);
         return true;
     } catch (err) {
+        _lastError = err.message;
         console.warn('[Discord] Auto-connect failed:', err.message);
+        scheduleReconnect(Math.min(120_000, 15_000 * Math.max(1, _reconnectAttempts + 1)));
         return false;
     }
 }

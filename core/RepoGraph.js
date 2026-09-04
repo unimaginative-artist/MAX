@@ -181,32 +181,6 @@ export class RepoGraph {
         return Array.from(impact);
     }
 
-    /**
-     * Get a structured map of files and components impacted by a change to filePath.
-     * Used by the Blast Radius Protocol to trigger targeted audits.
-     */
-    getImpactMap(filePath) {
-        const normalized = filePath.replace(/\\/g, '/');
-        const node = this.nodes.get(normalized);
-        
-        if (!node) return { direct: [], transitive: [], hubness: 0, score: 0 };
-
-        const direct     = this.edges.filter(e => e.target === normalized).map(e => e.source);
-        const transitive = this.getImpact(normalized).filter(f => !direct.includes(f));
-        
-        // Impact Score: 1.0 (Direct) + 0.5 (Transitive) weighted by hubness
-        const score = (direct.length * 1.0) + (transitive.length * 0.3) + (node.hubness * 0.1);
-
-        return {
-            id:         normalized,
-            hubness:    node.hubness,
-            impactScore: score,
-            direct,
-            transitive,
-            isHighRisk: node.hubness > 10 || score > 15
-        };
-    }
-
     getVisualizationData() {
         const cycles = this.detectCycles();
         const cycleNodes = new Set(cycles.flat());

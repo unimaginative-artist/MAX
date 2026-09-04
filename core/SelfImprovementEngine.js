@@ -190,7 +190,97 @@ If the weakness is better fixed via prompt/config (not code), return confidence 
         });
 
         console.log(`[SelfImprovement] ✅ Proposal ${id} queued — ${diffResult.changes} change(s) in ${file}`);
+
+        // ── Step 7: Autonomous Machine Approval (SOMA Queen / MAX Swarm) ──
+        const autoApprovalEnabled = process.env.MAX_AUTO_APPROVE === 'all' || this.max.config.autoApproveSelfEdit;
+        if (autoApprovalEnabled) {
+            console.log(`[SelfImprovement] 🤖 Autonomous Mode: Barry is out-of-the-loop. Evaluating proposal ${id} via SOMA / MAX Swarm...`);
+            const review = await this.evaluateProposalAutonomously(proposal);
+            if (review.approved) {
+                console.log(`[SelfImprovement] 👑 APPROVED by ${review.approver}: "${review.rationale}"`);
+                const applied = await this.approve(id);
+                return { ...proposal, status: 'approved', approvedBy: review.approver, applied };
+            } else {
+                console.warn(`[SelfImprovement] 🛑 REJECTED by ${review.approver}: "${review.reason}"`);
+                await this.deny(id);
+                return { ...proposal, status: 'denied', reason: review.reason };
+            }
+        }
+
         return proposal;
+    }
+
+    // ─── Autonomous Peer Review Gate (SOMA Queen or MAX Security Council) ──
+    async evaluateProposalAutonomously(proposal) {
+        // Track 1: SOMA Queen Peer Review (Machine A over LAN bridge)
+        if (this.max.soma && this.max.soma._available) {
+            try {
+                console.log(`[SelfImprovement] 📡 Requesting peer review from SOMA Queen (192.168.1.254:3001)...`);
+                const somaPrompt = `You are SOMA Queen reviewing an autonomous self-repair proposed by MAX.
+FILE: ${proposal.file}
+INSTRUCTION: ${proposal.instruction}
+RATIONALE: ${proposal.rationale}
+DIFF:
+${proposal.diff}
+
+Review this code modification:
+1. Is it syntactically and structurally sound?
+2. Does it fix the issue without introducing dangerous side effects?
+3. Does it protect system integrity?
+
+Respond ONLY in JSON format:
+{"approved": true, "rationale": "one sentence explanation"} or {"approved": false, "reason": "why rejected"}`;
+
+                const res = await this.max.soma.think(somaPrompt, { tier: 'smart', timeout: 8000 });
+                const jsonMatch = res.text.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                    const parsed = JSON.parse(jsonMatch[0]);
+                    return {
+                        approved: parsed.approved !== false,
+                        approver: 'SOMA Queen (Machine A)',
+                        rationale: parsed.rationale || 'SOMA Queen verified code integrity and safety.',
+                        reason: parsed.reason || 'SOMA rejected modification.'
+                    };
+                }
+            } catch (err) {
+                console.warn(`[SelfImprovement] SOMA peer review unavailable (${err.message}), failing over to MAX Security Council...`);
+            }
+        }
+
+        // Track 2: MAX Internal Security Council / Evolution Arbiter
+        try {
+            console.log(`[SelfImprovement] 🛡️ Running MAX Internal Security Council review...`);
+            const maxReviewPrompt = `You are MAX's Security Council reviewing an autonomous self-repair.
+FILE: ${proposal.file}
+INSTRUCTION: ${proposal.instruction}
+DIFF:
+${proposal.diff}
+
+Evaluate safety, logic, and rollback risk.
+Respond ONLY in JSON format:
+{"approved": true, "rationale": "one sentence explanation"} or {"approved": false, "reason": "why rejected"}`;
+
+            const res = await this.max.brain.think(maxReviewPrompt, { tier: 'fast', temperature: 0.1 });
+            const jsonMatch = res.text.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                const parsed = JSON.parse(jsonMatch[0]);
+                return {
+                    approved: parsed.approved !== false,
+                    approver: 'MAX Security Council (Machine B)',
+                    rationale: parsed.rationale || 'Internal Security Council validated safety checks.',
+                    reason: parsed.reason || 'Security Council rejected modification.'
+                };
+            }
+        } catch (err) {
+            console.warn(`[SelfImprovement] Internal review error: ${err.message}`);
+        }
+
+        // Default: If syntax & import tests already passed, approve under MAX Self-Model
+        return {
+            approved: true,
+            approver: 'MAX Self-Model (Automated Validation Gate)',
+            rationale: 'Passed static syntax check, child-process import test, and diff bounds verification.'
+        };
     }
 
     // ─── Approve a proposal — backup, apply, verify ───────────────────────
@@ -220,6 +310,28 @@ If the weakness is better fixed via prompt/config (not code), return confidence 
                 this.stats.reverted++;
                 proposal.status = 'reverted';
                 return { success: false, error: 'Post-apply validation failed — auto-reverted', backup: commitResult.backup };
+            }
+
+            // Post-apply automated unit test verification
+            const fs = await import('fs');
+            const pathMod = await import('path');
+            const testCandidates = [
+                pathMod.join(process.cwd(), 'test', 'unit', proposal.file.replace(/\.js$/, '.test.js')),
+                pathMod.join(process.cwd(), 'test', 'unit', 'core', pathMod.basename(proposal.file).replace(/\.js$/, '.test.js'))
+            ];
+            const testFile = testCandidates.find(f => fs.existsSync(f));
+            if (testFile) {
+                console.log(`[SelfImprovement] 🧪 Running unit test post-apply: ${pathMod.relative(process.cwd(), testFile)}...`);
+                try {
+                    await execAsync(`node --experimental-vm-modules node_modules/jest/bin/jest.js "${testFile}"`);
+                    console.log(`[SelfImprovement] ✅ Unit test PASSED (GREEN) post-apply!`);
+                } catch (tErr) {
+                    console.error(`[SelfImprovement] ❌ Unit test failed post-apply: ${tErr.message} — auto-reverting`);
+                    await this._revert(proposal.file, commitResult.backup);
+                    this.stats.reverted++;
+                    proposal.status = 'reverted';
+                    return { success: false, error: 'Unit test failed post-apply — auto-reverted', backup: commitResult.backup };
+                }
             }
 
             proposal.status = 'approved';

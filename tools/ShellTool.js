@@ -24,7 +24,6 @@ const execAsync = promisify(exec);
 
 // ── Persistent state ──
 let _procs = new Map();              // name → { pid, proc, command, started, log }
-const _sessionShells = new Map();    // sessionId → VirtualShell
 
 // The true persistent shell
 const vShell = new VirtualShell();
@@ -35,6 +34,8 @@ vShell.on('data', (data) => {
     const lines = data.split(/\r?\n/);
     for (const l of lines) {
         if (!l) continue;
+        if (/^Microsoft Windows \[Version /i.test(l)) continue;
+        if (/^\(c\) Microsoft Corporation\./i.test(l)) continue;
         if (l.includes('__EXIT_CODE_') || l.includes('__MAX_SHELL_DONE_')) continue;
         // Filter cmd.exe prompt echoes like "C:\Users\...>"
         if (/^[A-Za-z]:[\\\/].*>/.test(l.trim())) continue;
@@ -48,37 +49,6 @@ vShell.on('data_err', (data) => {
         if (l) printShellLine(l, true);
     }
 });
-
-function getShellForSession(sessionId) {
-    if (!sessionId) {
-        return vShell;
-    }
-    if (_sessionShells.has(sessionId)) {
-        return _sessionShells.get(sessionId);
-    }
-    const sessShell = new VirtualShell();
-    sessShell.start();
-
-    sessShell.on('data', (data) => {
-        const lines = data.split(/\r?\n/);
-        for (const l of lines) {
-            if (!l) continue;
-            if (l.includes('__EXIT_CODE_') || l.includes('__MAX_SHELL_DONE_')) continue;
-            if (/^[A-Za-z]:[\\\/].*>/.test(l.trim())) continue;
-            printShellLine(`[${sessionId}] ${l}`);
-        }
-    });
-
-    sessShell.on('data_err', (data) => {
-        const lines = data.split(/\r?\n/);
-        for (const l of lines) {
-            if (l) printShellLine(`[${sessionId}] ${l}`, true);
-        }
-    });
-
-    _sessionShells.set(sessionId, sessShell);
-    return sessShell;
-}
 
 const PID_FILE = path.join(process.env.USERPROFILE || process.env.HOME || '.', '.max', 'pids.json');
 
@@ -152,6 +122,7 @@ export function getProcessLog(name) {
 // Set by server.js so SSE clients see live process output
 let _logBroadcast = null;
 export function setProcessLogBroadcast(fn) { _logBroadcast = fn; }
+export function shutdownShellTool() { vShell.stop(); }
 
 // Error explain hook — called when any shell command exits non-zero
 // server.js wires this to brain.think() + WebSocket broadcast
@@ -162,17 +133,71 @@ export const ShellTool = {
     name: 'shell',
     description: 'Run shell commands with a stateful Virtual Shell. Keeps working directory and environment variables persistent. Can start/stop background daemons.',
 
+    actionDocs: {
+        run: {
+            description: "Execute a command in the persistent Virtual Shell and wait for exit.",
+            params: {
+                command: { type: "string", required: true, description: "The command string to execute." },
+                cwd: { type: "string", required: false, description: "Working directory for this command only. Does not change the persistent shell directory." },
+                timeoutMs: { type: "number", required: false, default: 120000, description: "Maximum execution time in milliseconds." }
+            }
+        },
+        start: {
+            description: "Spawn a long-running background process (server, daemon, watcher, etc.).",
+            params: {
+                command: { type: "string", required: true, description: "The command string to run in the background." },
+                name: { type: "string", required: false, description: "Custom label/name to identify this process." },
+                cwd: { type: "string", required: false, description: "Working directory for the process." }
+            }
+        },
+        stop: {
+            description: "Kill a named running background process.",
+            params: {
+                name: { type: "string", required: true, description: "The label/name of the process to kill." }
+            }
+        },
+        ps: {
+            description: "List all currently active background processes started by MAX.",
+            params: {}
+        },
+        cd: {
+            description: "Change the persistent working directory for the Virtual Shell.",
+            params: {
+                path: { type: "string", required: true, description: "Target directory path." }
+            }
+        },
+        which: {
+            description: "Check if a program/CLI tool is installed in the system.",
+            params: {
+                program: { type: "string", required: true, description: "Name of the CLI tool/executable (e.g. git, node)." }
+            }
+        }
+    },
+
     actions: {
-        async run({ command, timeoutMs = 120_000, signal = null, sessionId = null }) {
+        async run({ command, cwd = null, timeoutMs = 120_000, signal = null }) {
             const blocked = isBlocked(command);
             if (blocked) return { success: false, error: blocked };
+
+            let resolvedCwd = null;
+            if (cwd) {
+                resolvedCwd = path.resolve(cwd);
+                if (resolvedCwd.includes('"') || /[\r\n]/.test(resolvedCwd)) {
+                    return { success: false, error: 'Invalid working directory path.' };
+                }
+                try {
+                    const stat = await fs.stat(resolvedCwd);
+                    if (!stat.isDirectory()) return { success: false, error: `Working directory is not a directory: ${resolvedCwd}` };
+                } catch {
+                    return { success: false, error: `Working directory does not exist: ${resolvedCwd}` };
+                }
+            }
 
             printShellHeader(command);
             const start = Date.now();
 
             try {
-                const shell = getShellForSession(sessionId);
-                const res = await shell.run(command, timeoutMs, signal);
+                const res = await vShell.run(command, timeoutMs, signal, false, resolvedCwd);
                 const ms = Date.now() - start;
                 printShellFooter(res.code, ms);
 
@@ -293,39 +318,16 @@ export const ShellTool = {
             return { success: true, processes: list, count: list.length };
         },
 
-        async cd({ path: targetPath, sessionId = null }) {
+        async cd({ path: targetPath }) {
             // Because we use a Virtual Shell, we just pass the 'cd' command directly to it!
-            const shell = getShellForSession(sessionId);
-            const res = await shell.run(`cd "${targetPath}"`);
+            const res = await vShell.run(`cd "${targetPath}"`);
             return { success: res.success, output: res.stdout, error: res.stderr };
         },
 
-        async which({ program, sessionId = null }) {
+        async which({ program }) {
             const cmd = process.platform === 'win32' ? `where ${program}` : `which ${program}`;
-            const shell = getShellForSession(sessionId);
-            const res = await shell.run(cmd, 5000);
+            const res = await vShell.run(cmd, 5000);
             return { success: true, found: res.success, path: res.stdout.trim() };
-        },
-
-        async cleanupSession({ sessionId }) {
-            if (sessionId && _sessionShells.has(sessionId)) {
-                const shell = _sessionShells.get(sessionId);
-                if (shell.proc && shell.proc.pid) {
-                    try {
-                        await _killByPid(shell.proc.pid);
-                    } catch (err) {
-                        console.warn(`Failed to kill process group for shell session ${sessionId}:`, err.message);
-                    }
-                }
-                try {
-                    shell.stop();
-                } catch (err) {
-                    console.warn(`Error stopping shell session ${sessionId}:`, err.message);
-                }
-                _sessionShells.delete(sessionId);
-                console.log(`[ShellTool] Cleaned up shell session ${sessionId}`);
-            }
-            return { success: true };
         }
     }
 };

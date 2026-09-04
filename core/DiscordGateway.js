@@ -17,14 +17,9 @@ export class DiscordGateway {
     this.goalEngine = agentLoop.goalEngine;
     this.discord = new DiscordTool();
     this.connected = false;
-    this._listenPromise = null;
-    this._sleepTimer = null;
-    this._sleepResolve = null;
-    this._seenMessages = new Set();
   }
 
   async start() {
-    if (this.connected) return;
     console.log('[DiscordGateway] Starting...');
     // Connect to Discord using the same token as the DiscordTool
     const { success, error } = await this.discord.setup({});
@@ -37,7 +32,7 @@ export class DiscordGateway {
     await this.discord.monitor({ channelName: 'general', enable: true });
     console.log('[DiscordGateway] Monitoring #general for commands');
     // Start listening loop
-    this._listenPromise = this.listenLoop();
+    this.listenLoop();
   }
 
   async listenLoop() {
@@ -48,9 +43,7 @@ export class DiscordGateway {
           for (const msg of messages) {
             // Avoid processing our own messages
             if (msg.author === 'MAX') continue;
-            if (this._seenMessages.has(msg.id)) continue;
             if (BOT_MENTION.test(msg.content)) {
-              this._rememberMessage(msg.id);
               await this.processCommand(msg);
             }
           }
@@ -59,27 +52,8 @@ export class DiscordGateway {
         console.error('[DiscordGateway] Listen error:', err.message);
       }
       // Poll every 3 seconds
-      await this._sleep(3000);
+      await new Promise(resolve => setTimeout(resolve, 3000));
     }
-  }
-
-  _sleep(ms) {
-    return new Promise(resolve => {
-      this._sleepResolve = resolve;
-      this._sleepTimer = setTimeout(() => {
-        this._sleepTimer = null;
-        this._sleepResolve = null;
-        resolve();
-      }, ms);
-      this._sleepTimer.unref?.();
-    });
-  }
-
-  _rememberMessage(id) {
-    this._seenMessages.add(id);
-    if (this._seenMessages.size <= 500) return;
-    const oldest = this._seenMessages.values().next().value;
-    this._seenMessages.delete(oldest);
   }
 
   async processCommand(msg) {
@@ -153,14 +127,6 @@ export class DiscordGateway {
 
   async stop() {
     this.connected = false;
-    if (this._sleepTimer) {
-      clearTimeout(this._sleepTimer);
-      this._sleepTimer = null;
-    }
-    if (this._sleepResolve) {
-      this._sleepResolve();
-      this._sleepResolve = null;
-    }
     await this.discord.monitor({ channelName: 'general', enable: false });
     console.log('[DiscordGateway] Stopped.');
   }

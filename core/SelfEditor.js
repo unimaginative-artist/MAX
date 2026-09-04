@@ -50,6 +50,50 @@ export class SelfEditor {
     async proposeEdit(relPath, instruction, brain) {
         const { code } = await this.readSource(relPath);
 
+        // Attempt 1: Fast, surgical block-level edit (Senior dev approach / Poseidon Rule 1)
+        try {
+            const surgicalPrompt = `You are a software engineer applying an autonomous edit to your own source code.
+FILE: ${relPath}
+INSTRUCTION: ${instruction}
+
+Analyze the file and provide the surgical modification.
+You MUST output valid JSON with this exact schema:
+{
+  "mode": "replace" | "insert_after" | "insert_before",
+  "target": "exact lines from CURRENT CODE to match",
+  "content": "new code to insert or replace with"
+}
+
+CURRENT CODE:
+\`\`\`javascript
+${code}
+\`\`\`
+
+Return ONLY the raw JSON object. No explanation, no markdown backticks.`;
+
+            const surgicalRes = await brain.think(surgicalPrompt, { temperature: 0.1, maxTokens: 1200, tier: 'smart' });
+            const cleaned = surgicalRes.text.trim().replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '');
+            const match = cleaned.match(/\{[\s\S]*\}/);
+            if (match) {
+                const spec = JSON.parse(match[0]);
+                if (spec.target && spec.content !== undefined && code.includes(spec.target)) {
+                    let surgicalCode = code;
+                    if (spec.mode === 'insert_after') {
+                        surgicalCode = code.replace(spec.target, spec.target + '\n' + spec.content);
+                    } else if (spec.mode === 'insert_before') {
+                        surgicalCode = code.replace(spec.target, spec.content + '\n' + spec.target);
+                    } else {
+                        surgicalCode = code.replace(spec.target, spec.content);
+                    }
+                    console.log(`[SelfEditor] ⚡ Applied surgical block edit (${spec.mode || 'replace'}) to ${relPath}`);
+                    return surgicalCode;
+                }
+            }
+        } catch (e) {
+            console.warn(`[SelfEditor] Surgical edit failed (${e.message}), falling back to full-file generation...`);
+        }
+
+        // Attempt 2: Full-file regeneration fallback
         const result = await brain.think(
             `You are editing your own source code. Apply the instruction precisely.
 
@@ -137,57 +181,29 @@ The output must be valid JavaScript that can directly replace the original file.
         const origLines  = original.split('\n');
         const stageLines = entry.newCode.split('\n');
 
+        const hunks   = [];
         const maxLen  = Math.max(origLines.length, stageLines.length);
-        const changedIndices = [];
+        let   changes = 0;
+        let   hunk    = [];
+
+        const flushHunk = () => {
+            if (hunk.length > 0) { hunks.push(hunk.join('\n')); hunk = []; }
+        };
+
         for (let i = 0; i < maxLen; i++) {
-            if (origLines[i] !== stageLines[i]) {
-                changedIndices.push(i);
+            const o = origLines[i];
+            const s = stageLines[i];
+            if (o === undefined)    { hunk.push(`+ ${s}`);  changes++; }
+            else if (s === undefined) { hunk.push(`- ${o}`); changes++; }
+            else if (o !== s)       { hunk.push(`- ${o}`); hunk.push(`+ ${s}`); changes++; }
+            else if (hunk.length > 0) {
+                hunk.push(`  ${o}`);
+                if (hunk.filter(l => !l.startsWith('  ')).length === 0) flushHunk();
             }
         }
+        flushHunk();
 
-        const changes = changedIndices.length;
-        if (changes === 0) {
-            return { diff: '', changes: 0, addedLines: 0 };
-        }
-
-        const CONTEXT_LINES = 3;
-        const hunks = [];
-        let currentHunk = null;
-
-        for (const idx of changedIndices) {
-            if (!currentHunk) {
-                currentHunk = { start: idx, end: idx };
-            } else if (idx - currentHunk.end <= 2 * CONTEXT_LINES) {
-                currentHunk.end = idx;
-            } else {
-                hunks.push(currentHunk);
-                currentHunk = { start: idx, end: idx };
-            }
-        }
-        if (currentHunk) hunks.push(currentHunk);
-
-        const hunkStrings = [];
-        for (const h of hunks) {
-            const hStart = Math.max(0, h.start - CONTEXT_LINES);
-            const hEnd = Math.min(maxLen - 1, h.end + CONTEXT_LINES);
-            const hunkLines = [];
-
-            hunkLines.push(`@@ -${hStart + 1},${hEnd - hStart + 1} +${hStart + 1},${hEnd - hStart + 1} @@`);
-
-            for (let i = hStart; i <= hEnd; i++) {
-                const o = origLines[i];
-                const s = stageLines[i];
-                if (o === s) {
-                    hunkLines.push(`  ${o}`);
-                } else {
-                    if (o !== undefined) hunkLines.push(`- ${o}`);
-                    if (s !== undefined) hunkLines.push(`+ ${s}`);
-                }
-            }
-            hunkStrings.push(hunkLines.join('\n'));
-        }
-
-        return { diff: hunkStrings.join('\n---\n'), changes, addedLines: stageLines.length - origLines.length };
+        return { diff: hunks.join('\n---\n'), changes, addedLines: stageLines.length - origLines.length };
     }
 
     // ─── Open VS Code diff view ───────────────────────────────────────────

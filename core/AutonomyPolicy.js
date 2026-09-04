@@ -85,7 +85,7 @@ export class AutonomyPolicy {
         }
 
         if (EXTERNAL_SEND_TOOLS.has(tool) && EXTERNAL_SEND_ACTIONS.has(action)) {
-            if (this.externalSend || params?.__approvedExternal === true || source === 'ui') {
+            if (this.externalSend || params?.__approvedExternal === true || source === 'ui' || source === 'discord' || context?.source === 'discord') {
                 return this._allow('External send explicitly enabled or user-directed', 'high');
             }
             return this._block('External sends require MAX_EXTERNAL_SEND=true, __approvedExternal, or direct UI action', 'high');

@@ -35,7 +35,8 @@ async function ensureOllama() {
             // Spawn Ollama server in background (fire and forget)
             const ollama = spawn('ollama', ['serve'], {
                 detached: true,
-                stdio: 'ignore'
+                stdio: 'ignore',
+                windowsHide: true,
             });
             ollama.unref(); // Let it live independently of MAX
 
@@ -114,12 +115,14 @@ function loadEnv() {
 // ─── Parse CLI args ───────────────────────────────────────────────────────
 function parseArgs() {
     const args   = process.argv.slice(2);
-    const result = { mode: 'chat', persona: null, task: null };
+    const result = { mode: 'chat', persona: null, task: null, clusterRole: null, nodeId: null };
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--mode'    && args[i+1]) result.mode    = args[++i];
         if (args[i] === '--persona' && args[i+1]) result.persona = args[++i];
         if (args[i] === '--task'    && args[i+1]) result.task    = args[++i];
         if (args[i] === '--port'    && args[i+1]) result.port    = parseInt(args[++i]);
+        if (args[i] === '--cluster-role' && args[i+1]) result.clusterRole = args[++i];
+        if (args[i] === '--node-id' && args[i+1]) result.nodeId = args[++i];
     }
     return result;
 }
@@ -255,23 +258,6 @@ async function chatMode(max, opts = {}) {
                     console.log(`\n[MAX] ${active.length} active goals:`);
                     for (const g of active) console.log(`  [${g.id.slice(0,8)}] ${g.title} (${g.status})`);
                     console.log();
-                    break;
-                case 'directives':
-                    if (argStr?.trim() === 'clear') {
-                        max.reflection?.clearDirectives();
-                        console.log('[MAX] 🧹 Behavioral directives cleared.');
-                    } else {
-                        const directives = max.reflection?._selfModel?.behaviorDirectives || [];
-                        console.log(`\n[MAX] Active Behavioral Directives (${directives.length}):`);
-                        if (directives.length === 0) {
-                            console.log('  No active directives. MAX learns style rules from user corrections.');
-                        } else {
-                            for (const d of directives) {
-                                console.log(`  • ${d}`);
-                            }
-                        }
-                        console.log();
-                    }
                     break;
                 case 'run':
                     try { await max.tools.execute('shell', 'run', { command: argStr }); } catch (e) { console.log(`Error: ${e.message}`); }
@@ -420,11 +406,14 @@ async function chatMode(max, opts = {}) {
 async function main() {
     loadEnv();
     const opts = parseArgs();
+    opts.clusterRole = String(opts.clusterRole || process.env.MAX_CLUSTER_ROLE || 'standalone').toLowerCase();
+    opts.nodeId = String(opts.nodeId || process.env.MAX_NODE_ID || `max-${process.env.COMPUTERNAME || 'local'}`);
+    if (opts.clusterRole === 'worker') opts.mode = 'api';
     console.log('[Launcher] 🚀 Booting MAX OMEGA...');
 
+    // Check port BEFORE expensive initialization so we fail fast
     const port = +(opts.port || process.env.MAX_PORT || 3100);
-    const host = process.env.MAX_HOST || process.env.HOST || '127.0.0.1';
-    const portFree = await checkPort(port, host);
+    const portFree = await checkPort(port);
     if (!portFree) {
         console.error(`[Launcher] ❌ Port ${port} is already in use. Stop the existing process or set MAX_PORT to a free port.`);
         process.exit(1);
@@ -437,25 +426,40 @@ async function main() {
         geminiKey:  process.env.GEMINI_API_KEY,
         memory:     { dbPath: join(__dirname, '.max', 'memory.db') },
         agentLoop:  { autoApproveLevel: process.env.MAX_AUTO_APPROVE || 'write' },
-        mode:       opts.mode
+        mode:       opts.mode,
+        clusterRole: opts.clusterRole,
+        nodeId: opts.nodeId,
+        clusterSecret: process.env.MAX_CLUSTER_SECRET,
+        clusterWorkers: process.env.MAX_CLUSTER_WORKERS,
+        workerCloudAllowed: process.env.MAX_WORKER_ALLOW_CLOUD === 'true'
     });
 
     console.log('[Launcher] ⚙️  Initializing core systems...');
     await max.initialize();
 
     const { createServer } = await import('./server/server.js');
-    await createServer(max, port, host);
+    await createServer(max, port);
 
     if (opts.mode === 'chat') {
         await chatMode(max, opts);
     }
 }
 
-process.on('unhandledRejection', (err) => {
-    console.error('[MAX] ⚠️  Unhandled rejection:', err?.message || err);
-});
-process.on('uncaughtException', (err) => {
-    console.error('[MAX] ⚠️  Uncaught exception:', err?.message || err);
-});
+function logFatalError(type, err) {
+    const errorText = `[${new Date().toISOString()}] FATAL (${type}): ${err?.stack || err?.message || err}\n\n`;
+    console.error(`[MAX] ⚠️  ${type}:`, err?.message || err);
+    try {
+        const logsDir = join(__dirname, 'logs');
+        if (!existsSync(logsDir)) {
+            const fs = import('fs');
+            fs.then(f => f.mkdirSync(logsDir, { recursive: true })).catch(() => {});
+        }
+        const fs = import('fs');
+        fs.then(f => f.appendFileSync(join(logsDir, 'fatal.log'), errorText)).catch(() => {});
+    } catch {}
+}
 
-main().catch(err => { console.error('[MAX] Fatal:', err); process.exit(1); });
+process.on('unhandledRejection', (err) => logFatalError('Unhandled Rejection', err));
+process.on('uncaughtException', (err) => logFatalError('Uncaught Exception', err));
+
+main().catch(err => { logFatalError('Main Boot Failure', err); process.exit(1); });

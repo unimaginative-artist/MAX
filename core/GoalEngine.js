@@ -373,8 +373,6 @@ Return as plain text, 4 labeled lines. No JSON. Be concise.`;
         return true;
     }
 
-    remove(id) { return this.complete(id, { cancelled: true }); }
-
     // ─── Mark a goal failed — retries up to maxRetries before permanent fail ─
     fail(id, reason = '') {
         const goal = this._active.get(id);

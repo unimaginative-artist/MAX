@@ -92,7 +92,7 @@ export async function createServer(max, portOrOptions = 3100) {
 
     // ── Auth middleware — protect all API routes ───────────────────────────
     // Dashboard HTML + /health are public. Everything else requires the key.
-    const PUBLIC_PATHS = new Set(['/', '/health', '/favicon.ico', '/maxwell', '/ide', '/preview', '/satellite']);
+    const PUBLIC_PATHS = new Set(['/', '/health', '/favicon.ico', '/maxwell', '/maxwell.html', '/ide', '/preview', '/satellite', '/satellite.html']);
     app.use((req, res, next) => {
         // Static dashboard, satellite, choko, and health are always public
         if (PUBLIC_PATHS.has(req.path) || req.path.startsWith('/assets') || req.path.startsWith('/preview/') || req.path.startsWith('/api/satellite/') || req.path.startsWith('/api/choko/')) return next();
@@ -600,10 +600,12 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
         }
     }
 
-    app.get('/',          serveMaxwell);
-    app.get('/maxwell',   serveMaxwell);
-    app.get('/ide',       serveMaxwell);
-    app.get('/satellite', serveSatellite);
+    app.get('/',               serveMaxwell);
+    app.get('/maxwell',        serveMaxwell);
+    app.get('/maxwell.html',   serveMaxwell);
+    app.get('/ide',            serveMaxwell);
+    app.get('/satellite',      serveSatellite);
+    app.get('/satellite.html', serveSatellite);
 
     // ── File tree ─────────────────────────────────────────────────────────
     // Returns a structured tree for Maxwell's file explorer

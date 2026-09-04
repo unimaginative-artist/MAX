@@ -1,4 +1,4 @@
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+﻿// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Heartbeat.js â€” MAX's autonomous pulse
 // Runs background cycles: curiosity tasks, self-monitoring, goal execution
 // Simplified from SOMA AutonomousHeartbeat â€” no SOMA framework deps
@@ -34,11 +34,11 @@ export class Heartbeat extends EventEmitter {
             lastTask:      null
         };
 
-        this._muted = false; // set by MuseEngine during muse mode
+        this._muted = false; // set by MuseEngine during companion mode
     }
 
     // Muse mode: silence autonomous work so MAX stays present in conversation
-    mute()   { this._muted = true;  console.log('[Heartbeat] 🔇 Muted (muse mode)'); }
+    mute()   { this._muted = true;  console.log('[Heartbeat] 🔇 Muted (companion mode)'); }
     unmute() { this._muted = false; console.log('[Heartbeat] 🔊 Unmuted'); }
 
     start() {
@@ -51,23 +51,8 @@ export class Heartbeat extends EventEmitter {
         this.emit('started');
     }
 
-    stop() {
-        if (this._timer) {
-            clearTimeout(this._timer);
-            this._timer = null;
-        }
-        if (!this._running) return;
-        this._running = false;
-        this.config.enabled = false;
-        this.emit('stopped');
-    }
-
     _schedule() {
         if (!this._running) return;
-        if (this._timer) {
-            clearTimeout(this._timer);
-            this._timer = null;
-        }
 
         const drive = this.max?.drive?.getStatus?.();
         const tension = drive?.tension || 0;
@@ -87,11 +72,7 @@ export class Heartbeat extends EventEmitter {
             interval = Math.min(interval, 15 * 1000);
         }
 
-        this._timer = setTimeout(() => {
-            this._timer = null;
-            this._tick().catch(err => console.error('[Heartbeat] tick error:', err.message));
-        }, interval);
-        this._timer.unref?.();
+        this._timer = setTimeout(() => this._tick().catch(err => console.error('[Heartbeat] tick error:', err.message)), interval);
     }
 
     async _tick() {
@@ -124,7 +105,7 @@ export class Heartbeat extends EventEmitter {
     async _runCycle() {
         if (this.max?._chatBusy) return false;
 
-        // Muse mode: stay silent, don't run autonomous work
+        // Companion / Muse mode: stay silent, don't run autonomous work
         if (this._muted) {
             this.emit('idle');
             return false;

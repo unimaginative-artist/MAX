@@ -26,6 +26,9 @@ export class EconomicsEngine {
             budgetAlert: config.budgetAlert || 5.00, // Alert at $5 daily
             ...config
         };
+        this.statsFile = config.statsFile || STATS_FILE;
+        this._reservations = new Map();
+        this._reservedCost = 0;
 
         this.dailyUsage = {
             date: new Date().toISOString().split('T')[0],
@@ -41,7 +44,7 @@ export class EconomicsEngine {
     /**
      * Record usage after a brain call.
      */
-    recordUsage(model, inputTokens, outputTokens) {
+    recordUsage(model, inputTokens, outputTokens, reservationId = null) {
         const today = new Date().toISOString().split('T')[0];
         if (this.dailyUsage.date !== today) {
             this._resetDaily(today);
@@ -49,6 +52,11 @@ export class EconomicsEngine {
 
         const stats = PRICING[model] || PRICING['default'];
         const cost = (inputTokens / 1_000_000 * stats.input) + (outputTokens / 1_000_000 * stats.output);
+        if (reservationId && this._reservations.has(reservationId)) {
+            this._reservedCost = Math.max(0, this._reservedCost - this._reservations.get(reservationId));
+            this._reservations.delete(reservationId);
+        }
+        this.controlPlane?.settleBudget?.(reservationId, today, cost);
 
         if (!this.dailyUsage.models[model]) {
             this.dailyUsage.models[model] = { inputTokens: 0, outputTokens: 0, cost: 0 };
@@ -66,6 +74,41 @@ export class EconomicsEngine {
         if (this.dailyUsage.totalCost > this.config.budgetAlert) {
             console.warn(`[Economics] 💸 Budget Alert: Daily cost is $${this.dailyUsage.totalCost.toFixed(2)}`);
         }
+    }
+
+    estimateCost(model, inputTokens = 0, outputTokens = 0) {
+        const stats = PRICING[model] || PRICING.default;
+        return (Number(inputTokens) / 1_000_000 * stats.input)
+            + (Number(outputTokens) / 1_000_000 * stats.output);
+    }
+
+    /**
+     * Atomically reserve the worst-case cost before a cloud request starts.
+     * JavaScript executes this synchronous section without interleaving, so two
+     * concurrent brain lanes cannot both spend the same remaining allowance.
+     */
+    reserveUsage(model, inputTokens = 0, maxOutputTokens = 0) {
+        const today = new Date().toISOString().split('T')[0];
+        if (this.dailyUsage.date !== today) this._resetDaily(today);
+
+        const estimatedCost = this.estimateCost(model, inputTokens, maxOutputTokens);
+        const cap = this._cap();
+        if ((this.dailyUsage.totalCost + this._reservedCost + estimatedCost) > cap) return null;
+
+        const id = this.controlPlane?.reserveBudget?.(today, estimatedCost, cap)
+            || (!this.controlPlane ? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` : null);
+        if (!id) return null;
+        this._reservations.set(id, estimatedCost);
+        this._reservedCost += estimatedCost;
+        return id;
+    }
+
+    releaseReservation(id) {
+        if (!id || !this._reservations.has(id)) return false;
+        this._reservedCost = Math.max(0, this._reservedCost - this._reservations.get(id));
+        this._reservations.delete(id);
+        this.controlPlane?.releaseBudget?.(id);
+        return true;
     }
 
     /**
@@ -120,15 +163,22 @@ export class EconomicsEngine {
 
     // Hard budget cap — Brain checks this before any API call
     isOverBudget() {
-        const cap = parseFloat(process.env.MAX_DAILY_BUDGET || '10.00');
-        return this.dailyUsage.totalCost >= cap;
+        return this.getBudgetStatus().overBudget;
     }
 
     getBudgetStatus() {
-        const cap    = parseFloat(process.env.MAX_DAILY_BUDGET || '10.00');
-        const used   = this.dailyUsage.totalCost || 0;
-        const remain = Math.max(0, cap - used);
-        return { cap, used, remaining: remain, overBudget: used >= cap, pct: Math.round((used / cap) * 100) };
+        const cap    = this._cap();
+        const shared = this.controlPlane?.budgetStatus?.(this.dailyUsage.date);
+        const used   = Math.max(this.dailyUsage.totalCost || 0, shared?.actual || 0);
+        const reserved = shared ? shared.reserved : this._reservedCost;
+        const committed = used + reserved;
+        const remain = Math.max(0, cap - committed);
+        return { cap, used, reserved, committed, remaining: remain, overBudget: committed >= cap, pct: cap > 0 ? Math.round((committed / cap) * 100) : 100 };
+    }
+
+    _cap() {
+        const configured = Number(this.config.dailyBudget ?? process.env.MAX_DAILY_BUDGET ?? 0.25);
+        return Number.isFinite(configured) && configured >= 0 ? configured : 0.25;
     }
 
     getStatus() {
@@ -145,6 +195,8 @@ export class EconomicsEngine {
     }
 
     _resetDaily(date) {
+        this._reservations.clear();
+        this._reservedCost = 0;
         this.dailyUsage = { 
             date, 
             models: {}, 
@@ -156,16 +208,16 @@ export class EconomicsEngine {
 
     _save() {
         try {
-            const dir = path.dirname(STATS_FILE);
+            const dir = path.dirname(this.statsFile);
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(STATS_FILE, JSON.stringify(this.dailyUsage, null, 2));
+            fs.writeFileSync(this.statsFile, JSON.stringify(this.dailyUsage, null, 2));
         } catch { /* non-fatal */ }
     }
 
     _load() {
         try {
-            if (fs.existsSync(STATS_FILE)) {
-                const data = JSON.parse(fs.readFileSync(STATS_FILE, 'utf8'));
+            if (fs.existsSync(this.statsFile)) {
+                const data = JSON.parse(fs.readFileSync(this.statsFile, 'utf8'));
                 const today = new Date().toISOString().split('T')[0];
                 if (data.date === today) {
                     this.dailyUsage = data;

@@ -10,7 +10,6 @@
 //   6. Verify    — git diff evidence + optional verifyCommand
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { commandPolicy } from '../CommandPolicyEngine.js';
 import fs   from 'fs/promises';
 import path from 'path';
 
@@ -312,13 +311,8 @@ export class BuildLoop {
         return result.text.trim().toUpperCase().startsWith('Y');
     }
 
-    // ── Policy-gated shell ────────────────────────────────────────────────
+    // Shell policy is enforced centrally by MAX's ToolRegistry wrapper.
     async _runChecked(command, max, cwd = process.cwd()) {
-        const policy = commandPolicy.validate(command, cwd);
-        if (!policy.allowed) {
-            console.warn(`  [BuildLoop] 🚫 Shell blocked: ${policy.reason}`);
-            return null;
-        }
         return max.tools.execute('shell', 'run', { command, cwd });
     }
 
