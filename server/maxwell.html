@@ -821,22 +821,44 @@ html,body,#root { height:100%; background:var(--bg); color:var(--text); font-fam
   filter:brightness(1.05);
 }
 .choko-docked-pet {
-  position:fixed; bottom:34px; right:18px; z-index:90;
+  position:fixed; z-index:95;
   width:48px; height:48px; border-radius:50%;
-  cursor:pointer; user-select:none;
+  cursor:grab; user-select:none; touch-action:none;
   box-shadow:0 4px 18px rgba(0,0,0,0.5), 0 0 0 2px rgba(244,114,182,0.6);
   animation:choko-float 3.2s ease-in-out infinite;
-  transition:all .2s ease;
+  transition:transform .3s cubic-bezier(.34,1.56,.64,1), opacity .35s ease, box-shadow .2s ease;
   display:flex; align-items:center; justify-content:center;
   background:var(--s2);
 }
 .choko-docked-pet:hover {
   transform:scale(1.18) translateY(-3px) rotate(-4deg);
   box-shadow:0 6px 24px rgba(244,114,182,0.8), 0 0 0 3px var(--pink);
+  opacity:1 !important;
+}
+.choko-docked-pet.choko-idle {
+  transform:scale(0.62) !important;
+  opacity:0.55;
+  filter:grayscale(0.2);
+  box-shadow:0 2px 10px rgba(0,0,0,0.4);
+}
+.choko-docked-pet.choko-idle:hover {
+  transform:scale(1.18) translateY(-3px) rotate(-4deg) !important;
+  opacity:1 !important;
+  filter:none;
+}
+.choko-sleep-badge {
+  position:absolute; top:-14px; right:-6px; font-size:12px; font-weight:800;
+  color:#f472b6; pointer-events:none; animation:choko-zzz 2.2s infinite ease-in-out;
+  text-shadow:0 0 6px rgba(244,114,182,0.6);
+}
+@keyframes choko-zzz {
+  0% { opacity:0; transform:translateY(0) scale(0.7); }
+  50% { opacity:0.95; transform:translateY(-6px) scale(1.1); }
+  100% { opacity:0; transform:translateY(-14px) scale(0.7); }
 }
 .choko-docked-img {
   width:100%; height:100%; border-radius:50%; object-fit:cover;
-  display:block;
+  display:block; pointer-events:none;
 }
 .choko-sparkles-overlay {
   position:absolute; inset:0; pointer-events:none; overflow:visible;
@@ -3606,41 +3628,45 @@ const CHOKO_WELCOME = "hi! i'm Choko 🍫 — MAX's scout. i'll pop up sometimes
 const CHOKO_TENSION = "heads up! ⚡ MAX's tension is really high right now. he's ready to build something big.";
 
 
+// ── Choko Hats & Wardrobe Definition ──────────────────────────
+const CHOKO_HATS = {
+  hazelnut:   { id: 'hazelnut',   name: 'Hazelnut Sentinel', emoji: '🌰', file: 'choko_hazelnut.jpg',   color: '#eab308' },
+  strawberry: { id: 'strawberry', name: 'Strawberry Helper', emoji: '🍓', file: 'choko_strawberry.jpg', color: '#f472b6' },
+  matcha:     { id: 'matcha',     name: 'Matcha Zen',        emoji: '🍵', file: 'choko_matcha.jpg',     color: '#34d399' },
+  deepcacao:  { id: 'deepcacao',  name: 'Deep Cacao',        emoji: '🍫', file: 'choko_deepcacao.jpg',  color: '#d97706' }
+};
+const CHOKO_HAT_KEYS = ['hazelnut', 'strawberry', 'matcha', 'deepcacao'];
+
 // ── Choko Toast Component ─────────────────────────────────────
-function ChokoToast({ msg, onClose, typing, onSendToMax }) {
+function ChokoToast({ msg, onClose, typing, onSendToMax, hat, onCycleHat, pos, onPointerDown }) {
   const [closing, setClosing] = React.useState(false);
-  const [hat, setHat] = React.useState('hazelnut'); // Default to newly evolved Hazelnut!
 
   const close = () => {
     setClosing(true);
     setTimeout(onClose, 240);
   };
 
-  // Cycle hats on avatar click!
-  const cycleHat = (e) => {
-    e.stopPropagation();
-    const hats = ['hazelnut', 'strawberry', 'matcha', 'deepcacao'];
-    const nextIdx = (hats.indexOf(hat) + 1) % hats.length;
-    setHat(hats[nextIdx]);
-    playTone(520, 0.08, 0.15, 'triangle');
-  };
+  const currentHat = hat || 'hazelnut';
+  const hatInfo = CHOKO_HATS[currentHat] || CHOKO_HATS.hazelnut;
 
-  const hatInfo = {
-    hazelnut:   { name: 'Hazelnut Sentinel', emoji: '🌰', file: 'choko_hazelnut.jpg', color: '#eab308' },
-    strawberry: { name: 'Strawberry Helper', emoji: '🍓', file: 'choko_strawberry.jpg', color: '#f472b6' },
-    matcha:     { name: 'Matcha Zen',        emoji: '🍵', file: 'choko_matcha.jpg',     color: '#34d399' },
-    deepcacao:  { name: 'Deep Cacao',        emoji: '🍫', file: 'choko_deepcacao.jpg',  color: '#d97706' }
-  }[hat] || { name: 'Sentinel', emoji: '🌰', file: 'choko_hazelnut.jpg', color: '#eab308' };
+  const toastStyle = pos ? {
+    position: 'fixed',
+    left: Math.max(16, Math.min(window.innerWidth - 350, pos.x - 230)),
+    top: Math.max(45, Math.min(window.innerHeight - 150, pos.y - 45)),
+    bottom: 'auto',
+    right: 'auto',
+    zIndex: 200
+  } : {};
 
   return (
-    <div className={`choko-toast ${closing?'choko-out':''}`}>
+    <div className={`choko-toast ${closing?'choko-out':''}`} style={toastStyle}>
       <div className="choko-bubble" style={{borderColor: `${hatInfo.color}88`}}>
         <button className="choko-close" onClick={close}>×</button>
         <div className="choko-name" style={{display:'flex',alignItems:'center',gap:6}}>
           <div className="cn-dot" style={{background: hatInfo.color}}/>
           <span>Choko</span>
           <span 
-            onClick={cycleHat}
+            onClick={onCycleHat}
             title="Click to cycle hats!"
             style={{
               fontSize:9.5, color:hatInfo.color, fontWeight:800, cursor:'pointer',
@@ -3666,8 +3692,10 @@ function ChokoToast({ msg, onClose, typing, onSendToMax }) {
       </div>
       <div 
         className="choko-avatar" 
-        onClick={cycleHat}
-        title={`Choko (${hatInfo.name}) — click to switch hat!`}
+        onClick={onCycleHat}
+        onPointerDown={onPointerDown}
+        title={`Choko (${hatInfo.name}) — click to switch hat, drag to move!`}
+        style={{ cursor:'grab' }}
       >
         <div className="choko-sparkles-overlay">
           <span className="choko-sparkle s1">✨</span>
@@ -5832,6 +5860,113 @@ function App() {
   const [insight, setInsight]       = useState(null);
   const [chokoMsg, setChokoMsg]       = useState(null);
   const [chokoTyping, setChokoTyping] = useState(false);
+  const [chokoHat, setChokoHat]       = useState(() => localStorage.getItem('choko_active_hat') || 'hazelnut');
+  const [chokoPos, setChokoPos]       = useState(() => {
+    try {
+      const saved = localStorage.getItem('choko_pos');
+      if (saved) {
+        const p = JSON.parse(saved);
+        if (typeof p.x === 'number' && typeof p.y === 'number') {
+          return {
+            x: Math.min(Math.max(16, p.x), window.innerWidth - 65),
+            y: Math.min(Math.max(40, p.y), window.innerHeight - 70)
+          };
+        }
+      }
+    } catch {}
+    return { x: window.innerWidth - 70, y: window.innerHeight - 80 };
+  });
+  const [chokoIdle, setChokoIdle]     = useState(false);
+  const chokoIdleTimer                = useRef(null);
+  const chokoDragRef                  = useRef({ isDragging: false, startX: 0, startY: 0, origX: 0, origY: 0, moved: false });
+
+  const resetChokoIdle = React.useCallback(() => {
+    setChokoIdle(false);
+    if (chokoIdleTimer.current) clearTimeout(chokoIdleTimer.current);
+    chokoIdleTimer.current = setTimeout(() => {
+      setChokoIdle(true);
+    }, 30000); // 30s auto-sleep / idle shrink
+  }, []);
+
+  useEffect(() => {
+    resetChokoIdle();
+    return () => { if (chokoIdleTimer.current) clearTimeout(chokoIdleTimer.current); };
+  }, [resetChokoIdle]);
+
+  const cycleChokoHat = (e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    resetChokoIdle();
+    const hats = CHOKO_HAT_KEYS;
+    const nextIdx = (hats.indexOf(chokoHat) + 1) % hats.length;
+    const newHat = hats[nextIdx];
+    setChokoHat(newHat);
+    localStorage.setItem('choko_active_hat', newHat);
+    playTone(520, 0.08, 0.15, 'triangle');
+  };
+
+  const onChokoPointerDown = (e) => {
+    if (e.button !== 0) return;
+    resetChokoIdle();
+    chokoDragRef.current = {
+      isDragging: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: chokoPos.x,
+      origY: chokoPos.y,
+      moved: false
+    };
+
+    const onPointerMove = (ev) => {
+      if (!chokoDragRef.current.isDragging) return;
+      const dx = ev.clientX - chokoDragRef.current.startX;
+      const dy = ev.clientY - chokoDragRef.current.startY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        chokoDragRef.current.moved = true;
+      }
+      const newX = Math.min(Math.max(16, chokoDragRef.current.origX + dx), window.innerWidth - 65);
+      const newY = Math.min(Math.max(40, chokoDragRef.current.origY + dy), window.innerHeight - 65);
+      setChokoPos({ x: newX, y: newY });
+    };
+
+    const onPointerUp = (ev) => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      if (chokoDragRef.current.isDragging) {
+        chokoDragRef.current.isDragging = false;
+        if (chokoDragRef.current.moved) {
+          const dx = ev.clientX - chokoDragRef.current.startX;
+          const dy = ev.clientY - chokoDragRef.current.startY;
+          const finalX = Math.min(Math.max(16, chokoDragRef.current.origX + dx), window.innerWidth - 65);
+          const finalY = Math.min(Math.max(40, chokoDragRef.current.origY + dy), window.innerHeight - 65);
+          try {
+            localStorage.setItem('choko_pos', JSON.stringify({ x: finalX, y: finalY }));
+          } catch {}
+        }
+      }
+    };
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  };
+
+  const onChokoClick = (e) => {
+    if (chokoDragRef.current.moved) return;
+    resetChokoIdle();
+    playChokoPop();
+    setChokoTyping(true);
+    setTimeout(() => {
+      setChokoTyping(false);
+      const quotes = [
+        "scout report: all systems nominal! 🐾 click my hat to switch my outfit! ✨",
+        "ready for action! MAX and I are keeping your codebase safe. 🌰",
+        "drag me anywhere on screen so i don't get in your way! 🚀",
+        "tip: split mode lets you preview your code live while MAX works! ◫",
+        "psst! Barry, i'll take a quick catnap if you don't need me for 30s. 💤"
+      ];
+      setChokoMsg(quotes[Math.floor(Math.random() * quotes.length)]);
+      setTimeout(() => setChokoMsg(null), 8000);
+    }, 500);
+  };
   const [pendingChanges, setPendingChanges] = useState([]);
   // Agent task tracker — null | { task, goalId, steps:[], status:'running'|'done'|'failed' }
   const [agentTask, setAgentTask] = useState(null);
@@ -6834,6 +6969,10 @@ function App() {
         <ChokoToast
           msg={chokoMsg}
           typing={chokoTyping}
+          hat={chokoHat}
+          onCycleHat={cycleChokoHat}
+          pos={chokoPos}
+          onPointerDown={onChokoPointerDown}
           onClose={()=>{setChokoMsg(null);setChokoTyping(false);}}
           onSendToMax={chokoMsg ? async ()=>{
             // Queue current Choko message as a MAX goal
@@ -6850,30 +6989,30 @@ function App() {
       {/* ── Persistent Floating Choko Mascot Button ── */}
       {!chokoMsg && !chokoTyping && viewMode !== 'preview' && (
         <div 
-          className="choko-docked-pet"
-          onClick={()=>{
-            playChokoPop();
-            setChokoTyping(true);
-            setTimeout(()=>{
-              setChokoTyping(false);
-              const quotes = [
-                "scout report: all systems nominal! 🐾 click my hat to switch my outfit! ✨",
-                "ready for action! MAX and I are keeping your codebase safe. 🌰",
-                "strawberry, matcha, hazelnut or deep cacao? which hat do you like best? 🎀",
-                "tip: split mode lets you preview your code live while MAX works! ◫",
-                "psst! Barry, i found some clean code patterns today! 🍫"
-              ];
-              setChokoMsg(quotes[Math.floor(Math.random()*quotes.length)]);
-              setTimeout(()=>setChokoMsg(null), 8000);
-            }, 600);
+          className={`choko-docked-pet ${chokoIdle ? 'choko-idle' : ''}`}
+          style={{
+            left: chokoPos.x,
+            top: chokoPos.y,
+            cursor: chokoDragRef.current?.isDragging ? 'grabbing' : 'grab'
           }}
-          title="Choko 🐾 — Click to summon your calico scout!"
+          onPointerDown={onChokoPointerDown}
+          onClick={onChokoClick}
+          onMouseEnter={resetChokoIdle}
+          title={`Choko (${(CHOKO_HATS[chokoHat]||CHOKO_HATS.hazelnut).name}) 🐾 — Drag to move, click to summon!`}
         >
-          <div className="choko-sparkles-overlay">
-            <span className="choko-sparkle s1">✨</span>
-            <span className="choko-sparkle s2">✦</span>
-          </div>
-          <img src="/assets/choko_hazelnut.jpg" alt="Choko" className="choko-docked-img" />
+          {chokoIdle ? (
+            <span className="choko-sleep-badge">💤 zZ</span>
+          ) : (
+            <div className="choko-sparkles-overlay">
+              <span className="choko-sparkle s1">✨</span>
+              <span className="choko-sparkle s2">✦</span>
+            </div>
+          )}
+          <img 
+            src={`/assets/${(CHOKO_HATS[chokoHat]||CHOKO_HATS.hazelnut).file}`} 
+            alt="Choko" 
+            className="choko-docked-img" 
+          />
         </div>
       )}
       {showPalette && (
