@@ -889,9 +889,14 @@ html,body,#root { height:100%; background:var(--bg); color:var(--text); font-fam
   background:#1a0f2e;
   border:1.5px solid rgba(244,114,182,.5);
   border-radius:14px 14px 14px 2px;
-  padding:10px 14px; max-width:220px; min-width:140px;
-  box-shadow:0 4px 24px rgba(244,114,182,.18),0 2px 8px rgba(0,0,0,.4);
+  padding:10px 12px;
+  width:290px;
+  max-width:calc(100vw - 60px);
+  box-shadow:0 6px 30px rgba(0,0,0,.6), 0 0 16px rgba(244,114,182,.25);
   position:relative;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
 }
 .choko-bubble::before {
   content:''; position:absolute; bottom:10px; left:-8px;
@@ -905,19 +910,134 @@ html,body,#root { height:100%; background:var(--bg); color:var(--text); font-fam
 }
 .choko-name {
   font-size:10px; font-weight:800; letter-spacing:.8px;
-  color:var(--pink); text-transform:uppercase; margin-bottom:4px;
+  color:var(--pink); text-transform:uppercase;
   display:flex; align-items:center; gap:5px;
 }
 .choko-name .cn-dot { width:5px; height:5px; border-radius:50%; background:var(--pink); animation:pulse 1.5s infinite; }
-.choko-msg { font-size:12.5px; color:#e8d5f5; line-height:1.55; }
+.choko-msg { font-size:12px; color:#e8d5f5; line-height:1.5; }
 .choko-close {
-  position:absolute; top:6px; right:8px; width:16px; height:16px;
+  position:absolute; top:6px; right:8px; width:18px; height:18px;
   border-radius:50%; border:none; background:rgba(244,114,182,.15);
-  color:var(--pink); cursor:pointer; font-size:10px; line-height:1;
-  display:flex; align-items:center; justify-content:center; opacity:.6;
-  transition:opacity .15s;
+  color:var(--pink); cursor:pointer; font-size:11px; line-height:1;
+  display:flex; align-items:center; justify-content:center; opacity:.65;
+  transition:all .15s;
 }
-.choko-close:hover { opacity:1; }
+.choko-close:hover { opacity:1; background:rgba(244,114,182,.3); transform:scale(1.1); }
+
+.choko-chat-history {
+  max-height:150px;
+  overflow-y:auto;
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  padding-right:3px;
+  overscroll-behavior:contain;
+}
+.choko-chat-history::-webkit-scrollbar { width:3px; }
+.choko-chat-history::-webkit-scrollbar-thumb { background:rgba(244,114,182,.3); border-radius:2px; }
+
+.choko-chat-msg {
+  font-size:11.5px;
+  line-height:1.45;
+  padding:5px 8px;
+  border-radius:7px;
+  word-break:break-word;
+  animation:choko-in .2s ease;
+}
+.choko-chat-msg.choko {
+  background:rgba(244,114,182,.1);
+  border:1px solid rgba(244,114,182,.25);
+  color:#f3e8ff;
+  border-radius:8px 8px 8px 2px;
+  align-self:flex-start;
+  max-width:92%;
+}
+.choko-chat-msg.user {
+  background:rgba(124,58,237,.35);
+  border:1px solid rgba(124,58,237,.5);
+  color:#fff;
+  border-radius:8px 8px 2px 8px;
+  align-self:flex-end;
+  max-width:88%;
+}
+
+.choko-quick-pills {
+  display:flex;
+  gap:4px;
+  flex-wrap:wrap;
+  margin-top:2px;
+}
+.choko-pill-btn {
+  background:rgba(255,255,255,.06);
+  border:1px solid rgba(244,114,182,.3);
+  border-radius:10px;
+  color:#f5d0fe;
+  font-size:9.5px;
+  font-weight:600;
+  padding:2px 7px;
+  cursor:pointer;
+  transition:all .15s ease;
+  user-select:none;
+}
+.choko-pill-btn:hover {
+  background:rgba(244,114,182,.2);
+  border-color:var(--pink);
+  transform:translateY(-1px);
+}
+
+.choko-input-bar {
+  display:flex;
+  gap:5px;
+  align-items:center;
+  background:rgba(0,0,0,.35);
+  border:1px solid rgba(244,114,182,.35);
+  border-radius:8px;
+  padding:3px 6px;
+  transition:border-color .15s;
+}
+.choko-input-bar:focus-within {
+  border-color:var(--pink);
+  box-shadow:0 0 8px rgba(244,114,182,.3);
+}
+.choko-input-field {
+  flex:1;
+  background:transparent;
+  border:none;
+  outline:none;
+  color:#fff;
+  font-size:11px;
+  font-family:inherit;
+  padding:3px 0;
+}
+.choko-input-field::placeholder {
+  color:rgba(232,213,245,.45);
+}
+.choko-send-btn {
+  background:rgba(244,114,182,.25);
+  border:1px solid rgba(244,114,182,.5);
+  border-radius:6px;
+  color:var(--pink);
+  font-size:11px;
+  width:24px;
+  height:22px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  transition:all .15s ease;
+  flex-shrink:0;
+  padding:0;
+}
+.choko-send-btn:hover:not(:disabled) {
+  background:var(--pink);
+  color:#fff;
+  transform:scale(1.05);
+}
+.choko-send-btn:disabled {
+  opacity:.4;
+  cursor:not-allowed;
+}
+
 .choko-typing span {
   display:inline-block; width:5px; height:5px; border-radius:50%;
   background:var(--pink); margin:0 1.5px; opacity:.4;
@@ -3637,9 +3757,33 @@ const CHOKO_HATS = {
 };
 const CHOKO_HAT_KEYS = ['hazelnut', 'strawberry', 'matcha', 'deepcacao'];
 
-// ── Choko Toast Component ─────────────────────────────────────
-function ChokoToast({ msg, onClose, typing, onSendToMax, hat, onCycleHat, pos, onPointerDown }) {
+// ── Choko Toast / Interactive Mini-Chat Component ─────────────
+function ChokoToast({ msg, onClose, typing: parentTyping, onSendToMax, hat, onCycleHat, pos, onPointerDown }) {
   const [closing, setClosing] = React.useState(false);
+  const [inputVal, setInputVal] = React.useState('');
+  const [chatHistory, setChatHistory] = React.useState(() => [
+    { sender: 'choko', text: msg || 'Waku-waku! Choko reporting in! 🐾 Click my hat or chat with me anytime! ✨' }
+  ]);
+  const [isTyping, setIsTyping] = React.useState(false);
+  const historyEndRef = React.useRef(null);
+  const inputRef = React.useRef(null);
+
+  // Sync incoming external message
+  React.useEffect(() => {
+    if (msg) {
+      setChatHistory(prev => {
+        if (prev.length > 0 && prev[prev.length - 1].text === msg) return prev;
+        return [...prev, { sender: 'choko', text: msg }].slice(-15);
+      });
+    }
+  }, [msg]);
+
+  // Auto-scroll to bottom of chat
+  React.useEffect(() => {
+    if (historyEndRef.current) {
+      historyEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatHistory, isTyping]);
 
   const close = () => {
     setClosing(true);
@@ -3651,51 +3795,136 @@ function ChokoToast({ msg, onClose, typing, onSendToMax, hat, onCycleHat, pos, o
 
   const toastStyle = pos ? {
     position: 'fixed',
-    left: Math.max(16, Math.min(window.innerWidth - 350, pos.x - 230)),
-    top: Math.max(45, Math.min(window.innerHeight - 150, pos.y - 45)),
+    left: Math.max(16, Math.min(window.innerWidth - 350, pos.x - 260)),
+    top: Math.max(45, Math.min(window.innerHeight - 340, pos.y - 120)),
     bottom: 'auto',
     right: 'auto',
     zIndex: 200
   } : {};
 
+  const handleSend = async (customText) => {
+    const textToSend = (typeof customText === 'string' ? customText : inputVal).trim();
+    if (!textToSend || isTyping) return;
+
+    setInputVal('');
+    playTone(540, 0.07, 0.08, 'sine');
+
+    const newHistory = [...chatHistory, { sender: 'user', text: textToSend }].slice(-15);
+    setChatHistory(newHistory);
+    setIsTyping(true);
+
+    try {
+      const res = await fetch('/api/choko/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: textToSend,
+          hat: currentHat,
+          history: newHistory
+        })
+      });
+      const data = await res.json();
+      const reply = data.response || "Waku-waku! Scout report: perimeter nominal! 🐾✨";
+      setChatHistory(h => [...h, { sender: 'choko', text: reply }].slice(-15));
+      playChokoPop();
+    } catch (err) {
+      console.warn('Choko chat error:', err);
+      setChatHistory(h => [...h, { sender: 'choko', text: "All quiet on the scout perimeter! 🐾✨ MAX and I are guarding your code!" }].slice(-15));
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  const lastChokoMsg = [...chatHistory].reverse().find(m => m.sender === 'choko')?.text || msg;
+
   return (
-    <div className={`choko-toast ${closing?'choko-out':''}`} style={toastStyle}>
-      <div className="choko-bubble" style={{borderColor: `${hatInfo.color}88`}}>
-        <button className="choko-close" onClick={close}>×</button>
-        <div className="choko-name" style={{display:'flex',alignItems:'center',gap:6}}>
-          <div className="cn-dot" style={{background: hatInfo.color}}/>
-          <span>Choko</span>
+    <div className={`choko-toast ${closing ? 'choko-out' : ''}`} style={toastStyle}>
+      <div className="choko-bubble" style={{ borderColor: `${hatInfo.color}88` }}>
+        <button className="choko-close" onClick={close} title="Close chat">×</button>
+        <div className="choko-name" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div className="cn-dot" style={{ background: hatInfo.color }} />
+            <span>Choko</span>
+          </div>
           <span 
             onClick={onCycleHat}
             title="Click to cycle hats!"
             style={{
-              fontSize:9.5, color:hatInfo.color, fontWeight:800, cursor:'pointer',
-              background:`${hatInfo.color}20`, border:`1px solid ${hatInfo.color}50`,
-              padding:'1.5px 6px', borderRadius:8, display:'flex', alignItems:'center', gap:3,
-              transition:'all .15s ease'
+              fontSize: 9.5, color: hatInfo.color, fontWeight: 800, cursor: 'pointer',
+              background: `${hatInfo.color}20`, border: `1px solid ${hatInfo.color}50`,
+              padding: '1.5px 6px', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 3,
+              transition: 'all .15s ease'
             }}
           >
-            {hatInfo.emoji} {hatInfo.name} · Lv.2
+            {hatInfo.emoji} {hatInfo.name}
           </span>
         </div>
-        {typing
-          ? <div className="choko-typing"><span/><span/><span/></div>
-          : <>
-              <div className="choko-msg">{msg}</div>
-              {onSendToMax && (
-                <button onClick={onSendToMax} style={{marginTop:7,padding:'3px 10px',borderRadius:5,border:'1px solid rgba(244,114,182,.4)',background:'rgba(244,114,182,.1)',color:'var(--pink)',fontSize:10.5,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',gap:4,transition:'all .15s'}}>
-                  {ICONS.bridge} tell MAX!
-                </button>
-              )}
-            </>
-        }
+
+        {/* Scrollable mini-chat history */}
+        <div className="choko-chat-history">
+          {chatHistory.map((m, i) => (
+            <div key={i} className={`choko-chat-msg ${m.sender}`}>
+              {m.text}
+            </div>
+          ))}
+          {(parentTyping || isTyping) && (
+            <div className="choko-chat-msg choko" style={{ display: 'inline-flex', width: 'fit-content', padding: '6px 10px' }}>
+              <div className="choko-typing"><span /><span /><span /></div>
+            </div>
+          )}
+          <div ref={historyEndRef} />
+        </div>
+
+        {/* Quick prompt suggestions */}
+        <div className="choko-quick-pills">
+          <button className="choko-pill-btn" onClick={() => handleSend("Scout report!")}>🔍 Scout</button>
+          <button className="choko-pill-btn" onClick={() => handleSend("Give me a sweet treat!")}>🍫 Treat</button>
+          <button className="choko-pill-btn" onClick={() => handleSend("Give me a pep talk!")}>✨ Pep Talk</button>
+          {onSendToMax && lastChokoMsg && (
+            <button 
+              className="choko-pill-btn" 
+              style={{ color: 'var(--pink)', borderColor: 'rgba(244,114,182,0.6)', background: 'rgba(244,114,182,0.12)' }}
+              onClick={() => onSendToMax(lastChokoMsg)}
+              title="Forward this to MAX as a goal!"
+            >
+              {ICONS.bridge} tell MAX!
+            </button>
+          )}
+        </div>
+
+        {/* Mini input bar */}
+        <div className="choko-input-bar">
+          <input
+            ref={inputRef}
+            type="text"
+            className="choko-input-field"
+            placeholder={`Talk to Choko (${hatInfo.name})... 🐾`}
+            value={inputVal}
+            onChange={e => setInputVal(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
+          />
+          <button 
+            className="choko-send-btn" 
+            onClick={() => handleSend()} 
+            disabled={!inputVal.trim() || isTyping}
+            title="Send to Choko"
+          >
+            🐾
+          </button>
+        </div>
       </div>
+
       <div 
         className="choko-avatar" 
         onClick={onCycleHat}
         onPointerDown={onPointerDown}
         title={`Choko (${hatInfo.name}) — click to switch hat, drag to move!`}
-        style={{ cursor:'grab' }}
+        style={{ cursor: 'grab' }}
       >
         <div className="choko-sparkles-overlay">
           <span className="choko-sparkle s1">✨</span>
@@ -5957,15 +6186,14 @@ function App() {
     setTimeout(() => {
       setChokoTyping(false);
       const quotes = [
-        "scout report: all systems nominal! 🐾 click my hat to switch my outfit! ✨",
+        "scout report: all systems nominal! 🐾 click my hat to switch outfit, or chat with me! ✨",
         "ready for action! MAX and I are keeping your codebase safe. 🌰",
         "drag me anywhere on screen so i don't get in your way! 🚀",
         "tip: split mode lets you preview your code live while MAX works! ◫",
         "psst! Barry, i'll take a quick catnap if you don't need me for 30s. 💤"
       ];
       setChokoMsg(quotes[Math.floor(Math.random() * quotes.length)]);
-      setTimeout(() => setChokoMsg(null), 8000);
-    }, 500);
+    }, 400);
   };
   const [pendingChanges, setPendingChanges] = useState([]);
   // Agent task tracker — null | { task, goalId, steps:[], status:'running'|'done'|'failed' }
@@ -6974,16 +7202,17 @@ function App() {
           pos={chokoPos}
           onPointerDown={onChokoPointerDown}
           onClose={()=>{setChokoMsg(null);setChokoTyping(false);}}
-          onSendToMax={chokoMsg ? async ()=>{
-            // Queue current Choko message as a MAX goal
-            const goalTitle = 'Choko spotted: ' + chokoMsg.replace(/[^ws~!?.,]/g,'').trim().slice(0,80);
+          onSendToMax={async (customText)=>{
+            const textToQueue = customText || chokoMsg;
+            if(!textToQueue) return;
+            const goalTitle = 'Choko spotted: ' + textToQueue.replace(/[^\w\s~!?.,]/g,'').trim().slice(0,80);
             setMessages(m=>[...m,{id:nextMsgId(),role:'max',persona:'muse',modelTier:'fast',
-              text:'Choko queued a task for me~ 🍫 Looking into: **' + chokoMsg.replace(/[^ws~!?,.-]/g,'').slice(0,60) + '**'}]);
+              text:'Choko queued a task for me~ 🍫 Looking into: **' + textToQueue.replace(/[^\w\s~!?,.-]/g,'').slice(0,60) + '**'}]);
             setChokoMsg(null);
             if(connected){
               try{ await fetch(maxUrl+'/api/goals',{method:'POST',headers:authHdrs(),body:JSON.stringify({title:goalTitle,priority:0.6})}); }catch{}
             }
-          } : undefined}
+          }}
         />
       )}
       {/* ── Persistent Floating Choko Mascot Button ── */}

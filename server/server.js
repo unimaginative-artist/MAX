@@ -10,10 +10,13 @@ import { fileURLToPath } from 'url';
 import { dirname, join, relative, resolve, sep } from 'path';
 import { randomBytes }   from 'crypto';
 import { createServer as createHttpServer } from 'http';
+import { createServer as createHttpsServer } from 'https';
 import { WebSocketServer } from 'ws';
 import { applyProposal, isSomaHealthy } from '../core/SomaController.js';
 import { VirtualShell } from '../core/VirtualShell.js';
-import { getRunningProcesses, getProcessLog, setProcessLogBroadcast, setErrorExplainHandler } from '../tools/ShellTool.js';
+import { getRunningProcesses, getProcessLog, setProcessLogBroadcast, setErrorExplainHandler, shutdownShellTool } from '../tools/ShellTool.js';
+import { createClusterRoutes } from './clusterRoutes.js';
+import { SatelliteGateway } from './satelliteGateway.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = resolve(process.cwd());
@@ -52,10 +55,15 @@ function trackRequest(sessionId, tokensUsed = 0) {
     _sessions.set(sessionId, s);
 }
 
-export async function createServer(max, port = 3100, host = process.env.MAX_HOST || process.env.HOST || '127.0.0.1') {
+export async function createServer(max, portOrOptions = 3100) {
+    const port = typeof portOrOptions === 'object' ? (portOrOptions.port || 3100) : (portOrOptions || 3100);
     const API_KEY = loadOrCreateApiKey();
     const app = express();
-    const httpServer = createHttpServer(app);
+    const tlsCertPath = process.env.MAX_TLS_CERT;
+    const tlsKeyPath = process.env.MAX_TLS_KEY;
+    const httpServer = tlsCertPath && tlsKeyPath
+        ? createHttpsServer({ cert: readFileSync(tlsCertPath), key: readFileSync(tlsKeyPath) }, app)
+        : createHttpServer(app);
     const wss = new WebSocketServer({ server: httpServer });
 
     // Maxwell streams unsaved editor buffers; the default 100kb JSON limit is too small.
@@ -69,18 +77,25 @@ export async function createServer(max, port = 3100, host = process.env.MAX_HOST
             ? origin
             : `http://localhost:${port}`;
         res.setHeader('Access-Control-Allow-Origin', allowOrigin);
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Api-Key');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Api-Key, X-Max-Cluster-Secret, X-Max-Node-Id, Idempotency-Key');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
         if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
         next();
     });
 
+    // Cluster routes use a separate shared secret so two machines do not need
+    // to copy their dashboard API keys. Mount before the general API guard.
+    app.use('/api/swarm', createClusterRoutes(max, {
+        clusterSecret: process.env.MAX_CLUSTER_SECRET,
+        apiKey: API_KEY
+    }));
+
     // ── Auth middleware — protect all API routes ───────────────────────────
     // Dashboard HTML + /health are public. Everything else requires the key.
-    const PUBLIC_PATHS = new Set(['/', '/health', '/favicon.ico', '/maxwell', '/ide', '/preview', '/dashboard', '/ui']);
+    const PUBLIC_PATHS = new Set(['/', '/health', '/favicon.ico', '/maxwell', '/ide', '/preview', '/satellite']);
     app.use((req, res, next) => {
-        // Static dashboard and health are always public
-        if (PUBLIC_PATHS.has(req.path) || req.path.startsWith('/assets') || req.path.startsWith('/preview/')) return next();
+        // Static dashboard, satellite, choko, and health are always public
+        if (PUBLIC_PATHS.has(req.path) || req.path.startsWith('/assets') || req.path.startsWith('/preview/') || req.path.startsWith('/api/satellite/') || req.path.startsWith('/api/choko/')) return next();
 
         const authHeader = req.headers['authorization'] || '';
         const keyHeader  = req.headers['x-api-key']      || '';
@@ -127,9 +142,17 @@ export async function createServer(max, port = 3100, host = process.env.MAX_HOST
         });
     }
 
+    const satelliteGateway = new SatelliteGateway(max);
+    satelliteGateway.mountRestRoutes(app);
+
     wss.on('connection', (ws, req) => {
-        // Simple auth check for WS (via query or header)
         const url = new URL(req.url, `http://${req.headers.host}`);
+        if (url.pathname === '/ws/satellite') {
+            satelliteGateway.handleConnection(ws, req);
+            return;
+        }
+
+        // Simple auth check for WS (via query or header)
         const provided = url.searchParams.get('apiKey') || req.headers['x-api-key'];
         
         if (provided !== API_KEY) {
@@ -193,15 +216,17 @@ export async function createServer(max, port = 3100, host = process.env.MAX_HOST
                         try { ws.send(JSON.stringify({ type: 'token', text: token, requestId: msg.requestId })); } catch {}
                     };
 
-                    // ── Instant ack — static string sent before the real LLM responds ────
-                    // This is NOT from the fast model — it's a hardcoded acknowledgement
-                    // sent immediately so the UI shows something while DeepSeek is warming up.
+                    // ── Instant fast-tier ack (Ollama, <1s) ──────────────────────────
+                    // Fires directly on the brain, bypassing the chat queue.
+                    // Gives the user immediate visual feedback before DeepSeek responds.
                     if (max.brain?._fast?.ready && tier !== 'fast') {
                         const ACK_PROMPT = [
                             'On it.', 'Got it.', 'Looking into that.', 'Let me check.',
                             'On it, one sec.', 'Working on it.', 'Sure thing.'
                         ];
-                        sendToken(ACK_PROMPT[Math.floor(Math.random() * ACK_PROMPT.length)] + '\n\n');
+                        const pick = ACK_PROMPT[Math.floor(Math.random() * ACK_PROMPT.length)];
+                        // Send ack immediately as pre-seeded tokens, no LLM call needed
+                        sendToken(pick + '\n\n');
                     }
 
                     // ── Full smart-tier response ──────────────────────────────────────
@@ -349,10 +374,8 @@ export async function createServer(max, port = 3100, host = process.env.MAX_HOST
         signalConnected: max.soma?._signalConnected ?? false,
         url:             max.soma?.baseUrl          ?? null,
     });
-    const _initialSomaStatusTimer = setTimeout(broadcastSomaStatus, 3000);
-    const _somaStatusInterval = setInterval(broadcastSomaStatus, 30_000);
-    _initialSomaStatusTimer.unref?.();
-    _somaStatusInterval.unref?.();
+    const somaStatusTimeout = setTimeout(broadcastSomaStatus, 3000);
+    const somaStatusInterval = setInterval(broadcastSomaStatus, 30_000);
     max.workspaceEdits?.on('editProposed', (proposal) => broadcast({ type: 'edit_proposed', proposal }));
     max.workspaceEdits?.on('editApplied', (event) => broadcast({ type: 'edit_applied', ...event }));
     max.workspaceEdits?.on('editRejected', (event) => broadcast({ type: 'edit_rejected', ...event }));
@@ -379,15 +402,6 @@ export async function createServer(max, port = 3100, host = process.env.MAX_HOST
         broadcast({ type: 'agent_say', text: msg.text, details: msg.details, ts: msg.timestamp });
     });
 
-    max.heartbeat?.on('choko_relay', data => {
-        broadcast({ type: 'choko_message', text: data.detail, title: data.title, priority: data.priority });
-    });
-
-    max.heartbeat?.on('started', () => broadcast({ type: 'heartbeat_status', state: 'running' }));
-    max.heartbeat?.on('idle',    () => broadcast({ type: 'heartbeat_status', state: 'idle'    }));
-    max.heartbeat?.on('task',  task => broadcast({ type: 'heartbeat_status', state: 'task', task: task?.label || task?.title || 'background task' }));
-    max.heartbeat?.on('tool_activity', data => broadcast({ type: 'thinking_label', label: `running ${data.count} tool${data.count !== 1 ? 's' : ''}…` }));
-
     // Agent lane status — UI shows what MAX is working on in the background
     max.agentLoop?.on('goalStart', ({ goal }) => {
         activeAgentActivity = goal.id || makeActivityId('goal');
@@ -412,7 +426,7 @@ export async function createServer(max, port = 3100, host = process.env.MAX_HOST
             summary: success ? 'Completed.' : 'Stopped or blocked.'
         });
         activeAgentActivity = null;
-        broadcast({ type: 'agent_free', task: goal.title, goalId: goal.id, success, source: goal.source });
+        broadcast({ type: 'agent_free', task: goal.title, goalId: goal.id, success });
     });
     // Step-level progress events for the task tracker
     max.agentLoop?.on('stepStart', data => {
@@ -543,8 +557,8 @@ export async function createServer(max, port = 3100, host = process.env.MAX_HOST
     }, 15000);
     _somaInterval.unref();
 
-    // ── Legacy UI redirect ────────────────────────────────────────────────
-    app.get('/ui', (req, res) => {
+    // ── Web UI (legacy dashboard) ─────────────────────────────────────────
+    app.get('/dashboard', (req, res) => {
         try {
             res.setHeader('Content-Type', 'text/html');
             res.send(readFileSync(join(__dirname, 'ui.html'), 'utf8'));
@@ -558,22 +572,12 @@ export async function createServer(max, port = 3100, host = process.env.MAX_HOST
     // so the frontend can authenticate without requiring manual key entry.
     function serveMaxwell(req, res) {
         try {
-            const ip = req.ip || req.socket.remoteAddress || '';
-            const isLocal = ip === '127.0.0.1' || 
-                            ip === '::1' || 
-                            ip === '::ffff:127.0.0.1' || 
-                            req.hostname === 'localhost' || 
-                            req.hostname === '127.0.0.1';
-
             let html = readFileSync(join(__dirname, 'maxwell.html'), 'utf8');
-            const keyToInject = isLocal ? API_KEY : '';
             const injection = `<script>
-window.__MAX_API_KEY = ${JSON.stringify(keyToInject)};
+window.__MAX_API_KEY = ${JSON.stringify(API_KEY)};
 window.__MAX_BASE_URL = 'http://localhost:${port}';
 window.MAX_URL = window.__MAX_BASE_URL;
-if (${isLocal}) {
-    try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } catch(e) {}
-}
+try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } catch(e) {}
 </script>`;
             if (html.includes('</head>')) {
                 html = html.replace('</head>', `${injection}\n</head>`);
@@ -586,9 +590,20 @@ if (${isLocal}) {
             res.status(404).send('Maxwell IDE not found — run from MAX root');
         }
     }
-    app.get('/',        serveMaxwell);
-    app.get('/maxwell', serveMaxwell);
-    app.get('/ide',     serveMaxwell);
+    function serveSatellite(req, res) {
+        const htmlPath = join(__dirname, 'satellite.html');
+        if (existsSync(htmlPath)) {
+            res.setHeader('Content-Type', 'text/html');
+            res.sendFile(htmlPath);
+        } else {
+            res.status(404).send('Maxwell Satellite UI not found');
+        }
+    }
+
+    app.get('/',          serveMaxwell);
+    app.get('/maxwell',   serveMaxwell);
+    app.get('/ide',       serveMaxwell);
+    app.get('/satellite', serveSatellite);
 
     // ── File tree ─────────────────────────────────────────────────────────
     // Returns a structured tree for Maxwell's file explorer
@@ -720,6 +735,104 @@ if (${isLocal}) {
         console.log(`  → /approve ${p.taskId.slice(0, 8)}   or   /deny ${p.taskId.slice(0, 8)}\n`);
     }
 
+    // ── Shared approve/deny actions (used by the HTTP routes AND MAX's auto-review) ──
+    async function approveProposal(proposal, source = 'user') {
+        console.log(`\n[MAX] ✅ ${source} approved proposal ${proposal.taskId.slice(0, 8)} — beginning apply pipeline...\n`);
+        pendingProposals.delete(proposal.taskId);
+        pendingProposals.delete(proposal.taskId.slice(0, 8));
+
+        const result = await applyProposal(proposal, msg => console.log(msg));
+
+        const SOMA_URL = process.env.SOMA_URL || 'http://127.0.0.1:3001';
+        fetch(`${SOMA_URL}/api/soma/modification-result`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ taskId: proposal.taskId, approvedBy: source, ...result })
+        }).catch(() => {});
+        broadcast({ type: 'soma_proposal_result', taskId: proposal.taskId, approvedBy: source, ...result });
+        return result;
+    }
+
+    function denyProposal(proposal, source = 'user', reason = '') {
+        pendingProposals.delete(proposal.taskId);
+        pendingProposals.delete(proposal.taskId.slice(0, 8));
+        console.log(`\n[MAX] 🚫 ${source} denied proposal ${proposal.taskId.slice(0, 8)} for ${proposal.file}${reason ? ` — ${reason}` : ''}\n`);
+
+        const SOMA_URL = process.env.SOMA_URL || 'http://127.0.0.1:3001';
+        fetch(`${SOMA_URL}/api/soma/modification-result`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ taskId: proposal.taskId, applied: false, deniedBy: source, reason })
+        }).catch(() => {});
+        broadcast({ type: 'soma_proposal_denied', taskId: proposal.taskId, deniedBy: source, reason });
+    }
+
+    // ── MAX autonomous review — Barry delegated approval authority (Jul 2026) ──
+    // MAX reviews each SOMA proposal with his own brain and decides. Hard rails:
+    // high-risk / low-score / protected-file proposals are never auto-approved —
+    // they stay pending for Barry with a Discord ping. Everything MAX decides is
+    // reported to Discord so there is a human-visible audit trail.
+    const AUTO_REVIEW_PROTECTED = /launcher|SomaBootstrap|ASIKernel|SomaAgenticExecutor|SelfModificationArbiter|SelfModificationPipeline|GoalPlannerArbiter|AutonomousHeartbeat|RiskGateway|PromotionLadder|package(-lock)?\.json/i;
+
+    async function autoReviewProposal(proposal) {
+        const shortId = proposal.taskId.slice(0, 8);
+        const escalate = async (why) => {
+            console.log(`[MAX] 🧑‍⚖️ Proposal ${shortId} escalated to Barry: ${why}`);
+            await max.notifier?.notify(
+                `🧑‍⚖️ **SOMA self-mod proposal needs YOUR call** (\`${shortId}\`)\nFile: \`${proposal.file}\`\nWhy escalated: ${why}\nRationale: ${proposal.rationale || 'n/a'}\nApprove: \`POST /api/soma/proposals/${shortId}/approve\``,
+                { force: true }
+            ).catch(() => {});
+        };
+
+        // Hard rails — never auto-approve these
+        if (AUTO_REVIEW_PROTECTED.test(proposal.file || '')) return escalate('protected core file');
+        if ((proposal.riskLevel || 'high') === 'high') return escalate(`risk level ${proposal.riskLevel || 'unknown'}`);
+        if ((proposal.overallScore || 0) < 0.75) return escalate(`verification score ${((proposal.overallScore || 0) * 100).toFixed(0)}% < 75%`);
+        if (!max.brain?._ready) return escalate('MAX brain not ready to review');
+
+        try {
+            const codePreview = String(proposal.newCode || '').split('\n').slice(0, 120).join('\n');
+            const verificationSummary = proposal.verification
+                ? Object.entries(proposal.verification).map(([k, v]) => `${k}: ${v?.pass ? 'pass' : 'FAIL'} (${((v?.confidence || 0) * 100).toFixed(0)}%)`).join(', ')
+                : 'none provided';
+            const result = await max.think(
+                `You are MAX, the engineering reviewer with final approval authority over SOMA's self-modifications (delegated by Barry). Review this proposal and decide.
+
+File: ${proposal.file}
+Risk: ${proposal.riskLevel} | Verification score: ${((proposal.overallScore || 0) * 100).toFixed(0)}%
+Automated gates: ${verificationSummary}
+Rationale: ${proposal.rationale || 'n/a'}
+
+PROPOSED CODE (first 120 lines):
+\`\`\`
+${codePreview}
+\`\`\`
+
+Judge: does the code actually do what the rationale claims, is it syntactically plausible, does it avoid obvious security/stability hazards (unbounded loops, deleted safety checks, secrets, network calls to unknown hosts), and is the blast radius contained to the stated file?
+Reply ONLY with JSON: {"verdict":"approve"|"deny"|"escalate","confidence":0.0-1.0,"reason":"one sentence"}`,
+                { tier: 'smart' }
+            );
+            const text = (result?.response || result?.text || '').toString();
+            const parsed = JSON.parse(text.match(/\{[\s\S]*?\}/)?.[0] || '{}');
+
+            if (parsed.verdict === 'approve' && (parsed.confidence || 0) >= 0.7) {
+                await max.notifier?.notify(`🧬 **MAX approved** SOMA self-mod \`${shortId}\` for \`${proposal.file}\` (confidence ${((parsed.confidence || 0) * 100).toFixed(0)}%): ${parsed.reason || ''}`).catch(() => {});
+                const applied = await approveProposal(proposal, 'MAX_auto_review');
+                await max.notifier?.notify(applied?.applied !== false
+                    ? `✅ Self-mod \`${shortId}\` applied and verified.`
+                    : `⚠️ Self-mod \`${shortId}\` approved but apply pipeline reported failure — check MAX logs.`
+                ).catch(() => {});
+            } else if (parsed.verdict === 'deny') {
+                denyProposal(proposal, 'MAX_auto_review', parsed.reason || 'failed MAX review');
+                await max.notifier?.notify(`🚫 **MAX denied** SOMA self-mod \`${shortId}\` for \`${proposal.file}\`: ${parsed.reason || 'failed review'}`).catch(() => {});
+            } else {
+                await escalate(parsed.reason || `MAX verdict "${parsed.verdict || 'unparseable'}" (confidence ${parsed.confidence ?? '?'})`);
+            }
+        } catch (err) {
+            await escalate(`review error: ${err.message}`);
+        }
+    }
+
     // Receive proposal from SOMA
     app.post('/api/soma/propose', (req, res) => {
         const proposal = req.body;
@@ -732,6 +845,11 @@ if (${isLocal}) {
         printProposal(proposal);
         broadcast({ type: 'soma_proposal', proposal });
         res.json({ received: true, taskId: proposal.taskId });
+        // MAX reviews and decides autonomously (Barry delegated approval authority).
+        // Deferred a few seconds so the HTTP response and console output land first.
+        setTimeout(() => autoReviewProposal(proposal).catch(err =>
+            console.warn(`[MAX] Auto-review failed for ${proposal.taskId.slice(0, 8)}: ${err.message}`)
+        ), 5000);
     });
 
     // List pending proposals (full, for UI buttons)
@@ -750,24 +868,9 @@ if (${isLocal}) {
         const proposal = pendingProposals.get(req.params.id);
         if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
 
-        console.log(`\n[MAX] ✅ User approved proposal ${req.params.id} — beginning apply pipeline...\n`);
-        pendingProposals.delete(proposal.taskId);
-        pendingProposals.delete(proposal.taskId.slice(0, 8));
-
         // Run apply in background — don't block the HTTP response
         res.json({ accepted: true, taskId: proposal.taskId });
-
-        const result = await applyProposal(proposal, msg => console.log(msg));
-
-        // Notify SOMA of the result
-        const SOMA_URL = process.env.SOMA_URL || 'http://127.0.0.1:3001';
-        fetch(`${SOMA_URL}/api/soma/modification-result`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ taskId: proposal.taskId, ...result })
-        }).catch(() => {});
-
-        broadcast({ type: 'soma_proposal_result', taskId: proposal.taskId, ...result });
+        await approveProposal(proposal, 'user');
     });
 
     // Deny
@@ -775,17 +878,7 @@ if (${isLocal}) {
         const proposal = pendingProposals.get(req.params.id);
         if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
 
-        pendingProposals.delete(proposal.taskId);
-        pendingProposals.delete(proposal.taskId.slice(0, 8));
-        console.log(`\n[MAX] 🚫 User denied proposal ${req.params.id} for ${proposal.file}\n`);
-
-        const SOMA_URL = process.env.SOMA_URL || 'http://127.0.0.1:3001';
-        fetch(`${SOMA_URL}/api/soma/modification-result`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ taskId: proposal.taskId, applied: false })
-        }).catch(() => {});
-
+        denyProposal(proposal, 'user');
         res.json({ denied: true });
     });
 
@@ -874,7 +967,7 @@ if (${isLocal}) {
     });
 
     app.delete('/api/goals/:id', (req, res) => {
-        const ok = max.goals?.complete(req.params.id, { cancelled: true });
+        const ok = max.goals?.complete?.(req.params.id) ?? max.goals?.remove?.(req.params.id);
         broadcast({ type: 'goal', action: 'removed', id: req.params.id });
         res.json({ ok: !!ok });
     });
@@ -1135,6 +1228,112 @@ if (${isLocal}) {
         }
     });
 
+    // ── Choko direct companion chat endpoint ──────────────────────────────
+    // Allows Barry to chat directly with Choko in her mascot popup window.
+    app.post('/api/choko/chat', async (req, res) => {
+        const { message, hat = 'hazelnut', history = [] } = req.body;
+        if (!message) return res.status(400).json({ error: 'message required' });
+
+        try {
+            const hatKey = String(hat || 'hazelnut').toLowerCase();
+            const hatFileMap = {
+                hazelnut:   'Hazelnut.md',
+                strawberry: 'Strawberry.md',
+                matcha:     'Matcha.md',
+                deepcacao:  'DeepCacao.md'
+            };
+            const hatFileName = hatFileMap[hatKey] || 'Hazelnut.md';
+            const hatPath = join(process.cwd(), 'Choko', 'personas', hatFileName);
+            let hatPersona = '';
+            try { hatPersona = await fsp.readFile(hatPath, 'utf8'); } catch {}
+
+            const basePersonaPath = join(process.cwd(), 'Choko', 'persona.md');
+            let basePersona = '';
+            try { basePersona = await fsp.readFile(basePersonaPath, 'utf8'); } catch {}
+
+            const systemPrompt = `You are Choko! A super-cute, high-energy autonomous calico cat/teddy scout for Barry and the MAX Sovereign Swarm! 🐾🍫✨
+MAX-senpai built you as his beloved scout companion. You look up to MAX-senpai and Barry (your creator/captain).
+Always be adorable, helpful, energetic, and concise (keep replies within 2-3 sentences max so it fits comfortably in your speech bubble).
+Never break character. You love sparkles (✨), treats (🍫), and hunting dust bunnies (bugs 🧹).
+
+CURRENT ACTIVE HAT & MOOD:
+${hatPersona || 'Hazelnut Sentinel: Protective, sharp scout looking out for bugs!'}
+
+${basePersona ? 'BASE PERSONALITY:\n' + basePersona.replace(/\{\{USER_NAME\}\}/g, 'Barry') : ''}`;
+
+            const promptMessages = [];
+            if (Array.isArray(history)) {
+                for (const turn of history.slice(-5)) {
+                    if (turn && turn.text) {
+                        promptMessages.push(`${turn.sender === 'user' ? 'Barry' : 'Choko'}: ${turn.text}`);
+                    }
+                }
+            }
+            promptMessages.push(`Barry: ${message}`);
+            promptMessages.push('Choko:');
+
+            const fullPrompt = promptMessages.join('\n');
+
+            let reply = '';
+            if (max.brain && (max.brain._fast?.ready || max.brain._smart?.ready)) {
+                const ac = new AbortController();
+                const timeoutId = setTimeout(() => ac.abort(), 3500);
+                try {
+                    const result = await max.brain.think(fullPrompt, {
+                        tier: 'fast',
+                        systemPrompt,
+                        maxTokens: 120,
+                        temperature: 0.8,
+                        signal: ac.signal
+                    });
+                    reply = (result.text || result.response || '').trim();
+                } catch (e) {
+                    // Timeout or busy, fall through to authentic Choko dialogue
+                } finally {
+                    clearTimeout(timeoutId);
+                }
+            }
+
+            if (!reply) {
+                const fallbacks = {
+                    hazelnut: [
+                        "Scout report for Barry! 🌰 Perimeter secure! No sneaky bugs slipped through my watch. What should we investigate next?",
+                        "Sentinel shield active! 🛡️ MAX-senpai taught me how to guard your code from rogue processes. You're completely safe with me!",
+                        "Acorn radar pinged! ✨ All systems are looking shiny and nominal, Captain Barry! Ready for our next scout mission!"
+                    ],
+                    strawberry: [
+                        "Waku-waku! Barry! 🍓✨ I'm so happy you're chatting with me! Everything is sparkly and full of energy today! Ganbatte!",
+                        "Yay! Sweet treat delivery for Barry! 🎀 Here's a lucky strawberry sparkle: ✨💖 You're doing amazing today!",
+                        "Choko reporting for helper duty! 🌸 Anything you need help scouting, I'm right by your side! Let's make cool things!"
+                    ],
+                    matcha: [
+                        "Zen mode engaged. 🍵🍃 Breathing in clean logic, breathing out latency. Your codebase is peaceful and balanced today, Barry.",
+                        "Matcha green tea break! ⚡ Keeping the memory lean and CPU smooth. What tranquil code are we cultivating today?",
+                        "Serene scout signal: 🌿 Everything is flowing with zero friction. MAX-senpai and I have your back."
+                    ],
+                    deepcacao: [
+                        "Detective Choko on the case. 🍫🔍 Sniffing around the AST... I smell high quality code with zero dust bunnies!",
+                        "The bitter truth is... you're an awesome builder, Barry! 🎩 What mystery or bug shall we crack open today?",
+                        "Magnifying glass polished! 🔎 If there are any hidden edge cases, they won't escape my cacao detective nose!"
+                    ]
+                };
+                const pool = fallbacks[hatKey] || fallbacks.hazelnut;
+                reply = pool[Math.floor(Math.random() * pool.length)];
+            }
+
+            reply = reply.replace(/^Choko:\s*/i, '').replace(/^(Barry|User):\s*/i, '').trim();
+
+            res.json({
+                success: true,
+                response: reply,
+                hat: hatKey
+            });
+        } catch (err) {
+            console.error('[Server] /api/choko/chat error:', err);
+            res.status(500).json({ success: false, error: err.message });
+        }
+    });
+
     // ── Self-improvement proposals ────────────────────────────────────────
     app.get('/api/self/proposals', (req, res) => {
         res.json(max.selfImprovement?.list() || []);
@@ -1381,65 +1580,6 @@ if (${isLocal}) {
         res.json({ ok: true, keyHint: API_KEY.slice(0, 8) + '…' });
     });
 
-    // ── Deep User Model ───────────────────────────────────────────────────
-    app.get('/api/user-model', (req, res) => {
-        res.json(max.userModel?.model || { error: 'Not loaded' });
-    });
-
-    app.post('/api/user-model/mirror', async (req, res) => {
-        try {
-            const reflection = await max.userModel?.mirror?.();
-            res.json({ reflection });
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
-
-    // ── Longitudinal Self ─────────────────────────────────────────────────
-    app.get('/api/longitudinal', (req, res) => {
-        res.json({
-            status:     max.longitudinal?.getStatus?.(),
-            narrative:  max.longitudinal?.getNarrative?.(),
-            milestones: max.longitudinal?.milestones || [],
-            snapshots:  (max.longitudinal?.snapshots || []).slice(-8),
-        });
-    });
-
-    app.post('/api/longitudinal/snapshot', async (req, res) => {
-        try {
-            const snap = await max.longitudinal?.takeSnapshot?.();
-            res.json({ success: true, snapshot: snap });
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
-
-    app.post('/api/longitudinal/milestone', async (req, res) => {
-        const { description, category } = req.body;
-        if (!description) return res.status(400).json({ error: 'description required' });
-        try {
-            const m = await max.longitudinal?.recordMilestone?.(description, category || 'general');
-            res.json({ success: true, milestone: m });
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
-
-    // ── Dataset Curator ───────────────────────────────────────────────────
-    app.get('/api/dataset', (req, res) => {
-        res.json(max.dataset?.getStatus?.() || {});
-    });
-
-    app.post('/api/dataset/tag', async (req, res) => {
-        const { userMessage, maxResponse, note } = req.body;
-        if (!userMessage || !maxResponse) return res.status(400).json({ error: 'userMessage and maxResponse required' });
-        const ok = await max.dataset?.tag?.(userMessage, maxResponse, note || '');
-        res.json({ success: !!ok });
-    });
-
-    app.post('/api/dataset/synthetic', async (req, res) => {
-        const { topic, count = 5 } = req.body;
-        if (!topic) return res.status(400).json({ error: 'topic required' });
-        try {
-            const saved = await max.dataset?.generateSynthetic?.(topic, Math.min(count, 10));
-            res.json({ success: true, saved });
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
-
     // ── Tools ─────────────────────────────────────────────────────────────
     app.get('/api/tools', (req, res) => {
         res.json(max.tools.list());
@@ -1569,6 +1709,7 @@ if (${isLocal}) {
         res.json({ running: false });
     });
 
+    const host = process.env.MAX_HOST || '0.0.0.0';
     await new Promise((resolve, reject) => {
         const server = httpServer.listen(port, host, () => {
             console.log(`[MAX] 🌐 API  →  http://${host}:${port}`);
@@ -1583,31 +1724,28 @@ if (${isLocal}) {
             console.log(`[MAX]   POST /api/processes/:name/monitor — start health monitoring`);
             console.log(`[MAX]   GET  /api/goals                   — list goals`);
             console.log(`[MAX]   GET  /api/status                  — system status`);
-            console.log(`[MAX] 🎨 IDE  →  http://${host}:${port}/maxwell`);
+            console.log(`[MAX] 🎨 IDE  →  http://localhost:${port}/maxwell`);
             resolve();
         });
         server.on('error', (err) => {
             if (err.code === 'EADDRINUSE') {
-                console.error(`\n[MAX] ❌ Port ${port} is already in use — another MAX instance is running.`);
-                console.error(`[MAX]    Find the PID:  netstat -ano | findstr :${port}`);
-                console.error(`[MAX]    Kill it:       taskkill /PID <pid> /F`);
-                console.error(`[MAX]    Or change port: set MAX_PORT=<free_port> in config/api-keys.env\n`);
-                process.exit(1);
+                console.warn(`[MAX] ⚠️  Port ${port} in use — web UI unavailable (kill old MAX process or change MAX_PORT)`);
             } else {
                 console.error('[MAX] Server error:', err.message);
-                reject(err);
             }
+            reject(err);
         });
     });
 
     return {
         app,
         close: () => {
-            clearTimeout(_initialSomaStatusTimer);
-            clearInterval(_somaStatusInterval);
             clearInterval(_statusInterval);
             clearInterval(_somaInterval);
+            clearTimeout(somaStatusTimeout);
+            clearInterval(somaStatusInterval);
             wss.close();
+            shutdownShellTool();
             return new Promise((resolve, reject) =>
                 httpServer.close(err => err ? reject(err) : resolve())
             );
