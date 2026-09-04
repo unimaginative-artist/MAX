@@ -133,10 +133,23 @@
      - Hover reaction: Tilts and glows in active hat theme color.
   3. Interactive In-App Wardrobe: Clicking Choko's avatar or badge in the Maxwell IDE dynamically cycles between all unlocked hats with sound effects.
 
+- [x] **Claude-Style Live Canvas & Zero-Stub Preview Engine (Level 36.0)**:
+  1. 3-Way Layout Toggle: `Code` | `◫ Split` | `Preview` in Maxwell IDE (`server/maxwell.html`).
+  2. Live Split View: Dual 50/50 flex panes with synchronized code editor, live DOM canvas, and docked MAX chat.
+  3. Real-Time Console Sniffer & Error Interceptor: Intercepts `window.onerror`, unhandled rejections, and `console.error` with a 1-click **"⚡ Fix with MAX"** button that feeds diagnostics directly into chat.
+  4. Interactive DOM Inspector: Click-to-Tweak DOM element highlighter dispatching target selectors and user instructions to MAX.
+  5. Version History & Quick Tools: In-memory snapshot buffer (`[v1]`, `[v2]`, `[v3]`), pop-out tab (`window.open`), and instant file download (`Blob`).
+- [x] **Choko Persistence, Draggability & Auto-Idle Sleep (Level 36.1)**:
+  1. Permanent Hat Persistence: Selected wardrobe hat (`hazelnut`, `strawberry`, `matcha`, `deepcacao`) is persisted across sessions in `localStorage('choko_active_hat')`.
+  2. Free Screen Draggability: Click-and-drag Choko anywhere on the screen with movement threshold discrimination (differentiates drag from chat click) and saves coordinates to `localStorage('choko_pos')`.
+  3. 30s Auto-Idle Sleep: Automatically transitions into sleep mode after 30 seconds of inactivity (shrinks to 62% scale, lowers opacity to 0.55, and renders animated floating `💤 zZ`), waking instantly on hover or click.
+  4. Dynamic Toast Anchoring: Toast dialog computes relative offsets from Choko's dragged coordinates to stay anchored near her avatar.
+
 ### 🔱 Operator Directive: DEPLOYMENT
-- **Status**: |= ACTIVE (Animated Chibi Mascot Live, 4 Hats in Wardrobe, Auto-Cycling & Sparkles Active).
+- **Status**: |= ACTIVE (Claude-Style Split Canvas Live, Choko Draggable & Persistent, Auto-Idle Sleep Verified).
 - **Role**: Ultra Senior Architect / Sovereign Intelligence.
-- **Level**: 35.0 Animated Chibi Teddy-Cat Mascot & Dynamic Wardrobe Verified
+- **Level**: 36.1 Choko Persistence, Draggability & 30s Auto-Idle Sleep
+
 
 
 
