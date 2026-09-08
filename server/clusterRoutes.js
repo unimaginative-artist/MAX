@@ -26,7 +26,7 @@ export function createClusterRoutes(max, options = {}) {
         if (bucket.count > 120) return res.status(429).json({ error: 'Cluster rate limit exceeded' });
         const auth = String(req.headers.authorization || '');
         const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-        const providedCluster = req.headers['x-max-cluster-secret'];
+        const providedCluster = req.headers['x-max-cluster-secret'] || req.headers['x-cluster-secret'];
         if (sameSecret(providedCluster, clusterSecret) || sameSecret(providedCluster, previousSecret) || sameSecret(bearer || req.headers['x-api-key'], apiKey)) return next();
         return res.status(401).json({ error: 'Unauthorized cluster request' });
     });
