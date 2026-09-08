@@ -225,11 +225,19 @@ export class Brain {
 
     // ─── Fast tier execution — Ollama only, falls back to DeepSeek ───────
     async _runFast(prompt, systemPrompt, temperature, maxTokens, onToken = null, messages = null, signal = null) {
+        // Auto-heal cooldown: reset disabled flag to allow recovery after sleep/wake or temporary glitch
+        if (this._fastDisabled && (Date.now() - (this._lastFastDisableTime || 0) > 30_000)) {
+            this._fastDisabled = false;
+            this._fastFailures = 0;
+            console.log('[Brain] 🔄 Attempting Ollama auto-recovery after cooldown...');
+        }
         if (this._fast.ready && this._fast.backend === 'ollama' && !this._fastDisabled) {
             // If warmup is still in progress, wait for it so we don't race a cold model
             if (this._warmupPromise) await this._warmupPromise;
             try {
-                return await this._ollama(this._fast.ollamaModel, prompt, systemPrompt, temperature, maxTokens, this.fastTimeout, onToken, messages || null, signal);
+                const res = await this._ollama(this._fast.ollamaModel, prompt, systemPrompt, temperature, maxTokens, this.fastTimeout, onToken, messages || null, signal);
+                this._fastFailures = 0; // Reset failures on successful call
+                return res;
             } catch (err) {
                 if (signal?.aborted || isAbortError(err)) {
                     // User/agent cancellation is not an Ollama health failure.
@@ -238,7 +246,8 @@ export class Brain {
                 this._fastFailures++;
                 if (this._fastFailures >= 3) {
                     this._fastDisabled = true;
-                    console.warn(`[Brain] ⚡ Fast tier disabled for this session — Ollama unresponsive (using DeepSeek for fast calls)`);
+                    this._lastFastDisableTime = Date.now();
+                    console.warn(`[Brain] ⚡ Fast tier paused for 30s — Ollama unresponsive (using DeepSeek for fast calls)`);
                 } else {
                     console.warn(`[Brain] Fast tier (Ollama) error: ${err.message} — falling back to DeepSeek`);
                 }

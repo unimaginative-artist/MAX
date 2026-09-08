@@ -5,11 +5,15 @@ import { createServer } from './server/server.js';
 process.env.MAX_API_BACKGROUND = 'true';
 process.env.MAX_AUTONOMOUS_GOALS = 'true';
 process.env.MAX_AUTONOMOUS_CI = 'false'; // Keep infinite CI test loops strictly off
+process.env.MAX_CLUSTER_ROLE = 'worker';
+process.env.MAX_NODE_ID = 'machine_b';
 
-console.log('🚀 Launching MAX API Server on port 3100 (Autonomous Builder Mode)...');
+console.log('🚀 Launching MAX API Server on port 3100 (Autonomous Cluster Worker Mode)...');
 const max = new MAX({
     mode: 'api',
-    runtimeMode: 'api'
+    runtimeMode: 'api',
+    clusterRole: 'worker',
+    nodeId: 'machine_b'
 });
 await max.initialize();
 

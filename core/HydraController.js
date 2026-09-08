@@ -147,11 +147,11 @@ export class HydraController {
             );
 
             const targetMatch = scanResult.text?.match(/([a-zA-Z0-9_\-\/]+\.[a-z]+)/);
-            const target = targetMatch ? targetMatch[1] : null;
+            let target = targetMatch ? targetMatch[1].replace(/^\/+/, '') : null;
 
-            if (!target) {
-                console.log('[HYDRA-PRIME] ⏸️ No clear target identified. Swarm standing down.');
-                return { success: false, reason: 'No target found' };
+            if (!target || !existsSync(path.resolve(this.basePath, target))) {
+                console.log(`[HYDRA-PRIME] ⏸️ Target '${target || 'none'}' does not exist on disk. Swarm standing down.`);
+                return { success: false, reason: 'Target does not exist on disk' };
             }
 
             console.log(`[HYDRA-SCOUT] 🎯 Target Acquired: ${target}`);

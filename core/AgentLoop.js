@@ -51,7 +51,7 @@ export class AgentLoop extends EventEmitter {
         this.max    = max;
         this.config = {
             maxStepsPerGoal:  config.maxStepsPerGoal  || 6,
-            stepTimeoutMs:    config.stepTimeoutMs    || 60_000,
+            stepTimeoutMs:    config.stepTimeoutMs    || parseInt(process.env.MAX_STEP_TIMEOUT_MS, 10) || 180_000,
             requireApproval:  config.requireApproval  ?? true,   // gate destructive actions
             autoApproveLevel: config.autoApproveLevel || 'read', // 'read'|'write'|'all'
             maxReplans:       config.maxReplans       || 3,      // pivot attempts before giving up
@@ -162,22 +162,13 @@ export class AgentLoop extends EventEmitter {
                 this._startProgressPing(goal, loop);
                 try {
                     const result = await loopHandler.run(goal, this.max, this);
-                    // Surface the result as an insight so the launcher can show it
-                    this.emit('insight', {
-                        source: 'agent',
-                        label:  result?.success
-                            ? `âœ… Done (${loop}): ${goal.title}`
-                            : `âš ï¸  Blocked (${loop}): ${goal.title}`,
-                        result: result?.summary || goal.title
-                    });
-                    // Specialized loops used to return without the report-back
-                    // reflex — every explore/build goal completed silently.
-                    await this._reportBack(goal, result?.success !== false, result?.summary || '');
-                    return result;
+                    const goalSuccess = result?.success !== false;
+                    const goalSummary = result?.summary || goal.title;
+                    return await this._finalizeGoal(goal, goalSuccess, goalSummary, `agent_loop_${loop}`);
                 } catch (err) {
                     this.emit('insight', {
                         source: 'agent',
-                        label:  `âš ï¸  ${loop} loop error: ${goal.title}`,
+                        label:  `âš ï¸   ${loop} loop error: ${goal.title}`,
                         result: err.message
                     });
                     console.warn(`  [AgentLoop] âš ï¸  ${loop} loop error â€” falling back to default: ${err.message}`);
@@ -191,7 +182,7 @@ export class AgentLoop extends EventEmitter {
             try {
                 const advResult = await this.max.swarm.adversarialRun(goal);
                 if (advResult?.synthesis) {
-                    return { goal: goal.title, success: true, summary: advResult.synthesis };
+                    return await this._finalizeGoal(goal, true, advResult.synthesis, 'adversarial_swarm');
                 }
             } catch (err) {
                 console.warn(`  [AgentLoop] ⚔️ Adversarial run failed: ${err.message}`);
@@ -230,7 +221,7 @@ export class AgentLoop extends EventEmitter {
                     subtasks: goal.steps.map(s => ({ id: `step_${s.step}`, prompt: s.action, tools: [{ tool: s.tool, action: s.action_name || 'run', params: s.params || {} }] }))
                 });
                 if (swarmResult?.synthesis) {
-                    return { goal: goal.title, success: true, summary: swarmResult.synthesis };
+                    return await this._finalizeGoal(goal, true, swarmResult.synthesis, 'swarm_coordinator');
                 }
             } catch (err) {
                 console.warn(`  [AgentLoop] âš ï¸ Swarm delegation failed, falling back to serial execution: ${err.message}`);
@@ -511,59 +502,67 @@ export class AgentLoop extends EventEmitter {
             reward:  goalSuccess ? 0.9 : -0.2
         });
 
+        return await this._finalizeGoal(goal, goalSuccess, goalSummary, 'agent_loop', stepResults);
+    }
+
+    async _finalizeGoal(goal, goalSuccess, goalSummary, source = 'agent_loop', stepResults = []) {
+        const goals   = this.max.goals;
+        const profile = this.max.profile;
+        const drive   = this.max.drive;
+
         // ── 5. Consolidate outcome into knowledge base ────────────────────
         if (goalSummary && this.max.kb?._ready) {
-            // High-fidelity Trajectory Compression (Phase 1)
-            this.max.reflection?.compressTrajectory(goal, stepResults, goalSuccess).catch(() => {});
-            
+            this.max.reflection?.compressTrajectory?.(goal, stepResults, goalSuccess).catch(() => {});
             const entry = goalSuccess
                 ? `Completed: "${goal.title}"\n${goalSummary}`
                 : `Failed: "${goal.title}"\nReason: ${goalSummary}`;
-            this.max.kb.remember(entry, { source: 'agent_loop', goalType: goal.type }).catch(() => {});
+            this.max.kb.remember(entry, { source, goalType: goal.type }).catch(() => {});
         }
 
-        // â”€â”€ 6. Update goal state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── 6. Update goal state ──────────────────────────────────────────
         if (goal.source === 'tasks.md' && goalSuccess) {
-            profile?.completeTask(goal.title);
+            profile?.completeTask?.(goal.title);
         } else if (goals?._active?.has(goal.id)) {
             goalSuccess ? goals.complete(goal.id, { summary: goalSummary })
                         : goals.fail(goal.id, goalSummary);
+        } else if (goal.id && goals?.complete) {
+            goalSuccess ? goals.complete(goal.id, { summary: goalSummary })
+                        : goals.fail?.(goal.id, goalSummary);
         }
 
-        goalSuccess ? drive?.onGoalComplete(goal.title) : null;
+        goalSuccess ? drive?.onGoalComplete?.(goal.title) : null;
 
         // ─── REPORT BACK REFLEX ──────────────────────────────────────────
         await this._reportBack(goal, goalSuccess, goalSummary);
-        // ─────────────────────────────────────────────────────────────────
 
         // Crystallize successful runs into reusable skills (fire-and-forget)
         if (goalSuccess && stepResults.length > 0) {
-            this.max.skills?.encodeFromRun(goal, stepResults, this.max.agentBrain).catch(() => {});
+            this.max.skills?.encodeFromRun?.(goal, stepResults, this.max.agentBrain).catch(() => {});
         }
 
         this.stats.goalsCompleted += goalSuccess ? 1 : 0;
 
-        // â”€â”€ #4: Economics â€” reward for goal completion â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // Economics — reward for goal completion
         if (goalSuccess && this.max.economics) {
             const baseReward = 0.05;
             const priorityBonus = (goal.priority || 0.5) * 0.10;
             const totalReward = baseReward + priorityBonus;
-            this.max.economics.recordEarning(totalReward, `goal:${goal.title}`);
+            this.max.economics.recordEarning?.(totalReward, `goal:${goal.title}`);
         }
 
-        // â”€â”€ 6. Emit insight to surface result â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // Emit insight to surface result
         const insightResult = goalSuccess
             ? `Completed: "${goal.title}"\n${goalSummary}`
             : `Could not complete: "${goal.title}"\n${goalSummary}`;
 
         this.emit('insight', {
             source: 'agent',
-            label:  goalSuccess ? `âœ… Goal done: ${goal.title}` : `âš ï¸ Goal blocked: ${goal.title}`,
+            label:  goalSuccess ? `✅ Goal done: ${goal.title}` : `⚠️  Goal blocked: ${goal.title}`,
             result: insightResult
         });
 
-        // â”€â”€ 7. Proactive background messaging â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        this.max.say(
+        // Proactive background messaging
+        this.max.say?.(
             goalSuccess 
                 ? `I've successfully completed the background task: "${goal.title}".` 
                 : `I've hit a roadblock with the background task: "${goal.title}".`,
@@ -571,12 +570,17 @@ export class AgentLoop extends EventEmitter {
         );
 
         // Store in memory
-        this.max.memory?.remember(insightResult, { goal: goal.title, source: 'agent_loop' }, {
+        this.max.memory?.remember?.(insightResult, { goal: goal.title, source }, {
             type: 'task_result',
             importance: goalSuccess ? 0.8 : 0.5
         });
 
         this.emit('goalDone', { goal, success: goalSuccess });
+
+        try {
+            await this.max._syncGoalsToFile?.();
+        } catch {}
+
         return { goal: goal.title, success: goalSuccess, summary: goalSummary };
     }
 
@@ -1337,30 +1341,15 @@ Root cause guide:
         } catch { /* non-fatal â€” git not available or nothing to commit */ }
     }
 
-    // --- Git Checkpoint: stash user work before autonomous writes, restore on failure ---
+    // --- Git Checkpoint: Safe non-destructive checkpointing ---
     async _gitCheckpoint(goal) {
-        const writingGoal = ['fix', 'build', 'task', 'refactor'].includes(goal.type);
-        if (!writingGoal) return null;
-        try {
-            const { execSync } = await import('child_process');
-            const dirty = execSync('git status --porcelain', { cwd: process.cwd(), encoding: 'utf8' }).trim();
-            if (!dirty) return { stashed: false };
-            const label = `MAX-pre-${goal.id?.slice(0, 8) || Date.now()}`;
-            execSync(`git stash push --include-untracked -m "${label}"`, { cwd: process.cwd() });
-            console.log(`  [AgentLoop] Git checkpoint: stashed user work as "${label}"`);
-            return { stashed: true, label };
-        } catch { return null; }
+        // Non-destructive: We avoid running git stash push during background autonomy
+        // to protect active developer workspaces from sudden file eviction.
+        return { stashed: false };
     }
 
     async _gitRestore(checkpoint) {
-        if (!checkpoint?.stashed) return;
-        try {
-            const { execSync } = await import('child_process');
-            execSync('git stash pop', { cwd: process.cwd() });
-            console.log(`  [AgentLoop] Git checkpoint restored -- user's work recovered`);
-        } catch (err) {
-            console.warn(`  [AgentLoop] Checkpoint restore failed: ${err.message}`);
-        }
+        // Safe no-op
     }
 
     // â”€â”€â”€ Level 4 Meta-Correction: Autonomous Tool Healing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

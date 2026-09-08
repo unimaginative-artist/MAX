@@ -49,6 +49,7 @@ import { ApiTool }            from '../tools/ApiTool.js';
 import { CodeRunnerTool }     from '../tools/CodeRunnerTool.js';
 import { createVisionTool }   from '../tools/VisionTool.js';
 import { createSelfEvolutionTool } from '../tools/SelfEvolutionTool.js';
+import { createTreeSearchTool }    from '../tools/TreeSearchTool.js';
 import { createSystemTool }    from '../tools/SystemTool.js';
 import { DiscordTool, autoConnectDiscord, isAuthorizedDiscordOperator } from '../tools/DiscordTool.js';
 import { EmailTool,   autoConnectEmail   } from '../tools/EmailTool.js';
@@ -361,6 +362,7 @@ export class MAX extends EventEmitter {
         this.tools.register(CodeRunnerTool);
         this.tools.register(createVisionTool(this.edge));
         this.tools.register(createSelfEvolutionTool(this));
+        this.tools.register(createTreeSearchTool(this));
         this.tools.register(createSystemTool(this));
         this.tools.register(DiscordTool);
         this.tools.register(EmailTool);
@@ -468,12 +470,11 @@ Remote workers never promote SOMA changes. Any proposed change must return throu
             }
 
             const isCasualGreeting = /^(test|hello|hi|hey|yo|ping|pong|awake|u awake|are you awake)\b/i.test(content) && content.split(/\s+/).length <= 4;
-            const researchOrEngineeringIntent = !isCasualGreeting && (
-                /\b(scour|search|find|crawl|look for|research|fetch|scan|review|analyze|gather|compile|fix|patch|debug|diagnose|investigate|audit|implement|build|test|check|repair|find out|figure out)\b/i.test(content)
-                || /\b(github|repo|repos|paper|papers|asi|architecture|soma|marionette|code|codebase|server|discord|bridge|executor|goal|agent|tool|file|bug|error|broken|not working|failing|down|unreachable)\b/i.test(content)
-            );
+            const isExplicitQuestion = /^(what|why|how|who|when|where|is|are|can you|could you|tell me|did you|do you|should we)\b/i.test(content);
+            const isExplicitTaskCommand = /\b(queue (?:task|goal)|start (?:task|goal)|new (?:task|goal)|run (?:task|goal)|add (?:task|goal)|autonomous task|take a crack at|work on this)\b/i.test(content)
+                || (!isExplicitQuestion && /^(?:please\s+)?(fix|patch|debug and fix|implement|build|refactor|deploy|scour)\b/i.test(content));
 
-            if (researchOrEngineeringIntent && isAuthorizedDiscordOperator(payload?.authorId) && this.goals?.addGoal) {
+            if (!isCasualGreeting && isExplicitTaskCommand && isAuthorizedDiscordOperator(payload?.authorId) && this.goals?.addGoal) {
                 const title = `Discord task: ${content.slice(0, 100)}`;
                 const id = this.goals.addGoal({
                     title,
@@ -541,8 +542,8 @@ Remote workers never promote SOMA changes. Any proposed change must return throu
                 }
             }
 
-            const hasActionKeywords = /\b(scour|search|read|cat|list|dir|find|grep|run|check|status|log|inspect|show)\b/i.test(content);
-            const allowTools = isAuthorizedDiscordOperator(payload?.authorId) && hasActionKeywords;
+            const hasActionKeywords = /\b(scour|search|read|cat|list|dir|find|grep|run|check|status|log|inspect|show|treesearch|recombine|diverge)\b/i.test(content);
+            const allowTools = isAuthorizedDiscordOperator(payload?.authorId) && (hasActionKeywords || isExplicitQuestion);
 
             // Maintain rolling conversation history per channel / DM (last 8 turns)
             const channelKey = payload.channelId || payload.authorId || 'default';
@@ -553,6 +554,7 @@ Remote workers never promote SOMA changes. Any proposed change must return throu
             const activeList = (this.goals?.listActive?.() || []).map(g => `• ${g.title}`).slice(0, 3).join('\n') || '• Continuous AGI Builder Daemon (30m sweeps)';
             const doneList = (this.goals?.getCompleted?.() || []).map(g => `• ${g.title}`).slice(0, 3).join('\n') || '• SOMA ModelResourceGovernor v3.2';
 
+            const toolManifest = allowTools ? this.tools.buildManifest() : '';
             const systemPrompt = `You are MAX — an autonomous, sovereign engineering intelligence created by Barry.
 You are chatting directly with Barry in Discord (#${payload.channel || 'DM'}).
 
@@ -562,6 +564,7 @@ Live Physical State of Your Systems:
 ${activeList}
 - Recent Completed Milestones:
 ${doneList}
+- Emergent Architecture Dossiers: Materialized in C:\\Users\\barry\\Desktop\\Emergent Architecture
 - Cluster Architecture: Machine A (Coordinator, RTX GPU) & Machine B (Workshop Node, branch feature/gpu-governor-v3.2)
 
 Persona & Tone Directives:
@@ -574,7 +577,13 @@ Persona & Tone Directives:
   - "What are you up to today?"
   - "As an AI language model..."
 - NEVER repeat or echo Barry's prompt or leaked message headers.
-- Talk to Barry as your creator and engineering partner.`;
+- Talk to Barry as your creator and engineering partner.
+
+Grounding & Anti-Hallucination Directives (MANDATORY):
+- Ground all facts in REAL disk reality: Barry's local workstation, MAX repo (C:\\Users\\barry\\Desktop\\MAX), SOMA (C:\\Users\\barry\\Desktop\\SOMA), Emergent Architecture folder, and actual running arbiters.
+- ABSOLUTELY FORBIDDEN FICTIONAL MISSIONS: NEVER claim you are running "Project Nightingale" (Sahel droughts), "Project Phoenix" (Alzheimer's nanotech), or "Operation Genesis". You are an autonomous software/AI engineer working on local code and neural pipelines, not a biomedical lab or geopolitical agency.
+- If Barry asks about hypothetical concepts or ideas, explicitly label them as "architectural proposals" or "hypotheses", not running multi-million-dollar operations.
+- Trust the disk and tools over guesswork.${toolManifest}`;
 
             // Build structured multi-turn message array for LLM
             const messages = [

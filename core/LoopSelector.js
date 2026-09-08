@@ -24,7 +24,8 @@ const SIGNALS = {
         'implement', 'fix', 'create', 'add feature', 'refactor', 'patch',
         'build', 'write code', 'develop', 'debug', 'repair', 'update code',
         'migrate', 'port', 'integrate', 'wire up', 'add support for',
-        'replace', 'rewrite', 'extend', 'modify'
+        'replace', 'rewrite', 'extend', 'modify', 'optimize', 'speed up',
+        'benchmark', 'unit test', 'test coverage', 'latency', 'type check'
     ],
     reflect: [
         'reflect', 'review outcomes', 'self-improve', 'analyze patterns',
@@ -62,6 +63,16 @@ export class LoopSelector {
     classify(goal) {
         const type  = goal.type || 'task';
         const title = (goal.title + ' ' + (goal.description || '')).toLowerCase();
+
+        // Code-targeted improvements belong in build (engineering), not reflect (introspection)
+        const hasCodeTarget = /[\/\\][a-zA-Z0-9_\-\/\\]+\.[a-zA-Z0-9]+|\b(code|file|function|class|test|optimize|refactor|benchmark|speed up|latency|coverage)\b/i.test(title);
+        if (type === 'improvement' && hasCodeTarget) {
+            return {
+                loop:       'build',
+                confidence: 0.88,
+                rationale:  'code optimization/file target on improvement goal'
+            };
+        }
 
         // Direct type mapping is highest confidence
         if (TYPE_MAP[type]) {
