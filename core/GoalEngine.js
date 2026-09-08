@@ -223,6 +223,8 @@ Tool-specific params (REQUIRED for correct execution):
   WINDOWS ONLY — never use Unix commands (ls/find/grep/xargs/head/cat/rm/cp/mv)
   Use: dir, powershell -Command "Get-ChildItem ...", node, npm, git
   NEVER add >/dev/null, >nul, or 2>&1 redirects — run commands plainly
+  NEVER use & or ; to chain multiple commands into one step — each step must run exactly ONE single command plainly.
+  On Windows cmd.exe, NEVER use single quotes around arguments — always use escaped double quotes (e.g. node -e \"require('./core/file.js')\").
 - web tool:   include "params": {"query": "search terms"} for search, or {"url": "..."} for fetch
 - git tool:   include "params": {"command": "status"} or similar
 - brain tool: no params needed — action is passed directly as a prompt

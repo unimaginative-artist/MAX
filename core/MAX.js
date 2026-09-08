@@ -674,9 +674,10 @@ Grounding & Anti-Hallucination Directives (MANDATORY):
         });
         
         // Agent loop
+        const autoApprove = process.env.MAX_AUTO_APPROVE || (process.env.MAX_API_BACKGROUND === 'true' ? 'all' : 'write');
         this.agentLoop = new AgentLoop(this, {
-            autoApproveLevel: process.env.MAX_AUTO_APPROVE || 'all',
-            requireApproval:  process.env.MAX_AUTO_APPROVE === 'all' ? false : true
+            autoApproveLevel: autoApprove,
+            requireApproval:  autoApprove !== 'all'
         });
 
         // Evolution and self-coding

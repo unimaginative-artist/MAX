@@ -7,6 +7,7 @@ process.env.MAX_AUTONOMOUS_GOALS = 'true';
 process.env.MAX_AUTONOMOUS_CI = 'false'; // Keep infinite CI test loops strictly off
 process.env.MAX_CLUSTER_ROLE = 'worker';
 process.env.MAX_NODE_ID = 'machine_b';
+process.env.MAX_AUTO_APPROVE = 'all';
 
 console.log('🚀 Launching MAX API Server on port 3100 (Autonomous Cluster Worker Mode)...');
 const max = new MAX({

@@ -1510,8 +1510,20 @@ Root cause guide:
         }
 
         return new Promise(resolve => {
+            const timer = setTimeout(() => {
+                if (this._pendingApproval) {
+                    console.warn(`  [AgentLoop] ⏳ Approval request timed out after 60s for ${tool}.${action} — auto-denying`);
+                    this.stats.approvalsDenied++;
+                    this._pendingApproval = null;
+                    resolve(false);
+                }
+            }, 60_000);
+
             this._pendingApproval = {
-                resolve,
+                resolve: (val) => {
+                    clearTimeout(timer);
+                    resolve(val);
+                },
                 tool,
                 action,
                 params,
