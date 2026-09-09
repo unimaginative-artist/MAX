@@ -9,13 +9,13 @@
 - [ ] [SOMA] Autonomous mission: Publish verified artifact-liveness gate for the governed proposal backlog
 
 ## ✅ COMPLETED
-- [x] Investigate: Explore: software engineering best practices
-- [x] Investigate: Explore: software engineering best practices
-- [x] Investigate: Explore: debugging techniques for complex systems
-- [x] Investigate: Explore: software engineering best practices
-- [x] Investigate: Explore: AI model capabilities and limitations
+- [x] Investigate: Explore: system architecture patterns
+- [x] Investigate: Explore: system architecture patterns
 - [x] Investigate: Explore: latest programming language features
 - [x] Investigate: Explore: software engineering best practices
-- [x] Investigate: Explore: latest programming language features
-- [x] Investigate: Explore: AI model capabilities and limitations
-- [x] Investigate: Explore: AI model capabilities and limitations
+- [x] Investigate: Explore: distributed systems challenges
+- [x] Investigate: Explore: system architecture patterns
+- [x] Investigate: Explore: system architecture patterns
+- [x] Investigate: Explore: efficient algorithms for common tasks
+- [x] Investigate: Follow-up: You
+- [x] Investigate: Explore: software engineering best practices
