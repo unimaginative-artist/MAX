@@ -56,11 +56,14 @@ def main():
 
     dataset_dir = Path(os.getcwd()) / ".max" / "dataset"
     if args.format == "dpo":
-        dataset_file = dataset_dir / "compiled_dpo.json"
+        dataset_file = dataset_dir / "master_dpo.json"
+        if not dataset_file.exists(): dataset_file = dataset_dir / "compiled_dpo.json"
     elif args.format == "sharegpt":
-        dataset_file = dataset_dir / "compiled_sharegpt.json"
+        dataset_file = dataset_dir / "master_sharegpt.json"
+        if not dataset_file.exists(): dataset_file = dataset_dir / "compiled_sharegpt.json"
     else:
-        dataset_file = dataset_dir / "compiled_alpaca.json"
+        dataset_file = dataset_dir / "master_alpaca.json"
+        if not dataset_file.exists(): dataset_file = dataset_dir / "compiled_alpaca.json"
 
     if not dataset_file.exists():
         print(f"❌ Error: Dataset file not found at {dataset_file}")
