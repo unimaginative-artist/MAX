@@ -74,6 +74,7 @@ export class Scheduler extends EventEmitter {
         this.max   = max;
         this.jobs  = new Map();  // id → job
         this._lastRun  = {};     // id → timestamp
+        this._inFlight = new Set();
         this._statePath = path.join(process.cwd(), '.max', 'schedules.json');
         this._timer    = null;
         this._running  = false;
@@ -134,6 +135,7 @@ export class Scheduler extends EventEmitter {
         const now = Date.now();
 
         for (const [id, job] of this.jobs) {
+            if (this._inFlight.has(id)) continue;
             const lastRun = this._lastRun[id] || 0;
             const due     = (now - lastRun) >= job.intervalMs;
             if (!due) continue;
@@ -147,32 +149,37 @@ export class Scheduler extends EventEmitter {
     }
 
     async _runJob(job, now) {
+        this._inFlight.add(job.id);
         this._lastRun[job.id] = now;
         this.stats.jobsRun++;
 
         this.emit('jobStart', { id: job.id, label: job.label });
 
-        switch (job.type) {
-            case 'brain':
-                await this._runBrainJob(job);
-                break;
+        try {
+            switch (job.type) {
+                case 'brain':
+                    await this._runBrainJob(job);
+                    break;
 
-            case 'curiosity':
-                await this._runCuriosityJob(job);
-                break;
+                case 'curiosity':
+                    await this._runCuriosityJob(job);
+                    break;
 
-            case 'internal':
-                await this._runInternalJob(job);
-                break;
+                case 'internal':
+                    await this._runInternalJob(job);
+                    break;
 
-            case 'task-check':
-                await this._runTaskCheck();
-                break;
+                case 'task-check':
+                    await this._runTaskCheck();
+                    break;
 
-            default:
-                if (typeof job.handler === 'function') {
-                    await job.handler(this.max);
-                }
+                default:
+                    if (typeof job.handler === 'function') {
+                        await job.handler(this.max);
+                    }
+            }
+        } finally {
+            this._inFlight.delete(job.id);
         }
 
         this._saveState();

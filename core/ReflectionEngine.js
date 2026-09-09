@@ -35,6 +35,7 @@ export class ReflectionEngine {
             weaknesses:       [],   // observed failure patterns
             patterns:         [],   // { description, count, lastSeen }
             promptPatches:    [],   // small injections that improve behavior
+            behaviorDirectives: [], // user feedback/behavioral rules
             lastDeepReflect:  null,
             totalReflections: 0
         };
@@ -268,14 +269,58 @@ Return null for improvementGoal if no clear goal is identified.`;
     // ─── Inject self-model into system prompt ─────────────────────────────
     // Called from MAX.think() — adds a small block to every system prompt
     getSelfModelContext() {
-        const { strengths, weaknesses, promptPatches } = this._selfModel;
-        if (strengths.length === 0 && weaknesses.length === 0 && promptPatches.length === 0) return '';
+        const { strengths = [], weaknesses = [], promptPatches = [], behaviorDirectives = [] } = this._selfModel;
+        const hasDirectives = behaviorDirectives.length > 0;
+        const hasReflection = strengths.length > 0 || weaknesses.length > 0 || promptPatches.length > 0;
 
-        let ctx = '\n\n## Self-model (learned from reflection)';
-        if (strengths.length > 0)     ctx += `\nStrengths: ${strengths.slice(0, 3).join('; ')}`;
-        if (weaknesses.length > 0)    ctx += `\nWatch for: ${weaknesses.slice(0, 3).join('; ')}`;
-        if (promptPatches.length > 0) ctx += `\nBehavior adjustments: ${promptPatches.join(' ')}`;
+        if (!hasDirectives && !hasReflection) return '';
+
+        let ctx = '';
+        if (hasDirectives) {
+            ctx += `\n\nActive Style/Behavior Rules (Follow strictly):\n${behaviorDirectives.map(d => `- ${d}`).join('\n')}`;
+        }
+        if (hasReflection) {
+            ctx += '\n\n## Self-model (learned from reflection)';
+            if (strengths.length > 0)     ctx += `\nStrengths: ${strengths.slice(0, 3).join('; ')}`;
+            if (weaknesses.length > 0)    ctx += `\nWatch for: ${weaknesses.slice(0, 3).join('; ')}`;
+            if (promptPatches.length > 0) ctx += `\nBehavior adjustments: ${promptPatches.join(' ')}`;
+        }
         return ctx;
+    }
+
+    clearDirectives() {
+        this._selfModel.behaviorDirectives = [];
+        this._save();
+    }
+
+    async _detectAndExtractFeedback(userMsg, maxResponse) {
+        if (!this.brain?.think) return;
+        try {
+            const prompt = `Analyze if the user is giving an explicit behavioral rule, constraint, or correction to the AI assistant.\nUser message: "${userMsg}"\nAssistant response: "${maxResponse}"\n\nReturn ONLY valid JSON:\n{\n  "isCorrection": true | false,\n  "directive": "concise directive string or null"\n}`;
+            const res = await this.brain.think(prompt, { tier: 'fast', temperature: 0.1 });
+            let text = res?.text ?? res?.response ?? '';
+            let parsed = null;
+            if (typeof text === 'string') {
+                const match = text.match(/\{[\s\S]*\}/);
+                if (match) parsed = JSON.parse(match[0]);
+            } else if (typeof res === 'object') {
+                parsed = res;
+            }
+
+            if (parsed && parsed.isCorrection && parsed.directive) {
+                if (!Array.isArray(this._selfModel.behaviorDirectives)) {
+                    this._selfModel.behaviorDirectives = [];
+                }
+                const dir = String(parsed.directive).trim();
+                if (!this._selfModel.behaviorDirectives.includes(dir)) {
+                    this._selfModel.behaviorDirectives.push(dir);
+                    if (this._selfModel.behaviorDirectives.length > 10) {
+                        this._selfModel.behaviorDirectives.shift();
+                    }
+                    this._save();
+                }
+            }
+        } catch { /* non-fatal */ }
     }
 
     // ─── Force a deep reflection on demand (/reflect command) ─────────────

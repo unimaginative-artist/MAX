@@ -40,7 +40,7 @@ export function stripStageDirections(text = '') {
         // Remove *(action)* inline
         .replace(/\*[^*\n]{0,120}\*/g, (m) => {
             // keep bold **word** but strip *action* that looks like stage direction
-            if (/^[*]{1}[^*]+[*]{1}$/.test(m) && /\b(tone|pause|shift|glance|lean|sigh|chuckle|hesit|frant|measur|confident|subtle|slight|begin|await|deliber|carefully|smil|nod|wink|think|consider)\b/i.test(m)) return '';
+            if (/^[*]{1}[^*]+[*]{1}$/.test(m) && /\b(tone|pause|shift|glance|lean|sigh|chuckle\w*|hesit|frant|measur|confident|subtle|slight|begin|await|deliber|carefully|smil|nod|wink|think|consider)\b/i.test(m)) return '';
             return m;
         })
         // Remove bare parenthetical mood/action lines: (A slight hesitation...)
@@ -52,6 +52,12 @@ export function stripStageDirections(text = '') {
         .trim();
 
     return out;
+}
+
+export function hasStageDirectionLeak(text = '') {
+    if (typeof text !== 'string' || !text) return false;
+    const stripped = stripStageDirections(text);
+    return stripped.trim() !== text.trim();
 }
 
 export function stripLeakedPromptContext(text = '') {

@@ -181,29 +181,126 @@ The output must be valid JavaScript that can directly replace the original file.
         const origLines  = original.split('\n');
         const stageLines = entry.newCode.split('\n');
 
-        const hunks   = [];
-        const maxLen  = Math.max(origLines.length, stageLines.length);
-        let   changes = 0;
-        let   hunk    = [];
+        const n = origLines.length;
+        const m = stageLines.length;
 
-        const flushHunk = () => {
-            if (hunk.length > 0) { hunks.push(hunk.join('\n')); hunk = []; }
-        };
-
-        for (let i = 0; i < maxLen; i++) {
-            const o = origLines[i];
-            const s = stageLines[i];
-            if (o === undefined)    { hunk.push(`+ ${s}`);  changes++; }
-            else if (s === undefined) { hunk.push(`- ${o}`); changes++; }
-            else if (o !== s)       { hunk.push(`- ${o}`); hunk.push(`+ ${s}`); changes++; }
-            else if (hunk.length > 0) {
-                hunk.push(`  ${o}`);
-                if (hunk.filter(l => !l.startsWith('  ')).length === 0) flushHunk();
+        // DP table for LCS
+        const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < m; j++) {
+                if (origLines[i] === stageLines[j]) {
+                    dp[i + 1][j + 1] = dp[i][j] + 1;
+                } else {
+                    dp[i + 1][j + 1] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+                }
             }
         }
-        flushHunk();
 
-        return { diff: hunks.join('\n---\n'), changes, addedLines: stageLines.length - origLines.length };
+        // Backtrack to assemble diff operations
+        const ops = [];
+        let i = n, j = m;
+        while (i > 0 || j > 0) {
+            if (i > 0 && j > 0 && origLines[i - 1] === stageLines[j - 1]) {
+                ops.push({ type: ' ', text: origLines[i - 1], origIdx: i - 1, stageIdx: j - 1 });
+                i--;
+                j--;
+            } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+                ops.push({ type: '+', text: stageLines[j - 1], stageIdx: j - 1 });
+                j--;
+            } else {
+                ops.push({ type: '-', text: origLines[i - 1], origIdx: i - 1 });
+                i--;
+            }
+        }
+        ops.reverse();
+
+        // Calculate changes count (number of edit blocks)
+        let changes = 0;
+        let inChange = false;
+        for (const op of ops) {
+            if (op.type !== ' ') {
+                if (!inChange) {
+                    changes++;
+                    inChange = true;
+                }
+            } else {
+                inChange = false;
+            }
+        }
+
+        if (changes === 0) {
+            return { diff: '', changes: 0, addedLines: stageLines.length - origLines.length };
+        }
+
+        // Group into hunks with 3 context lines
+        const CONTEXT = 3;
+        const hunks = [];
+
+        for (let k = 0; k < ops.length; k++) {
+            const op = ops[k];
+            if (op.type !== ' ') {
+                let startK = Math.max(0, k - CONTEXT);
+                let endK = k;
+                while (endK < ops.length) {
+                    if (ops[endK].type !== ' ') {
+                        endK++;
+                    } else {
+                        let hasMoreChange = false;
+                        for (let look = 1; look <= CONTEXT * 2 && endK + look < ops.length; look++) {
+                            if (ops[endK + look].type !== ' ') {
+                                hasMoreChange = true;
+                                break;
+                            }
+                        }
+                        if (hasMoreChange) {
+                            endK++;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                const hunkEndK = Math.min(ops.length - 1, (endK - 1) + CONTEXT);
+                const hunkOps = ops.slice(startK, hunkEndK + 1);
+
+                let origCount = 0;
+                let stageCount = 0;
+                let origStart = 0;
+                let stageStart = 0;
+                let foundOrigStart = false;
+                let foundStageStart = false;
+
+                for (const hOp of hunkOps) {
+                    if (hOp.type === ' ' || hOp.type === '-') {
+                        origCount++;
+                        if (!foundOrigStart && hOp.origIdx !== undefined) {
+                            origStart = hOp.origIdx + 1;
+                            foundOrigStart = true;
+                        }
+                    }
+                    if (hOp.type === ' ' || hOp.type === '+') {
+                        stageCount++;
+                        if (!foundStageStart && hOp.stageIdx !== undefined) {
+                            stageStart = hOp.stageIdx + 1;
+                            foundStageStart = true;
+                        }
+                    }
+                }
+
+                if (!foundOrigStart) origStart = 1;
+                if (!foundStageStart) stageStart = 1;
+
+                const header = `@@ -${origStart},${origCount} +${stageStart},${stageCount} @@`;
+                const lines = [header];
+                for (const hOp of hunkOps) {
+                    lines.push(`${hOp.type === ' ' ? ' ' : hOp.type} ${hOp.text}`);
+                }
+                hunks.push(lines.join('\n'));
+
+                k = hunkEndK;
+            }
+        }
+
+        return { diff: hunks.join('\n'), changes, addedLines: stageLines.length - origLines.length };
     }
 
     // ─── Open VS Code diff view ───────────────────────────────────────────

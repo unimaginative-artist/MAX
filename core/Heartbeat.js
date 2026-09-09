@@ -1,4 +1,4 @@
-﻿// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Heartbeat.js â€” MAX's autonomous pulse
 // Runs background cycles: curiosity tasks, self-monitoring, goal execution
 // Simplified from SOMA AutonomousHeartbeat â€” no SOMA framework deps
@@ -47,8 +47,20 @@ export class Heartbeat extends EventEmitter {
         this.config.enabled = true;
         this._lastSuccessAt = 0;
         this._schedule();
-        console.log(`[Heartbeat] ðŸ’“ Started (Tension-Scaling: ${this.config.minIntervalMs/1000}sâ€“${this.config.maxIntervalMs/1000}s)`);
+        console.log(`[Heartbeat] 💓 Started (Tension-Scaling: ${this.config.minIntervalMs/1000}s–${this.config.maxIntervalMs/1000}s)`);
         this.emit('started');
+    }
+
+    stop() {
+        if (!this._running) return;
+        this._running = false;
+        this.config.enabled = false;
+        if (this._timer) {
+            clearTimeout(this._timer);
+            this._timer = null;
+        }
+        console.log('[Heartbeat] 🛑 Stopped');
+        this.emit('stopped');
     }
 
     _schedule() {

@@ -71,7 +71,7 @@ export class BuildLoop {
         }
 
         // ── Phase 4: Execute with real tool calls ─────────────────────────
-        const execResult = await this._execute(goal, finalPlan, research, max);
+        let execResult = await this._execute(goal, finalPlan, research, max);
         console.log(`  [BuildLoop] ⚡ Execution complete (${execResult.modifiedFiles?.length ?? 0} files changed)`);
 
         // ── Phase 5: Test-driven iteration — run tests, fix failures, repeat ─
@@ -211,9 +211,10 @@ export class BuildLoop {
         const result = await max.executeAgenticThink(prompt, { temperature: 0.15, maxTokens: 8192, tier: 'code' });
 
         // Extract which files were modified from tool calls
+        const toolCallsMade = Array.isArray(result.toolCallsMade) ? result.toolCallsMade : [];
         const modifiedFiles = [...new Set(
-            (result.toolCallsMade || [])
-                .filter(t => /TOOL:file:(write|replace|patch)/.test(t))
+            toolCallsMade
+                .filter(t => typeof t === 'string' && /TOOL:file:(write|replace|patch)/.test(t))
                 .map(t => { const m = t.match(/"filePath"\s*:\s*"([^"]+)"/); return m?.[1]; })
                 .filter(Boolean)
         )];
@@ -227,7 +228,7 @@ export class BuildLoop {
             }
         }
 
-        return { summary: result.text, modifiedFiles };
+        return { summary: result.text || result.response || '', modifiedFiles };
     }
 
     // ── Test-driven iteration — detect test cmd, run, fix failures, repeat ─

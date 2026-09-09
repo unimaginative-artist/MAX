@@ -1290,6 +1290,7 @@ Actions:
         let iteration = 0;
         let currentPrompt = prompt;
         let fullHistory = []; // temporary local history for this task
+        const allToolCalls = [];
 
         while (iteration < maxIterations) {
             iteration++;
@@ -1311,9 +1312,10 @@ Actions:
                 // Task complete or no more tools needed
                 return { 
                     response, 
+                    text: response,
                     success: true, 
                     iterations: iteration,
-                    toolCallsMade: fullHistory.filter(h => h.role === 'tool').length
+                    toolCallsMade: allToolCalls
                 };
             }
 
@@ -1321,6 +1323,7 @@ Actions:
             let toolResults = [];
             for (const call of toolCalls) {
                 const { raw: fullMatch, toolName: tool, actionName: action, params } = call;
+                allToolCalls.push(fullMatch || `TOOL:${tool}:${action}:${JSON.stringify(params)}`);
 
                 // ─── Phase 5.5: Agentic Approval Gate ───
                 if (this.agentLoop?.needsApproval(tool, action)) {
@@ -1349,7 +1352,13 @@ Actions:
             fullHistory.push({ role: 'user', content: currentPrompt });
         }
 
-        return { response: 'Max iterations reached without completion.', success: false };
+        return { 
+            response: 'Max iterations reached without completion.', 
+            text: 'Max iterations reached without completion.', 
+            success: false, 
+            iterations: iteration, 
+            toolCallsMade: allToolCalls 
+        };
     }
 
     // Public entry point — queues chat turns so they run serially while agent lanes run freely

@@ -64,7 +64,7 @@ export class Brain {
                 || process.env.OLLAMA_MODEL_FAST
                 || config.ollamaModel
                 || process.env.OLLAMA_MODEL
-                || 'gemma3:4b',
+                || 'max-coder:v2',
             ready:   false,
             backend: null   // 'ollama' | null
         };
@@ -207,7 +207,9 @@ export class Brain {
             tier = 'fast';
         }
         if (String(this.max?.clusterRole || '').toLowerCase() === 'worker' && process.env.MAX_WORKER_ALLOW_CLOUD !== 'true') {
-            tier = 'fast';
+            if (this._smart.backend !== 'ollama') {
+                tier = 'fast';
+            }
         }
 
         let result;
