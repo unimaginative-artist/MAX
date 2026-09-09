@@ -9,13 +9,13 @@
 - [ ] [SOMA] Autonomous mission: Publish verified artifact-liveness gate for the governed proposal backlog
 
 ## ✅ COMPLETED
+- [x] Introduce 'injectGoal' method in Agent0 and Choko files
+- [x] INTENSIVE AUTOMATIC CODE REFACTORING ENGINE
+- [x] [SOMA] Self-evolution cycle_1787284474505: improve research-to-paper
 - [x] Investigate: Explore: system architecture patterns
-- [x] Investigate: Explore: system architecture patterns
+- [x] Investigate: Explore: security vulnerabilities in common code patterns
+- [x] Investigate: Explore: security vulnerabilities in common code patterns
 - [x] Investigate: Explore: latest programming language features
-- [x] Investigate: Explore: software engineering best practices
-- [x] Investigate: Explore: distributed systems challenges
-- [x] Investigate: Explore: system architecture patterns
-- [x] Investigate: Explore: system architecture patterns
 - [x] Investigate: Explore: efficient algorithms for common tasks
-- [x] Investigate: Follow-up: You
-- [x] Investigate: Explore: software engineering best practices
+- [x] Investigate: Explore: AI model capabilities and limitations
+- [x] Investigate: Follow-up: engineering
