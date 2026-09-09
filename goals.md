@@ -6,9 +6,8 @@
 - [ ] Gather Environment Information
 - [ ] Check Directory Existence Before Removing It
 - [ ] Correctly Check Directory Existence Before Removing It
-- [ ] Improving Test Coverage for AgentLoop.js
-- [ ] [SOMA] Autonomous mission: Publish verified artifact-liveness gate for the governed proposal backlog
 - [ ] [SOMA] Autonomous mission: Diagnose the single highest-value small correctness gap in server/finance
+- [ ] [SOMA] Autonomous mission: Publish verified artifact-liveness gate for the governed proposal backlog
 - [ ] AUTONOMOUS: SEPARATION OF CONCERNS
 
 ## ✅ COMPLETED

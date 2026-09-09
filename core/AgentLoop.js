@@ -411,7 +411,7 @@ export class AgentLoop extends EventEmitter {
                         blockedBy: []
                     });
 
-                    if (remedyId) {
+                    if (remedyId && remedyId !== goal.id) {
                         this.max.goals.requeue(goal.id, [remedyId]);
 
                         this.emit('insight', {

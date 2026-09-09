@@ -87,6 +87,22 @@ export class GoalEngine {
 
     // ─── Get the highest priority pending goal ────────────────────────────
     getNext(driveSystem = null) {
+        // Self-heal: sanitize blockedBy across all active goals (prune self-dependencies, non-existent IDs, and break direct 2-cycles)
+        for (const [id, g] of this._active) {
+            if (!Array.isArray(g.blockedBy)) {
+                g.blockedBy = [];
+                continue;
+            }
+            g.blockedBy = g.blockedBy.filter(bid => bid !== id && this._active.has(bid));
+            for (const bid of [...g.blockedBy]) {
+                const blocker = this._active.get(bid);
+                if (blocker?.blockedBy?.includes(id)) {
+                    console.log(`[GoalEngine] ⚠️ Breaking circular dependency between "${g.title}" and "${blocker.title}"`);
+                    blocker.blockedBy = blocker.blockedBy.filter(b => b !== id);
+                }
+            }
+        }
+
         const candidates = [...this._active.values()].filter(g => {
             if (g.status !== 'pending') return false;
             // Skip if any dependency is still active/pending
@@ -304,14 +320,38 @@ Return as plain text, 4 labeled lines. No JSON. Be concise.`;
         }
     }
 
+    // ─── Detect transitive dependency cycles ─────────────────────────────
+    _hasCycle(startId, targetId, visited = new Set()) {
+        if (startId === targetId) return true;
+        if (visited.has(startId)) return false;
+        visited.add(startId);
+        const node = this._active.get(startId);
+        if (!node || !Array.isArray(node.blockedBy)) return false;
+        for (const depId of node.blockedBy) {
+            if (this._hasCycle(depId, targetId, visited)) return true;
+        }
+        return false;
+    }
+
     // ─── Add a dependency between goals ──────────────────────────────────
     // goalId will not be picked until all blockedByIds are complete
     addDependency(goalId, blockedByIds = []) {
         const goal = this._active.get(goalId);
         if (!goal) return false;
-        goal.blockedBy = [...new Set([...(goal.blockedBy || []), ...blockedByIds])];
+        // Filter out self-dependencies and transitive cycles
+        const validBlockers = blockedByIds.filter(bid => {
+            if (bid === goalId) return false;
+            if (!this._active.has(bid)) return false;
+            if (this._hasCycle(bid, goalId)) {
+                console.log(`[GoalEngine] ⚠️ Cycle detected: cannot block "${goal.title}" on "${this._active.get(bid)?.title}"`);
+                return false;
+            }
+            return true;
+        });
+        if (validBlockers.length === 0) return false;
+        goal.blockedBy = [...new Set([...(goal.blockedBy || []), ...validBlockers])];
         this._save();
-        console.log(`[GoalEngine] 🔗 "${goal.title}" now blocked by ${blockedByIds.length} goal(s)`);
+        console.log(`[GoalEngine] 🔗 "${goal.title}" now blocked by ${validBlockers.length} goal(s)`);
         return true;
     }
 
@@ -325,10 +365,19 @@ Return as plain text, 4 labeled lines. No JSON. Be concise.`;
         goal.status    = 'pending';
         goal.steps     = [];        // clear stale steps — will re-decompose when unblocked
         goal.attempts  = (goal.attempts || 0);
-        goal.blockedBy = [...new Set([...(goal.blockedBy || []), ...blockedByIds])];
+        const validBlockers = blockedByIds.filter(bid => {
+            if (bid === id) return false;
+            if (!this._active.has(bid)) return false;
+            if (this._hasCycle(bid, id)) {
+                console.log(`[GoalEngine] ⚠️ Cycle detected on requeue: ignoring blocker ${bid}`);
+                return false;
+            }
+            return true;
+        });
+        goal.blockedBy = [...new Set([...(goal.blockedBy || []), ...validBlockers])];
         goal.updatedAt = Date.now();
         this._save();
-        console.log(`[GoalEngine] ⏳ "${goal.title}" requeued — blocked pending remedy`);
+        console.log(`[GoalEngine] ⏳ "${goal.title}" requeued — blocked pending remedy (${validBlockers.length} blockers)`);
         return true;
     }
 
