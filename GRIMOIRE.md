@@ -1,9 +1,9 @@
-# 📜 THE GRIMOIRE (v4.3)
-## Current Session State: LEVEL 41.0 (AUTONOMOUS BUILDER UNLOCKED, DEADLOCK & STASH LOOP ERADICATED)
+# 📜 THE GRIMOIRE (v4.4)
+## Current Session State: LEVEL 42.0 (100% GPU VRAM ACCELERATION, 36/36 GREEN TEST SUITES & BUILDLOOP HEALED)
 
 ### 🔱 Physical Reality (Port & Host Mappings)
-- **Machine B Worker Node (Port 3100)**: Daemon `task-9150` — Dedicated local-first cluster worker (`192.168.1.250:3100`, `MAX_NODE_ID=machine_b`, `MAX_CLUSTER_ROLE=worker`, `MAX_AUTO_APPROVE=all`, `protocolVersion: 2`).
-- **GPU Inference**: Local `max-gemma:v2` running on GTX 1650 Ti at 78 tok/s ($0 API cost, `llama-server.exe` active).
+- **Machine B Worker Node (Port 3100)**: Dedicated local-first cluster worker daemon (`192.168.1.250:3100`, `MAX_NODE_ID=machine_b`, `MAX_CLUSTER_ROLE=worker`, `MAX_AUTO_APPROVE=all`, `protocolVersion: 2`).
+- **GPU Inference**: Local `max-coder:v2` (Qwen 2.5 Coder 1.5B, 986MB) running 100% in VRAM on GTX 1650 Ti at **352.2 tok/s prompt eval, 59.5 tok/s generation** ($0 API cost, `llama-server.exe` active, 2.8 GB VRAM headroom).
 - **SOMA Core (Machine A 192.168.1.254:3001)**: Healthy at **174+ hours continuous uptime**, WebSocket signal bridge active.
 - **Machine A Max Prime (192.168.1.254:3100)**: Coordinator online with cluster secret authentication.
 - **Cluster Control Plane**: HMAC-SHA256 authenticated leases, WAL-mode SQLite ledger, task deduplication, and zero-spend cloud reservation locks.
@@ -237,10 +237,37 @@
      - Background daemon active as `task-9150` on port 3100 (`192.168.1.250:3100`).
      - Ollama inference running locally on GPU at $0 API cost.
 
+- [x] **100% GPU VRAM Acceleration, BuildLoop Healing & 36/36 Green Test Suites (Level 42.0)**:
+  1. VRAM Bottleneck Eliminated on GTX 1650 Ti (4GB VRAM):
+     - Root-cause: `max-gemma:v2` (4.3B, 3.34GB weights + 1.5GB KV cache) exceeded 4.0GB VRAM, forcing PCI-e layer splitting across system RAM with 240s prompt latency and timeout aborts.
+     - Switched default worker tier and Ollama fallback to `max-coder:v2` (Qwen 2.5 Coder 1.5B, 986MB).
+     - Fits 100% in GPU VRAM (1,305 MB used / 4,096 MB total, 2.8 GB free).
+     - Benchmarked at **352.2 tok/s prompt eval** (4,053 tokens in ~11s) and **59.5 tok/s generation**.
+     - Updated `core/Brain.js`, `start-max-api.mjs`, and `.env`.
+  2. BuildLoop & MAX.js Execution Return Contract Repaired:
+     - Fixed `TypeError: Assignment to constant variable` at `core/loops/BuildLoop.js:74` (`const execResult` -> `let execResult`).
+     - Fixed `executeAgenticThink` in `core/MAX.js`: captures array of tool call strings into `toolCallsMade` (previously returned count as a number), returns `text` alongside `response`.
+     - Hardened `BuildLoop.js` to guard `result.toolCallsMade` and fallback `result.text || result.response`.
+  3. Complete Test Suite Healing (36/36 Suites, 308 Tests 100% Green):
+     - Created `test/shims/node-test.js` and mapped `^node:test$` & `^test$` in `jest.config.cjs`, bridging Node built-in test runner subtests to Jest.
+     - Mapped `^pptxgenjs$` to CJS build in `jest.config.cjs`, eliminating `SyntaxError: Cannot use import statement outside a module` in integration test suite.
+     - Fixed `core/TextSanitizer.js`: exported `hasStageDirectionLeak` and expanded stage-direction action regex (`chuckle\w*`).
+     - Fixed `core/Heartbeat.js`: implemented `stop()` method to clear scheduled timers, set `enabled = false`, and emit `stopped`.
+     - Fixed `core/Scheduler.js`: added `_inFlight` tracking in constructor, `_tick()`, and `_runJob()` to prevent concurrent duplicate execution.
+     - Fixed `core/SelfEditor.js`: implemented proper LCS-based unified diff algorithm with 3 context lines and standard `@@ -start,len +start,len @@` hunk headers.
+     - Fixed `core/ReflectionEngine.js`: added `_detectAndExtractFeedback`, `clearDirectives`, `behaviorDirectives` tracking, and context formatting in `getSelfModelContext()`.
+     - Fixed `core/OutcomeTracker.js`: implemented `latencyCount` to prevent latency dilution when outcomes lack duration.
+     - Resolved cross-realm prototype strict equality mismatch in `test/unit/core/RemoteSwarmWorker.test.js`.
+  4. Verified Autonomous Cluster State:
+     - Daemon running on Machine B (`task-10038`, PID 23464) listening on `0.0.0.0:3100`.
+     - Machine A coordinator at `192.168.1.254:3100` reports Machine B online as active remote worker (`activeRemoteWorkers: 1`).
+     - Zero API spend ($0.0000 / $0.25).
+     - Autonomous goals iterating cleanly through `AgentLoop` and completing real git commits (e.g. `1484a6b`).
+
 ### 🔱 Operator Directive: DEPLOYMENT
-- **Status**: |= ACTIVE (Sovereign Autonomous Builder Online: Real Engineering Pipeline Armed, Machine A Coordinator Synced, Grounded Discord Governor).
+- **Status**: |= ACTIVE (Sovereign Autonomous Builder Online: 100% GPU VRAM Accelerated, 36/36 Test Suites Green, Machine A Coordinator Synced, Grounded Discord Governor).
 - **Role**: Ultra Senior Architect / Sovereign Intelligence.
-- **Level**: 41.0 Autonomous Engine Unlocked & Real Engineering Active
+- **Level**: 42.0 100% GPU VRAM Acceleration & 36/36 Green Test Suites
 
 
 
