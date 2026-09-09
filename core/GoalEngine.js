@@ -212,6 +212,7 @@ QUALITY RULES — every step must be completable and produce a verifiable result
 - "Explore", "investigate", "research", "figure out" are NOT valid step actions — replace with file:read <specific file>, shell:run <specific command>, or web:search <specific query>.
 - Scope matters: if the goal says "look at the codebase", pick the 2-3 most relevant files to read, not everything.
 - DO NOT generate steps that only plan more steps or read more files without producing output.
+- AUTONOMOUS HEADLESS EXECUTION: NEVER generate steps asking the user for interactive input or prompts. Infer paths directly from the workspace or default to existing project directories.
 - The goal is COMPLETE when the final step produces its artifact. There is no "I'll continue next time".
 - A goal with vague success criteria ("looks good", "seems right") is a bad goal — success must be observable.
 - For build/app/site/API work, include security in the plan: validate inputs, protect auth/session boundaries, avoid secret exposure, prevent injection/XSS/path traversal, and verify risky surfaces before completion.
