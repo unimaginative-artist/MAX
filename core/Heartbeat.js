@@ -11,10 +11,11 @@ export class Heartbeat extends EventEmitter {
         super();
         this.max = max;
 
+        const isEco = process.env.MAX_ECO_MODE === 'true' || process.env.MAX_CLUSTER_ROLE === 'worker';
         this.config = {
-            minIntervalMs:         10 * 1000,      // 10s (Faster response)
-            maxIntervalMs:         60 * 1000,      // 60s (was 120s)
-            momentumWindowMs:      3 * 60 * 1000,  // 3m window to stay fast
+            minIntervalMs:         isEco ? 45 * 1000 : 10 * 1000,
+            maxIntervalMs:         isEco ? 120 * 1000 : 60 * 1000,
+            momentumWindowMs:      3 * 60 * 1000,
             maxConsecutiveFailures: 5,
             enabled:               false,
             ...config
@@ -68,21 +69,24 @@ export class Heartbeat extends EventEmitter {
 
         const drive = this.max?.drive?.getStatus?.();
         const tension = drive?.tension || 0;
+        const minAllowed = this.config.minIntervalMs;
 
         // Base tension scaling
         let interval = this.config.maxIntervalMs - (tension * (this.config.maxIntervalMs - this.config.minIntervalMs));
 
-        // Momentum factor: stay fast after success
-        const timeSinceSuccess = Date.now() - this._lastSuccessAt;
-        if (timeSinceSuccess < this.config.momentumWindowMs) {
-            interval = Math.min(interval, 10 * 1000);
-        }
-
-        // Work-pending factor: speed up if goals are waiting
+        // Work-pending factor: speed up if goals are waiting, but respect minIntervalMs
         const hasPendingGoals = this.max?.goals?.getNext(this.max?.drive) != null;
         if (hasPendingGoals) {
-            interval = Math.min(interval, 15 * 1000);
+            interval = Math.min(interval, Math.max(minAllowed, 20 * 1000));
         }
+
+        // Momentum factor: stay fast after success, but respect minIntervalMs
+        const timeSinceSuccess = Date.now() - this._lastSuccessAt;
+        if (timeSinceSuccess < this.config.momentumWindowMs) {
+            interval = Math.min(interval, Math.max(minAllowed, 15 * 1000));
+        }
+
+        interval = Math.max(minAllowed, interval);
 
         this._timer = setTimeout(() => this._tick().catch(err => console.error('[Heartbeat] tick error:', err.message)), interval);
     }

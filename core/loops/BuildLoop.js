@@ -233,9 +233,20 @@ export class BuildLoop {
 
     // ── Test-driven iteration — detect test cmd, run, fix failures, repeat ─
     async _runTestLoop(goal, execResult, max) {
-        const MAX_RETRIES = 3;
-        const testCmd = await this._detectTestCommand(max);
-        if (!testCmd) return null;
+        // If no files were touched, skip testing to conserve CPU
+        if (!execResult.modifiedFiles || execResult.modifiedFiles.length === 0) {
+            return execResult;
+        }
+
+        // Check if any modified files are code files (.js, .mjs, .cjs, .ts)
+        const hasCodeFiles = execResult.modifiedFiles.some(f => /\.[mc]?[jt]sx?$/i.test(f));
+        if (!hasCodeFiles) {
+            return execResult;
+        }
+
+        const MAX_RETRIES = 2;
+        const testCmd = await this._detectTestCommand(goal, execResult, max);
+        if (!testCmd) return execResult;
 
         let lastExec = execResult;
         for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -267,14 +278,23 @@ export class BuildLoop {
         return lastExec;
     }
 
-    async _detectTestCommand(max) {
+    async _detectTestCommand(goal, execResult, max) {
+        if (goal.testCommand) return goal.testCommand;
+        if (goal.verifyCommand && goal.verifyCommand.includes('test')) return goal.verifyCommand;
+
+        // In eco mode or cluster worker mode, run unit tests to keep laptop cool and quiet
+        const isEco = process.env.MAX_ECO_MODE === 'true' || process.env.MAX_CLUSTER_ROLE === 'worker';
+        if (isEco) {
+            return 'npm run test:unit';
+        }
+
         try {
             const pkgRaw = await fs.readFile(path.join(process.cwd(), 'package.json'), 'utf8');
             const pkg = JSON.parse(pkgRaw);
-            if (pkg.scripts?.test && !pkg.scripts.test.includes('no test')) return 'npm test';
             if (pkg.scripts?.['test:unit']) return 'npm run test:unit';
+            if (pkg.scripts?.test && !pkg.scripts.test.includes('no test')) return 'npm test';
         } catch {}
-        // Fallback: check for common test runners
+
         try { await fs.access(path.join(process.cwd(), 'jest.config.js')); return 'npx jest --passWithNoTests'; } catch {}
         try { await fs.access(path.join(process.cwd(), 'vitest.config.js')); return 'npx vitest run'; } catch {}
         return null;
