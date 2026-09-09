@@ -5,6 +5,8 @@
 - [ ] Verify Governance Proposal Backlog Directory Does Not Exist
 - [ ] Gather Environment Information
 - [ ] Check Directory Existence Before Removing It
+- [ ] Collect Environment Information
+- [ ] Import os module before using path.exists()
 - [ ] Correctly Check Directory Existence Before Removing It
 - [ ] [SOMA] Autonomous mission: Diagnose the single highest-value small correctness gap in server/finance
 - [ ] [SOMA] Autonomous mission: Publish verified artifact-liveness gate for the governed proposal backlog
