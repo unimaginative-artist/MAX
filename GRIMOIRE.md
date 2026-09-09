@@ -3,9 +3,10 @@
 
 ### 🔱 Physical Reality (Port & Host Mappings)
 - **Machine B Worker Node (Port 3100)**: Dedicated local-first cluster worker daemon (`192.168.1.250:3100`, `MAX_NODE_ID=machine_b`, `MAX_CLUSTER_ROLE=worker`, `MAX_AUTO_APPROVE=all`, `protocolVersion: 2`).
-- **GPU Inference**: Local `max-coder:v2` (Qwen 2.5 Coder 1.5B, 986MB) running 100% in VRAM on GTX 1650 Ti at **352.2 tok/s prompt eval, 59.5 tok/s generation** ($0 API cost, `llama-server.exe` active, 2.8 GB VRAM headroom).
+- **Machine B GPU Inference**: Local `max-coder:v2` (Qwen 2.5 Coder 1.5B, 986MB) running 100% in VRAM on GTX 1650 Ti Max-Q (4 GB VRAM) with loopback binding (`127.0.0.1:11434`, `num_ctx: 8192`, $0 API cost, zero CPU spill).
+- **Machine A Max Prime (192.168.1.254:3100)**: Coordinator on RTX 5070 (12 GB VRAM) requiring 7.6B model (`num_ctx: 16384`).
+- **Ollama Residency Keying Truth**: Ollama keys resident model instances by model name AND `num_ctx`. Requests with mismatched context lengths (e.g. 16384 vs 8192) force repeated model thrashing/reloads. Machine B's 4 GB card cannot host Machine A's 7.6B workload or mixed context sizes; Machine B stays strictly dedicated to its local 1.5B worker loop.
 - **SOMA Core (Machine A 192.168.1.254:3001)**: Healthy at **174+ hours continuous uptime**, WebSocket signal bridge active.
-- **Machine A Max Prime (192.168.1.254:3100)**: Coordinator online with cluster secret authentication.
 - **Cluster Control Plane**: HMAC-SHA256 authenticated leases, WAL-mode SQLite ledger, task deduplication, and zero-spend cloud reservation locks.
 - **DeepSeek Harness Layered Assembler**: `core/PromptLayerAssembler.js` assembling composable identity/security/memory layers.
 - **DeepSeek Harness Guarded Pipeline**: `core/GuardedToolPipeline.js` with hot-swappable plugins & security blacklists.
