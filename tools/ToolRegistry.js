@@ -55,7 +55,25 @@ export class ToolRegistry {
 
         const tool = this._tools.get(canonicalTool);
         const requestedAction = String(action || '');
-        const alias = ACTION_ALIASES.get(`${canonicalTool.toLowerCase()}.${requestedAction.toLowerCase()}`);
+        let alias = ACTION_ALIASES.get(`${canonicalTool.toLowerCase()}.${requestedAction.toLowerCase()}`);
+
+        // Intelligent semantic heuristic fallback for local LLM variations
+        if (!alias && tool.actions) {
+            const reqLower = requestedAction.toLowerCase();
+            if (canonicalTool.toLowerCase() === 'file') {
+                if (reqLower.startsWith('read') || reqLower.includes('.txt') || reqLower.includes('.js') || reqLower.includes('.md')) alias = 'read';
+                else if (reqLower.startsWith('write') || reqLower.startsWith('create') || reqLower.startsWith('save')) alias = 'write';
+                else if (reqLower.startsWith('list') || reqLower.startsWith('dir') || reqLower === 'ls') alias = 'list';
+                else if (reqLower.startsWith('search') || reqLower.startsWith('find')) alias = 'search';
+                else if (reqLower.startsWith('delete') || reqLower.startsWith('remove') || reqLower === 'rm') alias = 'delete';
+                else if (reqLower.startsWith('replace') || reqLower.startsWith('edit') || reqLower.startsWith('update')) alias = 'replace';
+            } else if (canonicalTool.toLowerCase() === 'shell') {
+                if (['exec', 'execute', 'cmd', 'command', 'sh', 'bash', 'run_command', 'runcommand'].includes(reqLower)) alias = 'run';
+            } else if (canonicalTool.toLowerCase() === 'web') {
+                if (['search_web', 'google', 'query', 'find'].includes(reqLower)) alias = 'search';
+                else if (['get', 'url', 'download', 'read'].includes(reqLower)) alias = 'fetch';
+            }
+        }
         const candidate = alias || requestedAction;
 
         if (tool.actions) {
