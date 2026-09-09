@@ -326,11 +326,12 @@ export class AgentLoop extends EventEmitter {
                 // else: fall through with failed=true and failReason set from verifyCommand
             }
 
-            // â”€â”€ Smart error categorization â€” choose pivot strategy â”€â”€â”€â”€â”€â”€â”€â”€
+            // ── Smart error categorization — choose pivot strategy ────────
             const errType = this._categorizeError(failReason);
-            console.log(`  [AgentLoop] ðŸ”¬ Error type: ${errType} â€” ${failReason.slice(0, 80)}`);
+            const safeFail = typeof failReason === 'string' ? failReason : String(failReason || '');
+            console.log(`  [AgentLoop] 🔬 Error type: ${errType} — ${safeFail.slice(0, 80)}`);
 
-            // â”€â”€ Level 4 Meta-Correction: Track Tool Failure Hotspots â”€â”€â”€â”€â”€
+            // ── Level 4 Meta-Correction: Track Tool Failure Hotspots ─────
             if (errType === 'TOOL_ERROR' || errType === 'TEST_FAILURE') {
                 const failedStep = stepResults.find(r => !r.success);
                 const tName = failedStep?.tool?.split('.')[0] || 'unknown';
@@ -338,14 +339,14 @@ export class AgentLoop extends EventEmitter {
                 this._toolFailures.set(tName, count);
 
                 if (count >= 3 && tName !== 'unknown') {
-                    console.log(`  [AgentLoop]   [AgentLoop] âš ï¸ Tool "${tName}" failed ${count} times â€” triggering Architectural Audit`);
+                    console.log(`  [AgentLoop]   [AgentLoop] ⚠️  Tool "${tName}" failed ${count} times — triggering Architectural Audit`);
 
                     // Persist hotspot to OutcomeTracker so GoalEngine priority + decompose can see it
                     this.max.outcomes?.record({
                         agent:   'AgentLoop',
                         action:  'tool_hotspot',
                         context: { tool: tName, failCount: count, goalTitle: goal.title },
-                        result:  failedStep?.error?.slice(0, 200),
+                        result:  (failedStep?.error ? String(failedStep.error) : '').slice(0, 200),
                         success: false,
                         reward:  -0.5
                     });
@@ -647,7 +648,7 @@ export class AgentLoop extends EventEmitter {
         if (signal?.aborted) {
             return { step: step.step, success: false, error: 'Aborted', summary: '' };
         }
-        const stepAction = step.action;
+        const stepAction = typeof step?.action === 'string' ? step.action : (step?.description || step?.task || step?.title || '');
         const fullToolName = step.tool || 'brain';
 
         // Parse tool and action from step.tool (format: "tool" or "tool.action")
@@ -916,7 +917,9 @@ export class AgentLoop extends EventEmitter {
     // â”€â”€â”€ Search for a solution to a failed step â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     async _searchForSolution(step, goal, errorMsg) {
         try {
-            const query = `how to ${step.action.slice(0, 80)} ${errorMsg.slice(0, 60)}`.replace(/\s+/g, ' ').trim();
+            const actionText = typeof step?.action === 'string' ? step.action : (step?.description || step?.task || step?.title || '');
+            const safeError = typeof errorMsg === 'string' ? errorMsg : String(errorMsg || '');
+            const query = `how to ${actionText.slice(0, 80)} ${safeError.slice(0, 60)}`.replace(/\s+/g, ' ').trim();
             console.log(`  [AgentLoop] ðŸŒ Web search: "${query.slice(0, 100)}"`);
 
             const searchResult = await withTimeout(
