@@ -11,9 +11,10 @@
 import { Client, GatewayIntentBits, Partials } from 'discord.js';
 import fs   from 'fs';
 import path from 'path';
-import { DiscordUIFactory }     from '../core/DiscordUIFactory.js';
-import { DiscordCodeEvaluator } from '../core/DiscordCodeEvaluator.js';
-import { DiscordDPOHarvester }  from '../core/DiscordDPOHarvester.js';
+import { DiscordUIFactory }        from '../core/DiscordUIFactory.js';
+import { DiscordCodeEvaluator }    from '../core/DiscordCodeEvaluator.js';
+import { DiscordDPOHarvester }     from '../core/DiscordDPOHarvester.js';
+import { DiscordStandupScheduler } from '../core/DiscordStandupScheduler.js';
 
 const _dpoHarvester = new DiscordDPOHarvester();
 const CREDS_FILE = path.join(process.cwd(), '.max', 'integrations.json');
@@ -197,6 +198,18 @@ async function connectClient(token) {
                         return;
                     } catch (err) {
                         console.warn('[Discord] Status embed error:', err.message);
+                    }
+                }
+
+                // 2. Standup Command Handler (/standup or @Max standup)
+                if (/\b(\/standup|standup|morning standup)\b/i.test(msg.content.trim())) {
+                    try {
+                        const standupScheduler = new DiscordStandupScheduler(null);
+                        const embed = standupScheduler.buildStandupEmbed();
+                        await msg.reply({ embeds: [embed] });
+                        return;
+                    } catch (err) {
+                        console.warn('[Discord] Standup embed error:', err.message);
                     }
                 }
 

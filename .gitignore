@@ -44,3 +44,8 @@ dist-electron/
 # Editor
 .vscode/settings.json
 .idea/
+
+# Python
+__pycache__/
+*.pyc
+unsloth_compiled_cache/
