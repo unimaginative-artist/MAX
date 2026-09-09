@@ -25,6 +25,7 @@ export class OutcomeTracker extends EventEmitter {
             avgReward: 0,
             totalTokens: 0,
             avgLatency: 0,
+            latencyCount: 0,
             byAction: {},   // action → { count, successRate, avgReward, avgTokens, avgLatency }
             byAgent:  {}    // agent  → { count, successRate, avgReward }
         };
@@ -65,8 +66,10 @@ export class OutcomeTracker extends EventEmitter {
         const n = this.stats.total;
         this.stats.avgReward = ((this.stats.avgReward * (n - 1)) + r) / n;
         
-        if (duration) {
-            this.stats.avgLatency = ((this.stats.avgLatency * (this.stats.total - 1)) + duration) / this.stats.total;
+        if (duration !== undefined && duration !== null && !isNaN(duration)) {
+            this.stats.latencyCount = (this.stats.latencyCount || 0) + 1;
+            const lc = this.stats.latencyCount;
+            this.stats.avgLatency = ((this.stats.avgLatency * (lc - 1)) + duration) / lc;
         }
 
         this._updateBucket(this.stats.byAction, action, ok, r, tokens, duration);

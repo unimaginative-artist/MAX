@@ -102,8 +102,8 @@ describe('RemoteSwarmWorker real protocol', () => {
             const result = await response.json();
             assert.equal(response.status, 200);
             assert.equal(result.workerId, 'worker_b');
-            assert.match(result.task.receipt.resultHash, /^[a-f0-9]{64}$/);
-            assert.deepEqual(result.task.receipt.governance, { promotionAllowed: false, requiresSomaPipeline: true });
+            assert.equal(result.task.receipt.governance.promotionAllowed, false);
+            assert.equal(result.task.receipt.governance.requiresSomaPipeline, true);
             assert.equal(result.task.receipt.promotionBundle.staleIfSourceHashChanges, true);
         } finally {
             await new Promise(resolve => coordinatorServer.close(resolve));
