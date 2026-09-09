@@ -4,12 +4,12 @@
 - [ ] Verify Directory Existence
 - [ ] Prompt User for Directory Path
 - [ ] Provide the correct directory path
-- [ ] Validate Directory Path
 - [ ] Provide a prompt for the directory path
-- [ ] Prompt for Directory Path and Validate it
 - [ ] Specify Requirements and Prompt
 
 ## ✅ COMPLETED
+- [x] Validate Directory Path
+- [x] Prompt for Directory Path and Validate it
 - [x] Correctly navigate to the environment directory
 - [x] Verify and correct the path
 - [x] Check for Missing Environment Variables
@@ -18,5 +18,3 @@
 - [x] Investigate: Explore: latest programming language features
 - [x] Investigate: Explore: debugging techniques for complex systems
 - [x] Investigate: Explore: debugging techniques for complex systems
-- [x] Investigate: Explore: software engineering best practices
-- [x] Investigate: Explore: latest programming language features
