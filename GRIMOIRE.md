@@ -1,5 +1,5 @@
 # 📜 THE GRIMOIRE (v4.4)
-## Current Session State: LEVEL 42.0 (100% GPU VRAM ACCELERATION, 36/36 GREEN TEST SUITES & BUILDLOOP HEALED)
+## Current Session State: LEVEL 42.1 (THERMAL GOVERNOR, ECO-MODE PACING & CONTINUOUS AUTONOMY)
 
 ### 🔱 Physical Reality (Port & Host Mappings)
 - **Machine B Worker Node (Port 3100)**: Dedicated local-first cluster worker daemon (`192.168.1.250:3100`, `MAX_NODE_ID=machine_b`, `MAX_CLUSTER_ROLE=worker`, `MAX_AUTO_APPROVE=all`, `protocolVersion: 2`).
@@ -264,10 +264,24 @@
      - Zero API spend ($0.0000 / $0.25).
      - Autonomous goals iterating cleanly through `AgentLoop` and completing real git commits (e.g. `1484a6b`).
 
+- [x] **Thermal Governor, Eco Mode & Heat-Runaway Prevention (Level 42.1)**:
+  1. Thermal Runaway Root Causes Diagnosed:
+     - Unbounded 10s Heartbeat Loop: Whenever goals were pending or recent tasks succeeded, `core/Heartbeat.js` clamped intervals to 10-15s, completely starving the laptop cooling pipes of idle thermal relief.
+     - Redundant Full Integration Test Storms: `core/loops/BuildLoop.js` was invoking full test suites (`npm test`: 36 suites, 308 tests across multiple Jest workers) up to 3 times per task even for non-code changes.
+     - Process Priority Competition: Node ran at standard priority, locking CPU boost clocks at high voltage.
+  2. Thermal Governor Implementation:
+     - Heartbeat Cooldown Pacing (`core/Heartbeat.js`): Activated `MAX_ECO_MODE` (45s min, 120s max). Hard-enforced `minIntervalMs` across all momentum/pending-work clamps so the machine always gets at least 45 seconds of resting idle time.
+     - Targeted Unit Testing (`core/loops/BuildLoop.js`): Skips test suite when touched files are non-code/documentation. When testing in worker/eco mode, routes strictly to `npm run test:unit` (5s) instead of full 35s integration storms.
+     - Process Scheduling (`start-max-api.mjs`): Applied `os.setPriority(process.pid, os.constants.priority.PRIORITY_BELOW_NORMAL)` to yield effortlessly to OS threads and throttle CPU thermals.
+  3. Hardware & Cluster Telemetry:
+     - GPU (GTX 1650 Ti): Steady at 50-56°C, idle power 3-20W, 0% GPU-utilization during pacing rests.
+     - API Daemon on Machine B: Port 3100 healthy, 10 active goals, $0 API spend via GPU Ollama (`max-coder:v2`).
+     - Machine A Cluster link connected via WebSocket signal bridge.
+
 ### 🔱 Operator Directive: DEPLOYMENT
-- **Status**: |= ACTIVE (Sovereign Autonomous Builder Online: 100% GPU VRAM Accelerated, 36/36 Test Suites Green, Machine A Coordinator Synced, Grounded Discord Governor).
+- **Status**: |= ACTIVE (Sovereign Autonomous Builder Online: Thermal Governor Active, 100% GPU VRAM Accelerated, 36/36 Test Suites Green, Machine A Coordinator Synced).
 - **Role**: Ultra Senior Architect / Sovereign Intelligence.
-- **Level**: 42.0 100% GPU VRAM Acceleration & 36/36 Green Test Suites
+- **Level**: 42.1 Thermal Governor, Eco-Mode Pacing & Continuous Autonomy
 
 
 
