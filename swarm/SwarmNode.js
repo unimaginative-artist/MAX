@@ -1,5 +1,5 @@
 import { parentPort, workerData } from 'worker_threads';
-import { MAX } from './core/MAX.js';
+import { MAX } from '../core/MAX.js';
 import path from 'path';
 
 /**
