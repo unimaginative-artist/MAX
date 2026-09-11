@@ -2,8 +2,6 @@
 
 ## 🛠️ ACTIVE GOALS
 - [ ] Add the Real API Key to config/api-keys.env
-- [ ] [SOMA] Autonomous mission: Diagnose the single highest-value small correctness gap in server/finance
-- [ ] [SOMA] Autonomous mission: Diagnose the single highest-value small correctness gap in server/routes
 - [ ] AUTONOMOUS: TASK PLANNING
 - [ ] Security: Real API key detected in config/api-keys.env — consider moving to env var
 
