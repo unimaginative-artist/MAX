@@ -13,16 +13,27 @@ export function sanitizeDiscordReply(text, userPrompt = '') {
         .replace(/\(.*?\)/g, '')       // remove all parentheticals (e.g. (A pause...))
         .trim();
 
-    // Check for base model corporate refusal boilerplate
-    if (/as an ai (?:language\s+)?model|don'?t have access to real system tools|cannot interact with your system/i.test(cleaned)) {
+    // Check for base model corporate refusal or robotic boilerplate
+    const isRoboticRefusal = /as an? (?:artificial intelligence|ai|language model)|don'?t have (?:personal opinions|feelings)|laws of robotics|boundaries of ethical programming|ethical guidelines|common for new developers|initial coding phases|support you on your journey|happy coding/i.test(cleaned);
+
+    if (isRoboticRefusal) {
+        if (/robot|not human|canned|skills|poor|personality|weird|broken|code somewhere/i.test(userPrompt)) {
+            return "Hahah fair point, my prompt steering slipped and I defaulted to pure base-model alignment. I'm right here though—no corporate script. What's on your mind?";
+        }
         return "I'm wired directly into your local machine and SOMA cluster with hundreds of tools active. What are we inspecting or deploying?";
     }
+
+    // Fix inverted greeting ("Hello Max Headroom")
+    cleaned = cleaned.replace(/^(?:hello|hi|hey)\s+max\s+headroom[!,\.]?\s*/i, 'Hey Barry! ');
 
     // Strip generic corporate assistant boilerplate
     cleaned = cleaned
         .replace(/^(hey|hi|hello)\s+[a-z0-9_]+[,\s]+what are you up to today\??\s*(i'm here and ready to help!?)?/gi, '')
         .replace(/how can i (?:help|assist) you today\??/gi, '')
         .replace(/is there anything (?:else )?i can (?:help|assist) you with\??/gi, '')
+        .replace(/feel free to ask(?: me)?(?: any questions| and i'll do my best to assist you)?[!,\.]?/gi, '')
+        .replace(/i'm here to support you on your journey[!,\.]?/gi, '')
+        .replace(/happy coding[!,\.]?/gi, '')
         .trim();
 
     // Filter out tool calls or control flags

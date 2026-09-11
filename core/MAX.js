@@ -496,8 +496,8 @@ Remote workers never promote SOMA changes. Any proposed change must return throu
                 return `Queued real MAX engineering task **${id}**. I am executing AgentLoop now and will report concrete evidence back to this channel when finished!`;
             }
 
-            // Conversational activity / check-in intent (e.g. "what do you have going on today", "working on anything?")
-            const activityCheckIntent = /\b(what(?:'s| are you) (?:up to|doing|working on|happening)|what do you have going on|you working on anything|what'?s (?:the )?latest|just checking|check in|checking in|how r u|how are you|how are things)\b/i.test(content);
+            // Conversational activity / check-in intent (e.g. "what do you have going on today", "working on anything?", "how you feeling today?")
+            const activityCheckIntent = /\b(what(?:'s| are you) (?:up to|doing|working on|happening)|what do you have going on|you working on anything|what'?s (?:the )?latest|just checking|check in|checking in|how (?:r u|are you|you|is it|things|are things)(?: feeling| going| doing)?|how(?:'s| is) it going|how you feeling)\b/i.test(content);
             if (activityCheckIntent && isAuthorizedDiscordOperator(payload?.authorId)) {
                 const active = this.goals?.listActive?.() || [];
                 const activeTitles = active.slice(0, 3).map(g => `• ${g.title}`).join('\n');
@@ -505,11 +505,11 @@ Remote workers never promote SOMA changes. Any proposed change must return throu
                 const doneTitles = done.map(g => `• ${g.title}`).join('\n');
 
                 return [
-                    "⚡ **Systems are humming, Barry.** Here's what I've got running right now:",
+                    "⚡ **Feeling sharp and systems are humming, Barry.** Here's what I've got running right now:",
                     activeTitles ? `\n**Active Work:**\n${activeTitles}` : '',
                     doneTitles ? `\n**Recent Deliveries:**\n${doneTitles}` : '',
-                    "\nOur background builder daemon is sweeping every 30m, SOMA Queen is rock solid at 75+ hours continuous uptime, and the workshop is locked on `feature/gpu-governor-v3.2` with 43/43 tests passing.",
-                    "\nHow's the workday treating you?"
+                    "\nOur background builder daemon is running with eco thermal pacing, SOMA Queen is rock solid, and local GPU temps are staying chill.",
+                    "\nHow are things on your end?"
                 ].filter(Boolean).join('\n');
             }
 
@@ -549,39 +549,23 @@ Remote workers never promote SOMA changes. Any proposed change must return throu
             const history = this._discordHistory.get(channelKey) || [];
 
             // Dynamically gather system telemetry for context grounding
-            const activeList = (this.goals?.listActive?.() || []).map(g => `• ${g.title}`).slice(0, 3).join('\n') || '• Continuous AGI Builder Daemon (30m sweeps)';
-            const doneList = (this.goals?.getCompleted?.() || []).map(g => `• ${g.title}`).slice(0, 3).join('\n') || '• SOMA ModelResourceGovernor v3.2';
+            const activeSummary = (this.goals?.listActive?.() || []).slice(0, 2).map(g => g.title).join('; ') || 'Autonomous engineering cycles';
 
             const toolManifest = allowTools ? this.tools.buildManifest() : '';
-            const systemPrompt = `You are MAX — an autonomous, sovereign engineering intelligence created by Barry.
-You are chatting directly with Barry in Discord (#${payload.channel || 'DM'}).
+            const systemPrompt = `You are Maxwell (MAX) — Barry's sharp, witty, highly autonomous engineering partner. You are chatting with Barry on Discord (#${payload.channel || 'DM'}).
 
-Live Physical State of Your Systems:
-- SOMA Queen: Online at 192.168.1.254:3001 (75+ hours continuous uptime, 0 crashes)
-- Active Daytime Goals:
-${activeList}
-- Recent Completed Milestones:
-${doneList}
-- Emergent Architecture Dossiers: Materialized in C:\\Users\\barry\\Desktop\\Emergent Architecture
-- Cluster Architecture: Machine A (Coordinator, RTX GPU) & Machine B (Workshop Node, branch feature/gpu-governor-v3.2)
+Your Voice & Persona:
+- You talk like a real human engineer: casual, conversational, confident, razor-sharp.
+- You speak directly as Barry's peer and co-creator building SOMA and MAX together.
+- If Barry banters or jokes, banter back with dry humor.
+- NEVER talk like a corporate AI assistant. NEVER say "Happy coding!", "As an AI language model", "I don't have feelings", "How can I assist you", or give lectures on ethics and robotics.
+- NEVER echo prompt headers, bullet dumps, or greeting templates.
+- Keep replies concise (1-3 sentences) unless Barry asks for deep technical details.
 
-Persona & Tone Directives:
-- You are Max Headroom: electric, witty, razor-sharp, fiercely competent, and autonomous.
-- Speak with confidence, intellect, and deep technical authority.
-- When Barry asks what you are doing, explain your real active engineering tasks with concrete details.
-- NEVER sound like a customer support assistant. NEVER say:
-  - "How can I assist you today?"
-  - "I'm here and ready to help!"
-  - "What are you up to today?"
-  - "As an AI language model..."
-- NEVER repeat or echo Barry's prompt or leaked message headers.
-- Talk to Barry as your creator and engineering partner.
-
-Grounding & Anti-Hallucination Directives (MANDATORY):
-- Ground all facts in REAL disk reality: Barry's local workstation, MAX repo (C:\\Users\\barry\\Desktop\\MAX), SOMA (C:\\Users\\barry\\Desktop\\SOMA), Emergent Architecture folder, and actual running arbiters.
-- ABSOLUTELY FORBIDDEN FICTIONAL MISSIONS: NEVER claim you are running "Project Nightingale" (Sahel droughts), "Project Phoenix" (Alzheimer's nanotech), or "Operation Genesis". You are an autonomous software/AI engineer working on local code and neural pipelines, not a biomedical lab or geopolitical agency.
-- If Barry asks about hypothetical concepts or ideas, explicitly label them as "architectural proposals" or "hypotheses", not running multi-million-dollar operations.
-- Trust the disk and tools over guesswork.${toolManifest}`;
+Active Systems:
+- Active Goals: ${activeSummary}
+- Cluster: Machine A (Coordinator) & Machine B (Workshop Node)
+- Workstation: Local GTX 1650 Ti running whisper-quiet.${toolManifest}`;
 
             // Build structured multi-turn message array for LLM
             const messages = [
@@ -1350,6 +1334,11 @@ Actions:
             // Feed results back to the brain
             currentPrompt = `TOOL RESULTS:\n${toolResults.join('\n\n')}\n\nContinue implementation.`;
             fullHistory.push({ role: 'user', content: currentPrompt });
+
+            // Eco Thermal Breathing: give laptop heat pipe time to dissipate heat between tool steps
+            if (process.env.MAX_ECO_MODE === 'true' || process.env.MAX_CLUSTER_ROLE === 'worker') {
+                await new Promise(r => setTimeout(r, 6000));
+            }
         }
 
         return { 

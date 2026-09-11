@@ -208,7 +208,9 @@ export class BuildLoop {
             `When finished, output: "DONE: [one paragraph describing exactly what was changed and where]"`;
 
         console.log(`  [BuildLoop] 🤖 Executing via agentic think loop...`);
-        const result = await max.executeAgenticThink(prompt, { temperature: 0.15, maxTokens: 8192, tier: 'code' });
+        const isEco = process.env.MAX_ECO_MODE === 'true' || process.env.MAX_CLUSTER_ROLE === 'worker';
+        const maxTokens = isEco ? 2048 : 4096;
+        const result = await max.executeAgenticThink(prompt, { temperature: 0.15, maxTokens, tier: 'code' });
 
         // Extract which files were modified from tool calls
         const toolCallsMade = Array.isArray(result.toolCallsMade) ? result.toolCallsMade : [];
