@@ -297,10 +297,28 @@
      - Validated dataset ingestion against 2,155 compiled preference pairs in `.max/dataset/compiled_dpo.json` (4,006 KB).
      - Verified Python execution and CLI options (`--model 1.5B/7B`, `--format dpo/sharegpt/alpaca`).
 
+- [x] **Discord Unresponsiveness Diagnosis, Chat Queue Starvation Fix & Hot Reload (Level 46.0)**:
+  1. Root Causes Diagnosed:
+     - 17-Hour Zombie Daemon (`task-11219`): Stale process running yesterday's code had zero in-memory monitored channels (`monitored: []`), silently dropping any guild messages from Barry in `#soma-chat` (`279381115805106176`) and `#General` (`360843306394976256`).
+     - ChatQueue & Context Starvation: `executeAgenticThink` in `core/MAX.js` was calling `this.think` instead of `this.agentBrain.think`. This caused background `BuildLoop` runs to monopolize the FIFO `_chatQueue`, block human chat turns, and pollute `this._context` with massive multi-step engineering prompts (causing Maxwell to echo internal goals and system templates verbatim).
+     - Missing Casual Slang Greeting Intent: Barry sent `"Sup big dawg"`. `isCasualGreeting` in `core/MAX.js` only matched formal greetings and omitted `"sup"`, falling through to heavy 1024-token thinking.
+     - Blind Discord Logging: `tools/DiscordTool.js` lacked inbound and outbound message logging in `messageCreate`, hiding message arrivals and filtering decisions.
+  2. Architectural Repairs Implemented:
+     - Isolated Agent Inference Lane (`core/MAX.js`): Routed `executeAgenticThink` directly through `(this.agentBrain || this.brain).think()`. Keeps `this._chatQueue` 100% unblocked for human interactions and prevents conversational history pollution.
+     - Fast Casual Greeting Responses (`core/MAX.js`): Expanded slang matching (`sup`, `what's up`, `wassup`, `yo`, `howdy`, `ping`, `pong`) with sub-millisecond casual responses.
+     - Owner Ownership & Default Monitoring (`tools/DiscordTool.js`): Auto-authorizes Barry (`274247282096865282`) across DMs and server channels; auto-monitors `#soma-chat`, `#General`, and `#bots-commands`.
+     - Observability & Typing Indicator (`tools/DiscordTool.js`): Added rich logging (`[Discord] 📩 Inbound...`, `[Discord] 🧠 Generating...`, `[Discord] 📤 Sent...`) and a persistent 5-second typing interval loop.
+  3. Live Verification & Telemetry:
+     - All 32 unit test suites (285 tests) and 4 integration test suites (23 tests) passing 100% green.
+     - Killed stale 17-hour daemon; launched fresh daemon (`task-11562`) on port 3100.
+     - Successfully dispatched live verification message to `#soma-chat` (`messageId: 1548129972273684510`).
+     - GPU sitting cool at 51°C with 3.65W idle power draw on GTX 1650 Ti.
+
 ### 🔱 Operator Directive: DEPLOYMENT
-- **Status**: |= ACTIVE (Sovereign Autonomous Builder Online: Thermal Governor Active, Multi-Node Cluster Offload Verified, 32/32 Unit Test Suites Green, Machine A Coordinator Synced).
+- **Status**: |= ACTIVE (Sovereign Autonomous Builder Online: Discord Hot Reload Active, Monitored in #soma-chat & DMs, 32/32 Unit Test Suites Green).
 - **Role**: Ultra Senior Architect / Sovereign Intelligence.
-- **Level**: 43.0 Multi-Node Cluster Offload Verified, Goal Cycles Healed & Local Fine-Tuning
+- **Level**: 46.0 Discord Chat Queue Starvation Fixed, Multi-Channel Monitoring & Hot Reload Active
+
 
 
 

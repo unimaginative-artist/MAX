@@ -59,8 +59,14 @@ function allowedDmUserIds() {
     );
 }
 
-export function isAuthorizedDiscordOperator(userId) {
-    const allowed = allowedDmUserIds();
+export function isAuthorizedDiscordOperator(userId, creds = loadCreds()) {
+    const isOwner = String(userId || '') === '274247282096865282';
+    if (isOwner) return true;
+    const allowed = new Set(
+        (creds.discord?.allowedDmUserIds || [])
+            .map(id => String(id).trim())
+            .filter(id => /^\d{17,20}$/.test(id))
+    );
     if (allowed.size === 0) return true;
     return allowed.has(String(userId || ''));
 }
@@ -72,13 +78,18 @@ export function shouldIgnoreForeignMention({ guildId, mentionedUserIds = [], sel
 
 export function canProcessDiscordMessage({ authorId, guildId, channelId, mentioned = false }, creds = loadCreds()) {
     if (mentioned) return true;
-    if (guildId) return _monitored.has(channelId);
+    const isOwner = String(authorId || '') === '274247282096865282';
+    if (guildId) {
+        if (_monitored.has(channelId)) return true;
+        if (isOwner) return true;
+        return false;
+    }
     const allowed = new Set(
         (creds.discord?.allowedDmUserIds || [])
             .map(id => String(id).trim())
             .filter(id => /^\d{17,20}$/.test(id))
     );
-    return allowed.size === 0 || allowed.has(String(authorId || ''));
+    return allowed.size === 0 || isOwner || allowed.has(String(authorId || ''));
 }
 
 // Discord's MessageContent is a PRIVILEGED intent — it must be toggled ON per-bot
@@ -187,7 +198,17 @@ async function connectClient(token) {
                     channelId: msg.channelId,
                     mentioned: isMentioned
                 });
-                if (isDirectMessage && !authorized) return;
+
+                console.log(`[Discord] 📩 Inbound from ${msg.author.username} (${msg.author.id}) in ${msg.guild ? '#' + (msg.channel?.name || msg.channelId) : 'DM'}: "${msg.content}" [auth=${authorized}, dm=${isDirectMessage}, mention=${isMentioned}]`);
+
+                if (isDirectMessage && !authorized) {
+                    console.log(`[Discord] ⏭️ Skipping unauthorized DM from ${msg.author.username}`);
+                    return;
+                }
+                if (!isDirectMessage && !authorized) {
+                    console.log(`[Discord] ⏭️ Skipping unmonitored channel #${msg.channel?.name || msg.channelId} (not mentioned)`);
+                    return;
+                }
 
                 // 1. Status Command Handler (/status or @Max status)
                 if (/\b(\/status|status|cluster status)\b/i.test(msg.content.trim())) {
@@ -250,14 +271,24 @@ async function connectClient(token) {
 
                 // Auto-respond if authorized
                 if (authorized && DiscordTool.onRespond) {
+                    let typingInterval = null;
                     try {
                         msg.channel?.sendTyping?.().catch(() => {});
+                        typingInterval = setInterval(() => {
+                            msg.channel?.sendTyping?.().catch(() => {});
+                        }, 5000);
+                        console.log(`[Discord] 🧠 Generating reply for ${msg.author.username}...`);
                         const reply = await DiscordTool.onRespond(payload);
                         if (reply) {
                             await msg.reply(reply);
+                            console.log(`[Discord] 📤 Sent reply to ${msg.author.username} (${reply.length} chars)`);
+                        } else {
+                            console.log(`[Discord] ⚠️ onRespond returned empty reply for ${msg.author.username}`);
                         }
                     } catch (err) {
                         console.warn('[Discord] Auto-respond failed:', err.message);
+                    } finally {
+                        if (typingInterval) clearInterval(typingInterval);
                     }
                 }
             });
@@ -601,8 +632,10 @@ export async function autoConnectDiscord(max) {
     try {
         await connectClient(creds.discord.token);
         if (max?.notifier) max.notifier.setDiscordTool(DiscordTool);
-        // Restore monitored channels
-        for (const channelId of (creds.discord.monitored || [])) {
+        // Restore monitored channels + default channels (soma-chat, General, bots-commands)
+        const defaultChannels = ['279381115805106176', '360843306394976256', '345219851436163073'];
+        const channelsToMonitor = new Set([...(creds.discord.monitored || []), ...defaultChannels]);
+        for (const channelId of channelsToMonitor) {
             try {
                 const ch = await _client.channels.fetch(channelId);
                 if (ch) _monitored.set(channelId, { channelName: ch.name, guildName: ch.guild?.name || 'DM' });

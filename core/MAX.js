@@ -467,7 +467,17 @@ Remote workers never promote SOMA changes. Any proposed change must return throu
                     : `SOMA is offline. I verified that against her health endpoint and queued goal ${id || ''} to inspect process state/logs. I will report back here shortly.`;
             }
 
-            const isCasualGreeting = /^(test|hello|hi|hey|yo|ping|pong|awake|u awake|are you awake)\b/i.test(content) && content.split(/\s+/).length <= 4;
+            const isCasualGreeting = /^(test|hello|hi|hey|yo|ping|pong|awake|u awake|are you awake|sup|what'?s up|wassup|howdy|good morning|morning|evening)\b/i.test(content) && content.split(/\s+/).length <= 5;
+            if (isCasualGreeting && isAuthorizedDiscordOperator(payload?.authorId) && content.length < 25) {
+                const greetings = [
+                    "Yo Barry! Systems are green and humming. What are we building today?",
+                    "Sup big dawg! Standing by and ready. What's on your mind?",
+                    "Hey! I'm right here. Everything's running smooth. What's up?",
+                    "Yo! Workshop node is chill and ready. What are we tackling?"
+                ];
+                return greetings[Math.floor(Math.random() * greetings.length)];
+            }
+
             const isExplicitQuestion = /^(what|why|how|who|when|where|is|are|can you|could you|tell me|did you|do you|should we)\b/i.test(content);
             const isExplicitTaskCommand = /\b(queue (?:task|goal)|start (?:task|goal)|new (?:task|goal)|run (?:task|goal)|add (?:task|goal)|autonomous task|take a crack at|work on this)\b/i.test(content)
                 || (!isExplicitQuestion && /^(?:please\s+)?(fix|patch|debug and fix|implement|build|refactor|deploy|scour)\b/i.test(content));
@@ -1279,14 +1289,15 @@ Actions:
         while (iteration < maxIterations) {
             iteration++;
             
-            // We use the normal think method for the LLM call
-            const result = await this.think(currentPrompt, {
+            // Use dedicated agentBrain lane to avoid blocking chat queue and polluting conversational context
+            const brain = this.agentBrain || this.brain;
+            const result = await brain.think(currentPrompt, {
                 ...options,
                 tier: options.tier || 'smart',
                 skipInlineTools: true
             });
 
-            const response = result.response;
+            const response = result.text || result.response;
             fullHistory.push({ role: 'assistant', content: response });
 
             // Look for TOOL: calls using the robust brace-balanced parser
