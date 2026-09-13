@@ -74,7 +74,7 @@ export class SelfHealingSandbox {
 
     async _checkSyntax(filePath) {
         try {
-            await execAsync(`node --check "${filePath}"`);
+            await execAsync(`node --check "${filePath}"`, { windowsHide: true });
             return { valid: true };
         } catch (err) {
             return { valid: false, error: err.stderr || err.stdout || err.message };
@@ -85,7 +85,7 @@ export class SelfHealingSandbox {
         try {
             // Run lightweight test verification if test file exists
             if (fs.existsSync('test_orchestrator.mjs')) {
-                await execAsync('node test_orchestrator.mjs', { timeout: 10000 });
+                await execAsync('node test_orchestrator.mjs', { timeout: 10000, windowsHide: true });
             }
             return { success: true };
         } catch (err) {

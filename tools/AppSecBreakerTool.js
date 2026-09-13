@@ -70,7 +70,7 @@ export const AppSecBreakerTool = {
          */
         async auditDeps() {
             try {
-                const output = execSync('npm audit --json', { encoding: 'utf8', stdio: 'pipe' });
+                const output = execSync('npm audit --json', { encoding: 'utf8', stdio: 'pipe', windowsHide: true });
                 const parsed = JSON.parse(output);
                 return { 
                     success: true, 

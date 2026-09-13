@@ -99,7 +99,8 @@ export class DebugLoop extends EventEmitter {
             const { stdout, stderr } = await execAsync(testCommand, {
                 cwd:     process.cwd(),
                 timeout: this.config.timeoutMs,
-                env:     { ...process.env, CI: 'true', FORCE_COLOR: '0', NO_COLOR: '1' }
+                env:     { ...process.env, CI: 'true', FORCE_COLOR: '0', NO_COLOR: '1' },
+                windowsHide: true
             });
             return { success: true, output: (stdout + stderr).trim() };
         } catch (err) {

@@ -169,7 +169,7 @@ async function createReadyLogStream(logPath) {
 
 async function killWindowsListeners(port) {
     if (process.platform !== 'win32') return;
-    const { stdout = '' } = await execFileAsync('netstat', ['-ano', '-p', 'tcp']).catch(() => ({ stdout: '' }));
+    const { stdout = '' } = await execFileAsync('netstat', ['-ano', '-p', 'tcp'], { windowsHide: true }).catch(() => ({ stdout: '' }));
     const pids = new Set();
     for (const line of stdout.split(/\r?\n/)) {
         const columns = line.trim().split(/\s+/);
@@ -181,7 +181,7 @@ async function killWindowsListeners(port) {
         }
     }
     await Promise.all([...pids].map(pid =>
-        execFileAsync('taskkill', ['/f', '/t', '/pid', pid]).catch(() => {})
+        execFileAsync('taskkill', ['/f', '/t', '/pid', pid], { windowsHide: true }).catch(() => {})
     ));
 }
 

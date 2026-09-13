@@ -44,7 +44,7 @@ export class HydraController {
             // 2. Create the worktree
             // -b creates a new branch for this head to work on
             console.log(`[HYDRA] 🛠️ Creating worktree at ${headId}...`);
-            await exec(`git worktree add -b ${branchName} "${worktreePath}" HEAD`, { cwd: this.basePath });
+            await exec(`git worktree add -b ${branchName} "${worktreePath}" HEAD`, { cwd: this.basePath, windowsHide: true });
 
             const head = { 
                 id: headId, 
@@ -74,8 +74,8 @@ export class HydraController {
         console.log(`[HYDRA] 💀 Terminating head: ${headId}...`);
         try {
             // Remove the worktree and the branch
-            await exec(`git worktree remove --force "${head.path}"`, { cwd: this.basePath });
-            await exec(`git branch -D ${head.branch}`, { cwd: this.basePath });
+            await exec(`git worktree remove --force "${head.path}"`, { cwd: this.basePath, windowsHide: true });
+            await exec(`git branch -D ${head.branch}`, { cwd: this.basePath, windowsHide: true });
             this.heads.delete(headId);
             return true;
         } catch (err) {
@@ -98,7 +98,8 @@ export class HydraController {
             // Run the audit command inside the worktree
             const { stdout, stderr } = await exec(`${command} "${fullPath}"`, { 
                 cwd: head.path,
-                timeout: 10000 
+                timeout: 10000,
+                windowsHide: true
             });
             console.log(`[HYDRA-SHIELD] ✅ Audit passed for ${headId}/${filePath}`);
             return { success: true, stdout };

@@ -413,7 +413,7 @@ function verifySyntax(filePath, content) {
     } else if (ext === '.js' || ext === '.mjs' || ext === '.cjs') {
         try {
             // node --check is the only reliable way to verify ESM syntax
-            execFileSync('node', ['--check', filePath], { stdio: 'ignore' });
+            execFileSync('node', ['--check', filePath], { stdio: 'ignore', windowsHide: true });
         } catch (e) {
             return `Syntax check failed: ${e.message}`;
         }

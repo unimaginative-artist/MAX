@@ -20,4 +20,14 @@ afterEach(async () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
+test('stores and retrieves an artifact', () => {
+    const pointer = manager.store('test_snippet', 'console.log("hello")', 'code');
+    expect(pointer).toContain('[ARTIFACT:');
+    const list = manager.list();
+    expect(list.length).toBe(1);
+    expect(list[0].name).toBe('test_snippet');
+    const retrieved = manager.get(list[0].id);
+    expect(retrieved.content).toBe('console.log("hello")');
+});
+
 // SENTINEL_END

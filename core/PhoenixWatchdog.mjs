@@ -35,7 +35,8 @@ async function resurrect() {
     
     const child = spawn(command, args, {
         detached: true,
-        stdio: 'ignore' // Phoenix should not block the new process
+        stdio: 'ignore', // Phoenix should not block the new process
+        windowsHide: true
     });
 
     child.unref();

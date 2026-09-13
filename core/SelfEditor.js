@@ -133,7 +133,7 @@ The output must be valid JavaScript that can directly replace the original file.
         if (!entry) throw new Error(`No staged version of ${relPath}`);
 
         return new Promise(resolve => {
-            const proc = spawn('node', ['--check', entry.stagePath], { timeout: 10_000 });
+            const proc = spawn('node', ['--check', entry.stagePath], { timeout: 10_000, windowsHide: true });
             let stderr = '';
             proc.stderr.on('data', d => { stderr += d.toString(); });
             proc.on('close', code => resolve({ ok: code === 0, error: stderr.trim() }));
@@ -151,7 +151,7 @@ The output must be valid JavaScript that can directly replace the original file.
         const script  = `import(${JSON.stringify(fileUrl)}).then(()=>process.exit(0)).catch(e=>{process.stderr.write(e.message);process.exit(1)})`;
 
         return new Promise(resolve => {
-            const proc = spawn(process.execPath, ['--input-type=module'], { timeout: 15_000 });
+            const proc = spawn(process.execPath, ['--input-type=module'], { timeout: 15_000, windowsHide: true });
             let stderr = '';
             proc.stderr.on('data', d => { stderr += d.toString(); });
             proc.stdin.write(script);

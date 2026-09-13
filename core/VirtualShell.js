@@ -48,6 +48,10 @@ export class VirtualShell extends EventEmitter {
             this.ready = false;
             this.proc = null;
         });
+        this.proc.on('error', () => {
+            this.ready = false;
+            this.proc = null;
+        });
 
         this.ready = true;
         // Suppress cmd.exe command echo on Windows

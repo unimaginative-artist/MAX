@@ -561,7 +561,7 @@ export class SomaBridge {
                 const { execFile } = await import('child_process');
                 const { promisify } = await import('util');
                 const execFileAsync = promisify(execFile);
-                await execFileAsync(process.execPath, ['--check', tempFile]);
+                await execFileAsync(process.execPath, ['--check', tempFile], { windowsHide: true });
                 await fs.unlink(tempFile).catch(() => {});
             } catch (err) {
                 console.error(`[SomaBridge] ❌ Syntax check failed for ${normalized}:`, err.message);

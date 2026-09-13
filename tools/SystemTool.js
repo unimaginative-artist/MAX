@@ -31,7 +31,8 @@ Available actions:
                 '--mode', 'chat' // Default back to chat mode
             ], {
                 detached: true,
-                stdio: 'ignore'
+                stdio: 'ignore',
+                windowsHide: true
             });
 
             watchdog.unref();

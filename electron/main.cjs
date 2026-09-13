@@ -59,7 +59,7 @@ function findNode() {
     // Try PATH first
     for (const c of candidates) {
         try {
-            require('child_process').execSync(`${c} --version`, { stdio: 'ignore' });
+            require('child_process').execSync(`${c} --version`, { stdio: 'ignore', windowsHide: true });
             return c;
         } catch {}
     }
@@ -93,6 +93,7 @@ async function startServer() {
         cwd: APP_ROOT,
         env: { ...process.env, MAX_PORT: '3100', ELECTRON: '1' },
         stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
     });
 
     serverProc.stderr.on('data', d => process.stderr.write('[server] ' + d));

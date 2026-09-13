@@ -414,10 +414,10 @@ Respond ONLY in JSON format:
 
     async _gitCheckpoint(file, proposalId) {
         try {
-            await execAsync(`git add "${file}"`, { cwd: process.cwd() });
+            await execAsync(`git add "${file}"`, { cwd: process.cwd(), windowsHide: true });
             await execAsync(
                 `git commit -m "checkpoint: before self-improvement ${proposalId} (${file})" --allow-empty`,
-                { cwd: process.cwd() }
+                { cwd: process.cwd(), windowsHide: true }
             );
             console.log(`[SelfImprovement] 📸 Git checkpoint created`);
         } catch {
@@ -430,7 +430,7 @@ Respond ONLY in JSON format:
         const { promisify } = await import('util');
         const execP = promisify(exec);
         try {
-            await execP(`node --check "${file}"`, { cwd: process.cwd(), timeout: 10_000 });
+            await execP(`node --check "${file}"`, { cwd: process.cwd(), timeout: 10_000, windowsHide: true });
             return { ok: true };
         } catch (err) {
             return { ok: false, error: err.stderr || err.message };

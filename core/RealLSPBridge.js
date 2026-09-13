@@ -38,7 +38,8 @@ class LSPClient extends EventEmitter {
 
         this._proc = spawn(this._cmd, this._args, {
             stdio: ['pipe', 'pipe', 'pipe'],
-            shell: process.platform === 'win32'
+            shell: process.platform === 'win32',
+            windowsHide: true
         });
 
         this._proc.stdout.on('data', chunk => this._recv(chunk.toString('utf8')));
@@ -224,7 +225,7 @@ export class RealLSPBridge extends EventEmitter {
             const result = {};
             for (const [lang, { cmd }] of Object.entries(LSP_SERVERS)) {
                 try {
-                    await execAsync(`${cmd} --version`, { timeout: 3000 });
+                    await execAsync(`${cmd} --version`, { timeout: 3000, windowsHide: true });
                     result[lang] = true;
                 } catch {
                     result[lang] = false;
@@ -233,7 +234,7 @@ export class RealLSPBridge extends EventEmitter {
             // Pyright as Python fallback
             if (!result.python) {
                 try {
-                    await execAsync('pyright-langserver --version', { timeout: 3000 });
+                    await execAsync('pyright-langserver --version', { timeout: 3000, windowsHide: true });
                     LSP_SERVERS.python = { cmd: 'pyright-langserver', args: ['--stdio'] };
                     result.python = true;
                 } catch { /* not available */ }

@@ -63,7 +63,7 @@ async function _savePids() {
 
 async function _killByPid(pid) {
     if (process.platform === 'win32') {
-        try { await execAsync(`taskkill /F /T /PID ${pid}`); } catch {}
+        try { await execAsync(`taskkill /F /T /PID ${pid}`, { windowsHide: true }); } catch {}
     } else {
         try { process.kill(-pid, 'SIGKILL'); } catch {}
         try { process.kill(pid,  'SIGKILL'); } catch {}
@@ -242,7 +242,7 @@ export const ShellTool = {
             const proc  = spawn(
                 isWin ? 'cmd.exe' : 'bash',
                 isWin ? ['/c', command] : ['-c', command],
-                { cwd: runCwd, env: process.env, detached: false, stdio: 'pipe' }
+                { cwd: runCwd, env: process.env, detached: false, stdio: 'pipe', windowsHide: true }
             );
 
             const log     = [];

@@ -68,7 +68,7 @@ REQUIREMENTS:
     async runTests() {
         console.log(`[TestGenerator] 🏃 Running test suite...`);
         try {
-            const { stdout, stderr } = await execAsync('npm test');
+            const { stdout, stderr } = await execAsync('npm test', { windowsHide: true });
             return { success: true, output: stdout + stderr };
         } catch (err) {
             return { success: false, output: err.stdout + err.stderr, error: err.message };

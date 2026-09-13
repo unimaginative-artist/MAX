@@ -82,7 +82,7 @@ export class EdgeWorkerOrchestrator {
                 $graphics.Dispose()
                 $bitmap.Dispose()
             `;
-            execSync(`powershell.exe -NoProfile -Command "${psScript.replace(/\n/g, '')}"`);
+            execSync(`powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "${psScript.replace(/\n/g, '')}"`, { windowsHide: true });
 
             if (!fs.existsSync(screenshotPath)) throw new Error('Failed to capture native screenshot');
 

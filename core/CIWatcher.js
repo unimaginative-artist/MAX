@@ -58,7 +58,8 @@ export class CIWatcher extends EventEmitter {
             const { stdout, stderr } = await execAsync(this.testCommand, {
                 cwd:     this.cwd,
                 timeout: 120_000,
-                env:     { ...process.env, CI: 'true', FORCE_COLOR: '0' }
+                env:     { ...process.env, CI: 'true', FORCE_COLOR: '0' },
+                windowsHide: true
             });
 
             const output = (stdout + stderr).trim();

@@ -14,7 +14,7 @@ const execFileAsync = promisify(execFile);
 // All git calls go through here — args is always an array, never a string
 async function git(args, cwd = process.cwd()) {
     try {
-        const { stdout, stderr } = await execFileAsync('git', args, { cwd, timeout: 30000 });
+        const { stdout, stderr } = await execFileAsync('git', args, { cwd, timeout: 30000, windowsHide: true });
         return { success: true, output: stdout.trim(), stderr: stderr.trim() };
     } catch (err) {
         return { success: false, error: err.message, stderr: err.stderr?.trim() };
