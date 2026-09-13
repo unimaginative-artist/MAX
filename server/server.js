@@ -943,7 +943,7 @@ Reply ONLY with JSON: {"verdict":"approve"|"deny"|"escalate","confidence":0.0-1.
         if (!max.soma) return res.status(500).json({ error: 'SomaBridge not initialized' });
 
         if (enable) {
-            max.soma.baseUrl = 'http://127.0.0.1:3001';
+            max.soma.baseUrl = process.env.SOMA_URL || 'http://192.168.1.254:3001';
             const ok = await max.soma._probe();
             res.json({ active: ok, available: ok });
         } else {

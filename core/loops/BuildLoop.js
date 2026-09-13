@@ -98,6 +98,29 @@ export class BuildLoop {
             max.soma.remember(mem, { source: 'MAX_BuildLoop', success: verified }).catch(() => {});
         }
 
+        // ── Phase 7: Promotion Gate (Workshop-to-Production Pipeline) ────────
+        if (verified && max.soma?.available && execResult.modifiedFiles?.length > 0) {
+            const somaFiles = execResult.modifiedFiles.filter(f => f.toLowerCase().includes('soma'));
+            for (const sf of somaFiles) {
+                try {
+                    const norm = sf.replace(/\\/g, '/');
+                    const rel = norm.includes('/SOMA/') ? norm.split('/SOMA/')[1] : path.basename(sf);
+                    const content = await fs.readFile(sf, 'utf8');
+                    console.log(`  [BuildLoop] 🚀 Promoting verified workshop change "${rel}" to Machine A Main SOMA...`);
+                    const promResult = await max.soma.promoteToMainSoma({
+                        relativePath: rel,
+                        content,
+                        rationale: `Goal verified: ${goal.title}`
+                    });
+                    if (promResult.success) {
+                        console.log(`  [BuildLoop] 🏆 Promoted ${rel} to Machine A Main SOMA!`);
+                    }
+                } catch (e) {
+                    console.warn(`  [BuildLoop] ⚠️ SOMA promotion skipped for ${sf}: ${e.message}`);
+                }
+            }
+        }
+
         return { goal: goal.title, success: verified, summary: execResult.summary };
     }
 

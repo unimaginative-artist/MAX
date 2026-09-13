@@ -269,27 +269,48 @@ export class Brain {
         return this._runSmart(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages, signal);
     }
 
-    // ─── Code tier — deepseek-reasoner or local code model ──────────────
+    // ─── Code tier — deepseek-reasoner, SOMA QuadBrain, or local code model ──
     async _runCode(prompt, systemPrompt, temperature, maxTokens, onToken = null, messages = null, signal = null) {
+        // Priority 1: Cloud DeepSeek (if API key present and cloud allowed)
+        if (this._cloudAllowed() && this._validKey(this._smart.deepseekKey)) {
+            try {
+                return await this._deepseek(prompt, systemPrompt, temperature, maxTokens, this._smart.deepseekCodeModel, onToken, messages, this.codeTimeout, signal);
+            } catch (err) {
+                console.warn(`[Brain] Code tier DeepSeek error: ${err.message} — trying SOMA QuadBrain`);
+            }
+        }
+
+        // Priority 2: SOMA QuadBrain on Machine A (via SomaBridge over LAN)
+        if (this.max?.soma?.available) {
+            try {
+                const somaResp = await this.max.soma.think(prompt, {
+                    systemPrompt,
+                    temperature,
+                    maxTokens,
+                    timeout: this.codeTimeout
+                });
+                if (somaResp?.text) {
+                    return {
+                        text: somaResp.text,
+                        metadata: {
+                            model: somaResp.model || 'SOMA-LOGOS',
+                            latency: somaResp.latency || 0,
+                            backend: 'SOMA'
+                        }
+                    };
+                }
+            } catch (err) {
+                console.warn(`[Brain] Code tier SOMA bridge error: ${err.message} — falling back to local model`);
+            }
+        }
+
+        // Priority 3: Local Ollama code model
         if (this._smart.backend === 'ollama') {
             const model = this._smart.ollamaCodeModel || this._smart.ollamaModel || this._fast.ollamaModel;
             return this._ollama(model, prompt, systemPrompt, temperature, maxTokens, this.codeTimeout, onToken, messages, signal);
         }
 
-        const econ = this.max?.economics;
-        if (!this._cloudAllowed()) {
-            console.warn(`[Brain] 💰 Cloud code tier unavailable — routing to local fast model`);
-            return this._runFast(prompt, systemPrompt, temperature, maxTokens, onToken, messages, signal);
-        }
-
-        if (this._validKey(this._smart.deepseekKey)) {
-            try {
-                return await this._deepseek(prompt, systemPrompt, temperature, maxTokens, this._smart.deepseekCodeModel, onToken, messages, this.codeTimeout, signal);
-            } catch (err) {
-                console.warn(`[Brain] Code tier DeepSeek error: ${err.message} — falling back to Ollama fast tier`);
-                return this._runFast(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages, signal);
-            }
-        }
+        // Priority 4: Fast tier fallback
         return this._runFast(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages, signal);
     }
 
@@ -310,10 +331,34 @@ export class Brain {
             try {
                 return await this._deepseek(prompt, systemPrompt, temperature, maxTokens, null, onToken, messages, this.smartTimeout, signal);
             } catch (err) {
-                console.warn(`[Brain] Smart tier DeepSeek error: ${err.message} — falling back to Ollama fast tier`);
-                return this._runFast(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages, signal);
+                console.warn(`[Brain] Smart tier DeepSeek error: ${err.message} — trying SOMA QuadBrain`);
             }
         }
+
+        // SOMA QuadBrain on Machine A fallback
+        if (this.max?.soma?.available) {
+            try {
+                const somaResp = await this.max.soma.think(prompt, {
+                    systemPrompt,
+                    temperature,
+                    maxTokens,
+                    timeout: this.smartTimeout
+                });
+                if (somaResp?.text) {
+                    return {
+                        text: somaResp.text,
+                        metadata: {
+                            model: somaResp.model || 'SOMA-LOGOS',
+                            latency: somaResp.latency || 0,
+                            backend: 'SOMA'
+                        }
+                    };
+                }
+            } catch (err) {
+                console.warn(`[Brain] Smart tier SOMA bridge error: ${err.message}`);
+            }
+        }
+
         return this._runFast(prompt, systemPrompt, temperature, Math.min(maxTokens, 1024), onToken, messages, signal);
     }
 
