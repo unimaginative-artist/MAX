@@ -181,7 +181,8 @@ export class BuildLoop {
             .map(([p, c]) => `FILE: ${p}\n\`\`\`\n${c}\n\`\`\``)
             .join('\n\n');
 
-        const result = await max.brain.think(
+        const brain = max.agentBrain || max.brain;
+        const result = await brain.think(
             `Generate a concrete implementation plan for this engineering goal.\n\n` +
             `GOAL: ${goal.title}\n` +
             (goal.description ? `DETAILS: ${goal.description}\n\n` : '\n') +
@@ -222,6 +223,15 @@ export class BuildLoop {
             `APPROVED PLAN:\n${plan}\n\n` +
             (codeContext ? `CURRENT CODE:\n${codeContext}\n\n` : '') +
             somaNote + '\n\n' +
+            `TOOL CALL FORMAT (follow exactly):\n` +
+            `• Creating a NEW file:\n` +
+            `  TOOL:file:write:{"filePath":"<path>","content":"<full file content>"}\n` +
+            `• Modifying an EXISTING file:\n` +
+            `  TOOL:file:patch:{"filePath":"<path>","anchor":"<exact code to replace>","content":"<replacement code>"}\n` +
+            `• Reading a file:\n` +
+            `  TOOL:file:read:{"filePath":"<path>"}\n` +
+            `• Searching code:\n` +
+            `  TOOL:file:grep:{"pattern":"<text>","filePattern":".js"}\n\n` +
             `FILE EDITING RULES (follow exactly):\n` +
             `• Modifying an EXISTING file → ALWAYS use file:patch (anchor-based, auto-reverts on syntax error)\n` +
             `• Creating a NEW file → use file:write\n` +
@@ -233,7 +243,7 @@ export class BuildLoop {
         console.log(`  [BuildLoop] 🤖 Executing via agentic think loop...`);
         const isEco = process.env.MAX_ECO_MODE === 'true' || process.env.MAX_CLUSTER_ROLE === 'worker';
         const maxTokens = isEco ? 2048 : 4096;
-        const result = await max.executeAgenticThink(prompt, { temperature: 0.15, maxTokens, tier: 'code' });
+        const result = await max.executeAgenticThink(prompt, { temperature: 0.15, maxTokens, tier: 'code', goal });
 
         // Extract which files were modified from tool calls
         const toolCallsMade = Array.isArray(result.toolCallsMade) ? result.toolCallsMade : [];
@@ -339,14 +349,17 @@ export class BuildLoop {
             if (r !== null) return r.success;
         }
 
-        // Git diff — real evidence of what actually changed
+        // Git diff & status — real evidence of what actually changed
         let diffEvidence = '';
         try {
             const r = await max.tools.execute('shell', 'run', { command: 'git diff --stat HEAD', timeoutMs: 10_000 });
             if (r?.stdout) diffEvidence = r.stdout.slice(0, 400);
+            const status = await max.tools.execute('shell', 'run', { command: 'git status --short', timeoutMs: 5000 });
+            if (status?.stdout) diffEvidence = (diffEvidence ? diffEvidence + '\n' : '') + status.stdout.slice(0, 300);
         } catch { /* non-fatal */ }
 
-        const result = await max.brain.think(
+        const brain = max.agentBrain || max.brain;
+        const result = await brain.think(
             `Did this action successfully complete the goal?\n\n` +
             `GOAL: ${goal.title}\n` +
             `ACTION TAKEN: ${(execResult.summary || '').slice(0, 600)}\n` +
@@ -364,7 +377,7 @@ export class BuildLoop {
 
     _extractFilePaths(text) {
         const raw = text.match(
-            /(?:\.\/|\.\.\/|\/|[A-Za-z]:\\)(?:[\w\-. /\\]+\/)*[\w\-]+\.\w{1,6}/g
+            /(?:\.\/|\.\.\/|\/|[A-Za-z]:[\\/])(?:[\w\-. /\\]+[\\/])*[\w\-]+\.\w{1,6}/g
         ) || [];
         return [...new Set(raw)].filter(p => !p.startsWith('http'));
     }

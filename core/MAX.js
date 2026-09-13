@@ -1279,21 +1279,100 @@ Actions:
      * Calls think(), catches TOOL: calls, executes them, and feeds results back.
      * Continues until the goal is achieved or max iterations reached.
      */
+    /**
+     * Fallback extractor for when the model outputs complete files inside markdown code blocks
+     * rather than formatting as TOOL: calls.
+     */
+    _extractCodeBlocksWithPaths(text) {
+        const results = [];
+        if (!text || typeof text !== 'string') return results;
+
+        const fenceRegex = /```(?:[a-zA-Z0-9_\-./]+)?\s*?\n([\s\S]*?)```/g;
+        let match;
+
+        while ((match = fenceRegex.exec(text)) !== null) {
+            const blockContent = match[1];
+            const matchIndex = match.index;
+            let filePath = null;
+
+            // 1. Check inside the first 3 lines of the code block for a file path comment
+            const firstLines = blockContent.split('\n').slice(0, 3);
+            for (const line of firstLines) {
+                const commentMatch = line.match(/(?:\/\/|#|\/\*)\s*(?:file:?|path:?)?\s*([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]{1,5})/i);
+                if (commentMatch && !commentMatch[1].startsWith('http')) {
+                    filePath = commentMatch[1].trim().replace(/\\/g, '/');
+                    break;
+                }
+            }
+
+            // 2. If not found inside, check the 250 characters immediately preceding the code block
+            if (!filePath && matchIndex > 0) {
+                const preceding = text.slice(Math.max(0, matchIndex - 250), matchIndex);
+                const preMatch = preceding.match(/(?:file|create|write|patch|path|in|to|for|filename|update|target)\s*[:`'"]*([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]{1,5})[`'"]*/i);
+                if (preMatch && !preMatch[1].startsWith('http')) {
+                    filePath = preMatch[1].trim().replace(/\\/g, '/');
+                }
+            }
+
+            if (filePath && blockContent.trim().length > 0) {
+                filePath = filePath.replace(/^[`'"]+|[`'"]+$/g, '');
+                results.push({ filePath, content: blockContent });
+            }
+        }
+
+        return results;
+    }
+
     async executeAgenticThink(prompt, options = {}) {
         const maxIterations = options.maxIterations || 8;
         let iteration = 0;
-        let currentPrompt = prompt;
-        let fullHistory = []; // temporary local history for this task
         const allToolCalls = [];
+
+        // Dedicated agentic system prompt with strict tool execution protocol
+        const systemPrompt = options.systemPrompt || [
+            (this.persona?.getBasePrompt?.() || ''),
+            this.tools?.buildManifest?.() || '',
+            `═══════════════════════════════════════════════════════════════════`,
+            `CRITICAL AGENTIC EXECUTION PROTOCOL:`,
+            `You are MAX running in autonomous engineering execution mode.`,
+            `You have DIRECT ACCESS to filesystem, shell, and tool capabilities.`,
+            `Do NOT reply with conversational plans or explanations of what you intend to do.`,
+            `YOU MUST EXECUTE ACTIONS DIRECTLY BY EMITTING TOOL CALLS.`,
+            ``,
+            `TOOL SYNTAX SPECIFICATION:`,
+            `Every tool call MUST be on its own line with the exact format:`,
+            `TOOL:<toolName>:<actionName>:{"key": "value"}`,
+            ``,
+            `Available Tool Examples:`,
+            `• Read a file:`,
+            `  TOOL:file:read:{"filePath":"core/loops/BuildLoop.js"}`,
+            `• Create a new file:`,
+            `  TOOL:file:write:{"filePath":"test/unit/core/BuildLoop.test.js","content":"<full code here>"}`,
+            `• Patch an existing file:`,
+            `  TOOL:file:patch:{"filePath":"core/loops/BuildLoop.js","anchor":"<exact code to replace>","content":"<new code>"}`,
+            `• Search code:`,
+            `  TOOL:file:grep:{"pattern":"class BuildLoop","filePattern":".js"}`,
+            `• Run tests or commands:`,
+            `  TOOL:shell:run:{"command":"npm test test/unit/core/BuildLoop.test.js"}`,
+            `═══════════════════════════════════════════════════════════════════`
+        ].filter(Boolean).join('\n\n');
+
+        let fullHistory = [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: prompt }
+        ];
 
         while (iteration < maxIterations) {
             iteration++;
             
             // Use dedicated agentBrain lane to avoid blocking chat queue and polluting conversational context
             const brain = this.agentBrain || this.brain;
-            const result = await brain.think(currentPrompt, {
+            const currentContent = fullHistory[fullHistory.length - 1].content;
+            const result = await brain.think(currentContent, {
                 ...options,
-                tier: options.tier || 'smart',
+                systemPrompt,
+                messages: fullHistory,
+                tier: options.tier || 'code',
                 skipInlineTools: true
             });
 
@@ -1301,16 +1380,31 @@ Actions:
             fullHistory.push({ role: 'assistant', content: response });
 
             // Look for TOOL: calls using the robust brace-balanced parser
-            const toolCalls = this.tools.parseToolCalls(response);
+            let toolCalls = this.tools.parseToolCalls(response);
+
+            // Fallback: If no TOOL: calls were found on iteration 1, extract files from markdown blocks
+            if (toolCalls.length === 0 && iteration === 1) {
+                const codeBlocks = this._extractCodeBlocksWithPaths(response);
+                if (codeBlocks.length > 0) {
+                    for (const block of codeBlocks) {
+                        toolCalls.push({
+                            raw: `TOOL:file:write:{"filePath":"${block.filePath}","content":${JSON.stringify(block.content)}}`,
+                            toolName: 'file',
+                            actionName: 'write',
+                            params: { filePath: block.filePath, content: block.content }
+                        });
+                    }
+                }
+            }
 
             if (toolCalls.length === 0) {
                 // Task complete or no more tools needed
                 return { 
                     response, 
-                    text: response,
+                    text: response, 
                     success: true, 
-                    iterations: iteration,
-                    toolCallsMade: allToolCalls
+                    iterations: iteration, 
+                    toolCallsMade: allToolCalls 
                 };
             }
 
@@ -1342,9 +1436,9 @@ Actions:
                 }
             }
 
-            // Feed results back to the brain
-            currentPrompt = `TOOL RESULTS:\n${toolResults.join('\n\n')}\n\nContinue implementation.`;
-            fullHistory.push({ role: 'user', content: currentPrompt });
+            // Feed results back to the brain with full multi-turn conversational history
+            const nextFeedback = `TOOL RESULTS:\n${toolResults.join('\n\n')}\n\nReview the tool results. If further edits, verifications, or tests are needed, invoke additional TOOL: calls. If the task is finished, output "DONE: [summary]".`;
+            fullHistory.push({ role: 'user', content: nextFeedback });
 
             // Eco Thermal Breathing: give laptop heat pipe time to dissipate heat between tool steps
             if (process.env.MAX_ECO_MODE === 'true' || process.env.MAX_CLUSTER_ROLE === 'worker') {

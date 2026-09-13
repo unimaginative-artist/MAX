@@ -72,11 +72,14 @@ export class Brain {
 
         // ── Smart tier config ────────────────────────────────────────────
         // DeepSeek only — no OpenAI, no Ollama.
+        const rawModel = config.deepseekModel || process.env.DEEPSEEK_MODEL || 'deepseek-flash';
+        const rawCodeModel = config.deepseekCodeModel || process.env.DEEPSEEK_CODE_MODEL || 'deepseek-flash';
+
         this._smart = {
             deepseekKey:       config.deepseekKey       || process.env.DEEPSEEK_API_KEY,
             deepseekUrl:       config.deepseekUrl       || process.env.DEEPSEEK_BASE_URL  || 'https://api.deepseek.com',
-            deepseekModel:     config.deepseekModel     || process.env.DEEPSEEK_MODEL      || 'deepseek-chat',
-            deepseekCodeModel: config.deepseekCodeModel || process.env.DEEPSEEK_CODE_MODEL || 'deepseek-reasoner',
+            deepseekModel:     this._normalizeDeepSeekModel(rawModel),
+            deepseekCodeModel: this._normalizeDeepSeekModel(rawCodeModel),
             ready:   false,
             backend: null   // 'deepseek' | null
         };
@@ -101,6 +104,14 @@ export class Brain {
         return !this.max?.economics?.isOverBudget?.();
     }
 
+    _normalizeDeepSeekModel(model) {
+        if (!model) return 'deepseek-flash';
+        const m = String(model).trim().toLowerCase();
+        if (m.includes('flash') || m.includes('4.1')) return 'deepseek-flash';
+        if (m.includes('v4-pro') || m.includes('v4_pro') || m.includes('pro')) return 'deepseek-v4-pro';
+        return model;
+    }
+
     // ─── Initialize — probe all backends ─────────────────────────────────
     async initialize() {
         const ollamaModels = await this._checkOllama();
@@ -120,8 +131,13 @@ export class Brain {
             console.log('[Brain] ⚠️  Fast tier  — Ollama not running (fast calls will use DeepSeek)');
         }
 
-        // Smart & Code tier — Local-first Ollama or DeepSeek fallback
-        if (this.localFirst && ollamaModels) {
+        // Smart & Code tier — DeepSeek when key is configured and cloud allowed, else local-first Ollama
+        if (this._validKey(this._smart.deepseekKey) && this._cloudAllowed()) {
+            this._smart.ready   = true;
+            this._smart.backend = 'deepseek';
+            console.log(`[Brain] 🧠 Smart tier — DeepSeek / ${this._smart.deepseekModel}`);
+            console.log(`[Brain] 💻 Code  tier — DeepSeek / ${this._smart.deepseekCodeModel}`);
+        } else if (this.localFirst && ollamaModels) {
             const smartModel = process.env.OLLAMA_MODEL_SMART || this.config.ollamaModelSmart || this._fast.ollamaModel;
             const codeModel  = process.env.OLLAMA_MODEL_CODE  || this.config.ollamaModelCode  || this._fast.ollamaModel;
             const modelName  = smartModel.split(':')[0].toLowerCase();
@@ -134,9 +150,7 @@ export class Brain {
                 console.log(`[Brain] 🧠 Smart tier — Local Ollama / ${smartModel}`);
                 console.log(`[Brain] 💻 Code  tier — Local Ollama / ${codeModel}`);
             }
-        }
-
-        if (!this._smart.ready && this._validKey(this._smart.deepseekKey)) {
+        } else if (this._validKey(this._smart.deepseekKey)) {
             this._smart.ready   = true;
             this._smart.backend = 'deepseek';
             console.log(`[Brain] 🧠 Smart tier — DeepSeek / ${this._smart.deepseekModel}`);
@@ -372,7 +386,7 @@ export class Brain {
             messages.push({ role: 'user', content: prompt });
         }
 
-        const model = modelOverride || this._smart.deepseekModel;
+        const model = this._normalizeDeepSeekModel(modelOverride || this._smart.deepseekModel);
         const useStream = !!onToken;
         const econ = this.max?.economics;
         const estimatedInputTokens = Math.ceil(JSON.stringify(messages).length / 4);
