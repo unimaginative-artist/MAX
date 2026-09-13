@@ -3,6 +3,7 @@
 ## 🛠️ ACTIVE GOALS
 
 ## ✅ COMPLETED
+- [x] AUTONOMOUS: AUTOMATIC TASK SCHEDULING
 - [x] AUTONOMOUS: RESOURCE ALLOCATION
 - [x] AUTONOMOUS: DATA PROCESSING AND ANALYTICS
 - [x] Improve test coverage: Create unit test for core/AgentManager.js
@@ -12,4 +13,3 @@
 - [x] AUTONOMOUS: RESOURCE ALLOCATION AND MANAGEMENT
 - [x] Investigate: Urgent exploration
 - [x] Investigate: Urgent exploration
-- [x] Memory Pressure: Only 488MB free. Check for leaks.
