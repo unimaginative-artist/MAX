@@ -1,5 +1,5 @@
 # 📜 THE GRIMOIRE (v5.0)
-## Current Session State: LEVEL 51.0 (HEADLESS WINDOWS CONSOLE HARDENING & ZERO SCREEN FLASHING)
+## Current Session State: LEVEL 52.0 (WINDOWS TERMINAL POPUP ROOT-CAUSE & SOMA BACKGROUND SILENCING)
 
 ### 🔱 Physical Reality (Port & Host Mappings)
 - **Machine B Worker Node (Port 3100)**: Dedicated local-first cluster worker daemon (`192.168.1.250:3100`, `MAX_NODE_ID=machine_b`, `MAX_CLUSTER_ROLE=worker`, `MAX_AUTO_APPROVE=all`, `protocolVersion: 2`).
@@ -377,10 +377,27 @@
      - Restarted daemon `start-max-api.mjs` (PID 29132) on port 3100.
      - Confirmed all autonomous background tasks execute headlessly with 0 desktop console windows or visual flashes.
 
+- [x] **Windows Terminal Popup Root-Cause & SOMA Background Silencing (Level 52.0)**:
+  1. Root Cause Identification:
+     - On Windows 11, `WindowsTerminal.exe` / `OpenConsole.exe` is configured as the default console host.
+     - Live process tracing revealed that SOMA's background health monitor (`microagents/BlackAgent.cjs`) was ticking every 30 seconds (`monitoringInterval = 30000`).
+     - On each tick, `getDiskMetricsWindows()` executed `cmd.exe /c "wmic logicaldisk get size,freespace,caption"` via Node's `child_process.exec` without `{ windowsHide: true }`.
+     - In addition, SOMA's `cluster/ResourceMonitor.js` polled `wmic` every 10-30s, and `server/routes/conceiveRoutes.js` invoked `wmic logicaldisk get name`.
+     - Because Windows 11 console host redirection intercepts untruncated console spawns, Windows launched `OpenConsole.exe -Embedding` and `WindowsTerminal.exe -Embedding`, popping up a terminal window on Barry's desktop screen every 30 seconds.
+  2. Complete Root-Level Remediation:
+     - **Micro-Benchmark Optimization (`fs.statfsSync`)**: Upgraded `BlackAgent.cjs` and `ResourceMonitor.js` to query drive metrics using Node's native `fs.statfsSync('C:')` Win32 API (`GetDiskFreeSpaceExW`). Runs in sub-milliseconds with **zero process spawns** (`cmd.exe`, `wmic`, `conhost`, `WindowsTerminal`).
+     - **Headless Fallback & Wrapped Execution**: Wrapped `execAsync` in `BlackAgent.cjs` and `ResourceMonitor.js` to enforce `{ windowsHide: true }`.
+     - **Conceive Routes**: Replaced `wmic logicaldisk get name` in `server/routes/conceiveRoutes.js` with direct filesystem drive checks (`fs.accessSync`).
+     - **SOMA Infrastructure**: Hardened `launcher_ULTRA.mjs` (`killPortOwner` now filters specifically for `:port .*LISTENING` and enforces `windowsHide: true`), `core/SystemValidator.js`, `core/GitArbiter.js`, `server/social/LinkedInClient.js`, `server/social/BlueskeyClient.js`, `server/scrapers/MarketDataScraper.js`, and `server/routes/somaRoutes.js`.
+  3. Live Verification:
+     - Restarted SOMA backend (PID 44152) on port 3001 (`status: healthy`, `uptime: 147s+`).
+     - Restarted MAX API daemon on port 3100 (`status: healthy`, `ready: true`).
+     - Executed a 35-second live desktop process spawn tracer: confirmed **0 `wmic` spawns, 0 `OpenConsole.exe`, 0 `WindowsTerminal.exe`, and 0 desktop popup windows**.
+
 ### 🔱 Operator Directive: DEPLOYMENT
-- **Status**: |= ACTIVE (DeepSeek 4.1 Flash Active, Zero Screen Flashing / windowsHide Hardened, 34/34 Unit Test Suites 100% Green, Daemon Port 3100 Live).
+- **Status**: |= ACTIVE (DeepSeek 4.1 Flash Active, Windows Terminal Popups Permanently Eliminated, Zero Console Popups Across MAX & SOMA, All Daemons Healthy).
 - **Role**: Ultra Senior Architect / Sovereign Intelligence.
-- **Level**: 51.0 Headless Windows Console Hardening & Zero Screen Flashing
+- **Level**: 52.0 Windows Terminal Popup Root-Cause & SOMA Background Silencing
 
 
 
