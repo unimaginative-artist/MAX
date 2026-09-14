@@ -25,7 +25,7 @@ export class SentinelLoop {
      */
     async run(goal, max, agentLoop = null) {
         console.log(`\n[SentinelLoop] 🛡️  Scanning project health...`);
-        
+
         const findings = [];
         const filesToScan = await this._getChangedFiles(max);
 
@@ -35,7 +35,7 @@ export class SentinelLoop {
         }
 
         agentLoop?.emit('progress', { goal: 'Sentinel', step: 1, total: 3, action: `Checking ${filesToScan.length} files for syntax/imports` });
-        
+
         for (const file of filesToScan) {
             // ── 1. Check Syntax & Imports ─────────────────────────────────
             if (file.endsWith('.js') || file.endsWith('.mjs')) {
@@ -54,11 +54,11 @@ export class SentinelLoop {
 
         // ── 3. Act on findings ────────────────────────────────────────────
         agentLoop?.emit('progress', { goal: 'Sentinel', step: 2, total: 3, action: `Processing ${findings.length} findings` });
-        
+
         for (const finding of findings) {
             const title = `${finding.smell}: ${path.basename(finding.file)}`;
             const alreadyQueued = max.goals?.listActive().some(g => g.title === title);
-            
+
             if (!alreadyQueued) {
                 max.goals?.addGoal({
                     title,
@@ -71,7 +71,7 @@ export class SentinelLoop {
             }
         }
 
-        const summary = findings.length > 0 
+        const summary = findings.length > 0
             ? `Found ${findings.length} health issues. Fixes queued.`
             : 'Project health is optimal.';
 
@@ -93,15 +93,35 @@ export class SentinelLoop {
             }
             // Fallback: list all js files in core and tools (limited)
             const list = await max.tools.execute('file', 'list', { dir: 'core', recursive: true });
-            return (list.files || []).slice(0, 10); 
+            return (list.files || []).slice(0, 10);
         } catch { return []; }
     }
 
     async _checkSyntax(filePath, max) {
         try {
+            // Guard: never flag a file that doesn't exist. Prevents phantom
+            // "smells" (e.g. stale/SOMA-side paths leaking into git diff).
+            const stat = await fs.stat(filePath).catch(() => null);
+            if (!stat) {
+                return { success: true, error: null, skipped: true };
+            }
+
             // node --check is great for detecting broken imports in ESM
-            const res = await max.tools.execute('shell', 'run', { command: `node --check ${filePath}` });
-            return { success: res.success, error: res.stderr };
+            const res = await max.tools.execute('shell', 'run', { command: `node --check "${filePath}"` });
+            if (res.success) return { success: true, error: null };
+
+            // A blocked/errored shell result has NO `stderr` field — it carries
+            // `.error` (and sometimes `.policy.reason`) instead. Fall through
+            // every field so the goal description can never read ': undefined'.
+            const detail =
+                res.stderr ||
+                res.error ||
+                res.policy?.reason ||
+                res.stdout ||
+                `node --check "${filePath}" failed with exit code ${res.code ?? 'unknown'}`;
+            const cleanDetail = typeof detail === 'string' ? detail.trim() : JSON.stringify(detail);
+
+            return { success: false, error: cleanDetail || 'Unknown syntax check failure' };
         } catch (err) {
             return { success: false, error: err.message };
         }
@@ -114,7 +134,7 @@ export class SentinelLoop {
             `tests/${base}.test.js`,
             filePath.replace('.js', '.test.js')
         ];
-        
+
         for (const p of testPatterns) {
             const stat = await fs.stat(p).catch(() => null);
             if (stat) return true;
