@@ -14,6 +14,7 @@ export class GoalEngine {
         this.outcomes = outcomeTracker;
         this.memory   = memory;   // injected after memory system boots
         this.vector   = config.vector; // VECTOR Systems Architect daemon
+        this.max      = config.max || null;
         
         const storageDir = config.storageDir || path.join(process.cwd(), '.max');
         this.goalsPath   = path.join(storageDir, 'goals.json');
@@ -31,6 +32,10 @@ export class GoalEngine {
         this._failed    = [];
 
         this.stats = { created: 0, completed: 0, failed: 0, autonomous: 0, userAdded: 0 };
+    }
+
+    setMax(max) {
+        this.max = max;
     }
 
     // ─── Initialize — load from disk ──────────────────────────────────────
@@ -124,10 +129,13 @@ export class GoalEngine {
         return scored[0];
     }
 
-    // ─── Decompose a goal into concrete steps via brain ───────────────────
+    // ─── Decompose a goal into concrete steps via brain / reasoning chamber ──
     // context.availableTools — string[] of registered tool names (from AgentLoop)
     async decompose(goal, context = {}) {
-        if (!this.brain._ready) return [{ step: 1, action: goal.description || goal.title, tool: 'brain', success: 'completed' }];
+        if (this.max?.reasoning?.decompose) {
+            return this.max.reasoning.decompose(goal, context);
+        }
+        if (!this.brain || this.brain._ready === false) return [{ step: 1, action: goal.description || goal.title, tool: 'brain', success: 'completed' }];
 
         // 📐 Phase 0: Systems Architecture (VECTOR)
         let architecture = null;

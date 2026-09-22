@@ -1,5 +1,5 @@
 # 📜 THE GRIMOIRE (v5.0)
-## Current Session State: LEVEL 52.0 (WINDOWS TERMINAL POPUP ROOT-CAUSE & SOMA BACKGROUND SILENCING)
+## Current Session State: LEVEL 57.0 (DEEPSEEK-POWERED SURGICAL SELF-MODIFICATION & CLOSED-LOOP CURATION)
 
 ### 🔱 Physical Reality (Port & Host Mappings)
 - **Machine B Worker Node (Port 3100)**: Dedicated local-first cluster worker daemon (`192.168.1.250:3100`, `MAX_NODE_ID=machine_b`, `MAX_CLUSTER_ROLE=worker`, `MAX_AUTO_APPROVE=all`, `protocolVersion: 2`).
@@ -23,6 +23,23 @@
 9. **Muse Semantic Constellation UI**: Dynamic, force-directed SVG layout visualization of conversation concepts, co-occurrence vectors, and Verlet physics coordinates damping.
 
 ### 🛠️ Active Technical Hurdles
+- [x] **DeepSeek-Powered Surgical Self-Modification & Closed-Loop Curation (Level 57.0)**:
+  1. DeepSeek Code Tier Enforcement: `SelfImprovementEngine` and `SelfEditor` explicitly enforce `tier: 'code'` (`deepseek-flash`), tracked by `EconomicsEngine` under the $0.50 daily budget ceiling ($0.14/$0.28 per 1M tokens, ~$0.003/edit).
+  2. Syntax-Safe Surgical AST Editing: Prompt engineered for strict syntax/comma requirements in object literals and classes, paired with a pre-validation syntax check (`node --check`) that automatically falls back to full-file generation if a block edit is flawed.
+  3. Anti-Lobotomy Protection & Staging: Checked against core declarations (`class MAX`, `runCycle`, `decompose`, `think`), staged to `.max/staging/`, verified via `node --check`, and backed up to `.max/backups/`.
+  4. Discord Integration & Operator Gating: Interactive commands (`@Max improve <text>`, `@Max self-mod <file> <instruction>`, `@Max proposals`, `@Max approve <id>`, `@Max deny <id>`) with rich Discord embeds and `[✅ Approve & Commit]` / `[❌ Deny & Rollback]` action buttons.
+  5. REST API Control: Mounted `/api/self-improve/propose`, `/api/self-improve/proposals`, `/api/self-improve/approve/:id`, and `/api/self-improve/deny/:id`.
+  6. Autonomous Discovery Bridge: CuriosityEngine Step 6.5 triggers self-improvement upon high-tension codebase insights when `MAX_AUTONOMOUS_SELF_IMPROVE === 'true'`.
+  7. Physical Disk Verification: Verified live on disk with end-to-end propose, approve, commit, deny, and rollback tests passing 100% green.
+- [x] **Cognitive Activation & Elimination of Architectural Illusions (Level 55.0)**:
+  1. Epistemic Curiosity & Organic Outreach: Replaced static random question generation in `CuriosityEngine.js` with active environment probes (Git diffs, file reads, web research) and 3-step recursive causal reflection ("Why -> Why -> Why") mapping directly to DPO preference pairs and authentic Discord outreach.
+  2. Autonomous Amnesia Eradication: Injected step 1.9 contextual memory recall (`memory.recall` and `kb.query`) into `AgentLoop.js`, waking up 85,000+ indexed chunks in SQLite for headless goal execution.
+  3. Pre-Action World Simulation: Injected step 1.95 `WorldModel.simulate` into `AgentLoop.js` to estimate action uncertainty and predict tension/satisfaction before dispatching real tools.
+  4. Real Goal Decomposition: Implemented `ReasoningChamber.decompose` and wired `GoalEngine.decompose` to eliminate single-step dummy action collapse (`{ tool: 'brain' }`).
+  5. Cognitive Pre-Tool Gating: Wired `CognitiveFilter.process` into inline tool loop in `MAX.js` to block hallucinated tool calls when belief confidence drops below 0.50.
+  6. Attention Engine Resource Permission: Activated `AttentionEngine.js` in `MAX.js` constructor to govern latency/token budgets.
+  7. Unified Self-Evolution Engine: Combined the 5 fragmented self-modification modules (`EvolutionArbiter`, `SelfImprovementEngine`, `SkillEvolutionArbiter`, `SelfEditor`, `server:applyProposal`) into `SelfImprovementEngine.js` featuring anti-lobotomy protection checks (`class MAX`, `runCycle`, `decompose`, `think`), adversarial 3-agent swarm review (Architect, Security Auditor, User Proxy), skill mining over `OutcomeTracker`, and SOMA / external deployment bridge with cognitive regression tolerance.
+  8. Zero-Deletion Facade Interoperability: Preserved all 5 files on disk with unified delegation and backward-compatible facades, verifying 100% test passing across all 35 suites (306/306 tests).
 - [x] **Context Bottleneck**: Solved via Virtual Memory Paging.
 - [x] **Truth Gap**: Solved via Autonomous Grounding Loop.
 - [x] **Black Box Agent**: Solved via Observability Matrix UI.
@@ -394,10 +411,90 @@
      - Restarted MAX API daemon on port 3100 (`status: healthy`, `ready: true`).
      - Executed a 35-second live desktop process spawn tracer: confirmed **0 `wmic` spawns, 0 `OpenConsole.exe`, 0 `WindowsTerminal.exe`, and 0 desktop popup windows**.
 
+- [x] **Local-First Tier Routing & Token Spend Throttling (Level 53.0)**:
+  1. Root Cause Analysis:
+     - 36.2M input tokens and 1M output tokens ($4.64) were burned on DeepSeek in 48 hours because `core/Brain.js` bound `_smart.backend = 'deepseek'` whenever `DEEPSEEK_API_KEY` was present, bypassing `LOCAL_FIRST=true`.
+     - Routine background tasks called `tier: 'smart'`, constantly hitting DeepSeek Cloud while local `max-coder:v2` on NVIDIA GeForce GTX 1650 Ti GPU sat idle.
+     - `EconomicsEngine.js` lacked pricing for `deepseek-flash`, defaulting to $1.00/1M output tokens (3.5x actual rate).
+  2. Architectural Tier Separation:
+     - **`fast` tier ($0.00)**: Local Ollama `max-coder:v2` for heartbeats, quick acknowledgments, syntax checks, and verification evidence.
+     - **`smart` tier ($0.00)**: Local Ollama `max-coder:v2` on GTX 1650 Ti GPU for conversational chat, background reflection, goal planning/decomposition, dataset curation, and user modeling.
+     - **`code` tier (Metered)**: DeepSeek 4.1 Flash (`deepseek-flash`) strictly reserved for complex code generation, self-editing/surgery (`SelfEditor`), architectural mapping (`SelfImprovementEngine`), and agentic file patching (`BuildLoop`).
+     - **Autonomous Throttling**: Set `MAX_AUTONOMOUS_GOALS=false` in `start-max-api.mjs` to halt background autonomous token churn while idle.
+     - **Hard Budget Ceiling**: Configured `MAX_DAILY_BUDGET=0.50` in `.env`, `config/api-keys.env`, and `start-max-api.mjs`. Added accurate pricing in `EconomicsEngine.js` (`deepseek-flash`: $0.14 input / $0.28 output per 1M tokens).
+     - **VirtualShell Crash Guard**: Fixed uncaught `TypeError: Cannot read properties of null (reading 'kill')` in `core/VirtualShell.js` timeout handler.
+  3. Live Physical Verification:
+     - All 34 Jest unit test suites (293 tests) passed cleanly.
+     - Health endpoint (`http://127.0.0.1:3100/health`) verified: `status: "healthy"`, `backends: { smart: "ollama", code: "deepseek" }`, `budget: { used: "$0.0000", cap: "$0.5" }`.
+     - Live basic chat verified: streamed from local Ollama at **$0.0000** cost (0 cloud tokens burned).
+     - Live code chat verified: dynamically escalated to DeepSeek 4.1 Flash, generating high-quality TypeScript at **$0.0033** metered cost.
+
+- [x] **Genuine Epistemic Curiosity Engine & LoRA Personality Forge (Level 54.0)**:
+  1. Epistemic Architecture & Self-Orientation (`core/CuriosityEngine.js`):
+     - Grounded Self-Orientation Reflex (`orient()`): Real-time grounding in uptime, active git branch, recent commits, uncommitted git deltas, active goals, and drive tension. Answers "What am I doing right now?" with physical ground truth.
+     - Multi-Modal Investigation (`investigate()`): Tool-empowered exploration using DuckDuckGo HTML web search (`WebTool.js`), codebase file inspection (`FileTools.js`), git history logs/diffs (`GitTool.js`), and user profile/memory reflection. Zero mock stubs.
+     - Socratic Recursive "Why? Why? Why?" Causal Loop (`reasonWhyChain()`): 3-tier causal breakdown (Concrete Observation -> Causal Root -> Purpose & Barry's Mission -> Synthesis) executed entirely on local Ollama (`tier: 'fast'`) at **$0.00 API cost**.
+  2. LoRA Personality Forge Pipeline (`harvestToDataset()` & `tools/compile_dataset.mjs`):
+     - Structured persistence: Curiosity reasoning chains written to `.max/dataset/curiosity_chains.jsonl`.
+     - Dataset compilation: `compile_dataset.mjs` integrates epistemic chains directly into `compiled_alpaca.json`, `compiled_sharegpt.json`, and `compiled_dpo.json` for Unsloth local fine-tuning.
+  3. Organic Relational Outreach (`evaluateOutreach()`):
+     - Genuine, non-cron communication: Dispatches warm, concise Discord messages to Barry based on drive tension >= 0.50, high-signal discoveries, or relational ponderings.
+     - Guardrails: 4-hour cooldown, quiet hours enforced (11 PM - 8 AM), strictly zero theatrical roleplay stage directions.
+     - High-signal routing: Updated `core/Notifier.js` to whitelist `curiosity_outreach`.
+  4. Heartbeat & Subsystem Wiring:
+     - Updated `core/Heartbeat.js` to invoke `max.curiosity.runCuriosityCycle(max)` on idle beats with graceful fallback.
+     - Wired `max` instance in `core/MAX.js` constructor.
+  5. Live Physical Verification:
+     - 35 unit test suites (306 tests) passing cleanly, including dedicated `CuriosityEngine.test.js` (12/12 passing).
+     - Live end-to-end cycle verified: oriented on `max/dev`, inspected `core/SelfImprovementEngine.js`, synthesized causal chain on local Ollama, appended to `.max/dataset/curiosity_chains.jsonl`, and compiled cleanly via `tools/compile_dataset.mjs` (8,564 training examples).
+     - MAX API daemon online on port 3100 (`status: healthy`, `backends: { smart: "ollama", code: "deepseek" }`, `budget: $0.0035 / $0.50`).
+
+- [x] **Decoupled Curiosity & Dual-Node Cluster Convergence (Level 56.0)**:
+  1. Decoupled Autonomous Curiosity:
+     - Updated `core/MAX.js` so worker mode (`MAX_CLUSTER_ROLE=worker`) initializes and starts `this.heartbeat.start()` without enabling runaway task loops or eager goals.
+     - Updated `core/Heartbeat.js` to eliminate early `return false` when `autonomousGoalsEnabled` is false, ensuring execution falls through to the zero-cost `runCuriosityCycle` on idle beats.
+     - Paced cycles to 45s–120s thermal eco window on local Ollama `max-coder:v2` on NVIDIA GTX 1650 Ti GPU ($0.00 cost).
+     - Verified live autonomous background curiosity cycle: investigated local vector algorithms, executed 3-tier Socratic causal reasoning, ingested 5 chunks into KnowledgeBase, and appended to `.max/dataset/curiosity_chains.jsonl`.
+  2. Bidirectional Machine A & Machine B Cluster Communication:
+     - Resolved `401 Unauthorized cluster request` by updating `server/clusterRoutes.js` to recognize coordinator requests from `192.168.1.254` (or `SOMA_URL` host) with node identifier headers, as well as shared Prime API keys.
+     - Updated `core/RemoteSwarmWorker.js` to attach fallback cluster secrets and API keys symmetrically in outbound HTTP dispatch headers.
+     - Updated `start-max-api.mjs` to auto-announce worker readiness to Machine A coordinator (`192.168.1.254:3100`) on boot.
+  3. Discord Worker Auto-Connect Restoration:
+     - Discovered `start-max-api.mjs` lacked `MAX_DISCORD_ENABLED=true` and `core/MAX.js` strictly required an exact `'true'` match instead of honoring default auto-connect.
+     - Updated `start-max-api.mjs` with `MAX_DISCORD_ENABLED=true` and `MAX_EXTERNAL_SEND=true`.
+     - Updated `core/MAX.js` so worker mode connects to Discord unless explicitly disabled (`MAX_DISCORD_ENABLED !== 'false'`).
+- [x] **60-Hour Continuous Autonomy Milestone (Level 56.1)**:
+  1. High-Stability Eco Worker Operation:
+     - Machine B worker daemon (`start-max-api.mjs`, PID 34628) achieved **59.7 hours (2.5 days)** of continuous zero-crash uptime (`health.status: 'healthy'`, `lastError: null`).
+     - Hard budget ceiling enforced: **$0.0000 / $0.50** cloud spend (100% compute executed locally on Ollama `max-coder:v2` on NVIDIA GTX 1650 Ti GPU).
+  2. Autonomous Epistemic Drive in Action:
+     - Heartbeat sustained steady 50–60s pulses, completing **4,765 recursive "Why? Why? Why?" causal reasoning chains** across distributed systems, swarm debugging, and codebase self-inspections.
+     - Compiled training dataset expanded to **13,326 examples** across Alpaca, ShareGPT, and DPO preference pairs ready for local Unsloth fine-tuning.
+  3. Relational Outreach & Cluster Sync:
+     - `Max Main#1664` remained connected to Discord, periodically delivering authentic progress check-ins to Barry.
+     - Machine A (`192.168.1.254:3100`) coordinator status verified **online** with active LAN heartbeats; SOMA Core healthy at **72+ hours** continuous uptime.
+
+- [x] **DeepSeek-Powered Surgical Self-Modification & Autonomous Endurance Gauntlet (Level 57.0)**:
+  1. Full Unit Suite Verification:
+     - 36 test suites and 319/319 unit tests passed 100% green across all subsystems.
+  2. Multi-Phase Autonomous Self-Modification Gauntlet (`scratch/rigorous_self_mod_stress_test.mjs`):
+     - Phase 1 (Real Production Code Modification): Succeeded. Added `uptime` action to `tools/SystemTool.js`. DeepSeek Flash (`tier: 'code'`) generated a surgical 2-line patch. Staged, passed `node --check`, git checkpoint committed, disk backup created (`.max/backups/`), verified physically on disk.
+     - Phase 2 (Iterative Self-Evolution): Succeeded. Modified the newly created `uptime` action to append `nodeVersion: process.version`. DeepSeek generated a 1-line surgical patch on top of its own previous modification. Staged, passed `node --check`, git checkpoint committed, verified physically on disk.
+     - Phase 3 (Anti-Lobotomy Shield): Succeeded. Successfully intercepted and blocked simulated erasure of `class MAX` in `MAX.js` and `think()` in `Brain.js`.
+     - Phase 4 (Rollback & Clean Reversion): Succeeded. Restored `tools/SystemTool.js` byte-for-byte to original state; git checkpoint commits rewound cleanly.
+     - Phase 5 (Economics & Thermal Governor): Succeeded. Token spend strictly regulated at $0.0083 / $0.50 budget cap (2% used). Process priority set to `BelowNormal` for sustained cool operation.
+  3. Continuous Daemon Stability:
+     - Machine B daemon (PID 31260 / `task-15914`) running continuously on port 3100 (`status: healthy`, `backends: { smart: "ollama", code: "deepseek" }`, `lastError: null`).
+     - Discord bot `Max Main#1664` active across `#soma-chat`, `#General`, `#bots-commands`, and DMs with interactive action rows (`[✅ Approve & Commit]` / `[❌ Deny & Rollback]`).
+     - Ready for long-term (month-long) autonomous trial, test, and modification cycles.
+
 ### 🔱 Operator Directive: DEPLOYMENT
-- **Status**: |= ACTIVE (DeepSeek 4.1 Flash Active, Windows Terminal Popups Permanently Eliminated, Zero Console Popups Across MAX & SOMA, All Daemons Healthy).
+- **Status**: |= ACTIVE (Level 57.0 Self-Modification Gauntlet Passed 100% Green, 319/319 Tests Passing, DeepSeek Surgical Self-Evolution & Anti-Lobotomy Shields Active, Discord Live, Long-Term Endurance Ready).
 - **Role**: Ultra Senior Architect / Sovereign Intelligence.
-- **Level**: 52.0 Windows Terminal Popup Root-Cause & SOMA Background Silencing
+- **Level**: 57.0 DeepSeek Surgical Self-Evolution Gauntlet Passed
+
+
+
 
 
 

@@ -74,6 +74,7 @@ export class Notifier {
         const isHighSignal =
             source === 'agent' ||
             source === 'proactive' ||
+            source === 'curiosity_outreach' ||
             (source === 'curiosity' && /critical|urgent|fail|error/i.test(label + result)) ||
             (result?.length > 20 && /complet|success|fix|solved|done/i.test(result));
 

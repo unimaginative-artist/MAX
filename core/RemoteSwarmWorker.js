@@ -240,8 +240,13 @@ export class RemoteSwarmWorker {
 
     _headers(worker, extra = {}) {
         const headers = { 'Content-Type': 'application/json', 'X-Max-Node-Id': this.nodeId, ...extra };
-        if (worker.secret) headers['X-Max-Cluster-Secret'] = worker.secret;
-        else if (worker.apiKey) headers.Authorization = `Bearer ${worker.apiKey}`;
+        const secret = worker.secret || this.secret || process.env.MAX_CLUSTER_SECRET;
+        const key = worker.apiKey || this.max?.apiKey || process.env.MAX_API_KEY || process.env.MAX_PRIME_API_KEY;
+        if (secret) headers['X-Max-Cluster-Secret'] = secret;
+        if (key) {
+            headers.Authorization = `Bearer ${key}`;
+            headers['X-Api-Key'] = key;
+        }
         return headers;
     }
 

@@ -131,13 +131,8 @@ export class Brain {
             console.log('[Brain] ⚠️  Fast tier  — Ollama not running (fast calls will use DeepSeek)');
         }
 
-        // Smart & Code tier — DeepSeek when key is configured and cloud allowed, else local-first Ollama
-        if (this._validKey(this._smart.deepseekKey) && this._cloudAllowed()) {
-            this._smart.ready   = true;
-            this._smart.backend = 'deepseek';
-            console.log(`[Brain] 🧠 Smart tier — DeepSeek / ${this._smart.deepseekModel}`);
-            console.log(`[Brain] 💻 Code  tier — DeepSeek / ${this._smart.deepseekCodeModel}`);
-        } else if (this.localFirst && ollamaModels) {
+        // Smart tier — Local-First Ollama when enabled and available ($0 cost), else DeepSeek Cloud
+        if (this.localFirst && ollamaModels) {
             const smartModel = process.env.OLLAMA_MODEL_SMART || this.config.ollamaModelSmart || this._fast.ollamaModel;
             const codeModel  = process.env.OLLAMA_MODEL_CODE  || this.config.ollamaModelCode  || this._fast.ollamaModel;
             const modelName  = smartModel.split(':')[0].toLowerCase();
@@ -147,16 +142,28 @@ export class Brain {
                 this._smart.backend = 'ollama';
                 this._smart.ollamaModel = smartModel;
                 this._smart.ollamaCodeModel = codeModel;
-                console.log(`[Brain] 🧠 Smart tier — Local Ollama / ${smartModel}`);
-                console.log(`[Brain] 💻 Code  tier — Local Ollama / ${codeModel}`);
+                console.log(`[Brain] 🧠 Smart tier — Local Ollama / ${smartModel} ($0.00)`);
             }
-        } else if (this._validKey(this._smart.deepseekKey)) {
+        }
+
+        // Cloud fallback for smart tier if local not ready
+        if (!this._smart.ready && this._validKey(this._smart.deepseekKey) && this._cloudAllowed()) {
             this._smart.ready   = true;
             this._smart.backend = 'deepseek';
             console.log(`[Brain] 🧠 Smart tier — DeepSeek / ${this._smart.deepseekModel}`);
-            console.log(`[Brain] 💻 Code  tier — DeepSeek / ${this._smart.deepseekCodeModel}`);
+        } else if (!this._smart.ready && this._validKey(this._smart.deepseekKey)) {
+            this._smart.ready   = true;
+            this._smart.backend = 'deepseek';
+            console.log(`[Brain] 🧠 Smart tier — DeepSeek / ${this._smart.deepseekModel}`);
+        }
+
+        // Code tier status announcement
+        if (this._validKey(this._smart.deepseekKey) && this._cloudAllowed()) {
+            console.log(`[Brain] 💻 Code  tier — DeepSeek / ${this._smart.deepseekCodeModel} (Cloud Accelerated)`);
+        } else if (this._smart.backend === 'ollama') {
+            console.log(`[Brain] 💻 Code  tier — Local Ollama / ${this._smart.ollamaCodeModel || this._smart.ollamaModel}`);
         } else if (!this._smart.ready) {
-            console.log('[Brain] ⚠️  Smart tier — no API key (add DEEPSEEK_API_KEY to config/api-keys.env)');
+            console.log('[Brain] ⚠️  Smart/Code tier — no API key or local model (add DEEPSEEK_API_KEY to config/api-keys.env)');
         }
 
         this._ready = this._fast.ready || this._smart.ready;
@@ -618,13 +625,15 @@ export class Brain {
     }
 
     getStatus() {
-        const smartModel = this._smart.backend === 'ollama' ? (this._smart.ollamaModel || this._fast.ollamaModel) : this._smart.deepseekModel;
-        const codeModel  = this._smart.backend === 'ollama' ? (this._smart.ollamaCodeModel || this._fast.ollamaModel) : this._smart.deepseekCodeModel;
+        const hasDeepSeek = this._validKey(this._smart.deepseekKey) && this._cloudAllowed();
+        const codeBackend = hasDeepSeek ? 'deepseek' : (this._smart.backend || this._fast.backend);
+        const codeModel   = hasDeepSeek ? this._smart.deepseekCodeModel : (this._smart.ollamaCodeModel || this._smart.ollamaModel || this._fast.ollamaModel);
+        const smartModel  = this._smart.backend === 'ollama' ? (this._smart.ollamaModel || this._fast.ollamaModel) : this._smart.deepseekModel;
         return {
             ready: this._ready,
             fast:  { backend: this._fast.backend,  model: this._fast.ollamaModel, ready: this._fast.ready },
             smart: { backend: this._smart.backend, model: smartModel,             ready: this._smart.ready },
-            code:  { backend: this._smart.backend, model: codeModel,              ready: this._smart.ready },
+            code:  { backend: codeBackend,         model: codeModel,              ready: hasDeepSeek || this._smart.ready },
         };
     }
 }

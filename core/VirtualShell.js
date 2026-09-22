@@ -204,7 +204,9 @@ export class VirtualShell extends EventEmitter {
             timeoutId = setTimeout(() => {
                 if (this._currentResolver === finish) {
                     this._currentResolver = null;
-                    this.proc.kill();
+                    if (this.proc) {
+                        try { this.proc.kill(); } catch {}
+                    }
                     this.proc = null;
                     this.start();
 

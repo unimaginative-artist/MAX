@@ -57,6 +57,7 @@ FILE: ${relPath}
 INSTRUCTION: ${instruction}
 
 Analyze the file and provide the surgical modification.
+CRITICAL: The resulting file MUST be 100% syntactically valid JavaScript. If modifying an object literal, ensure correct comma separation between properties/methods and balanced brackets.
 You MUST output valid JSON with this exact schema:
 {
   "mode": "replace" | "insert_after" | "insert_before",
@@ -71,7 +72,7 @@ ${code}
 
 Return ONLY the raw JSON object. No explanation, no markdown backticks.`;
 
-            const surgicalRes = await brain.think(surgicalPrompt, { temperature: 0.1, maxTokens: 1200, tier: 'smart' });
+            const surgicalRes = await brain.think(surgicalPrompt, { temperature: 0.1, maxTokens: 1200, tier: 'code' });
             const cleaned = surgicalRes.text.trim().replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '');
             const match = cleaned.match(/\{[\s\S]*\}/);
             if (match) {
@@ -85,8 +86,27 @@ Return ONLY the raw JSON object. No explanation, no markdown backticks.`;
                     } else {
                         surgicalCode = code.replace(spec.target, spec.content);
                     }
-                    console.log(`[SelfEditor] ⚡ Applied surgical block edit (${spec.mode || 'replace'}) to ${relPath}`);
-                    return surgicalCode;
+
+                    // Pre-validate syntax of surgical candidate
+                    const stageName = relPath.replace(/[\\/]/g, '__');
+                    const stagePath = path.join(STAGING_DIR, stageName);
+                    await fs.mkdir(STAGING_DIR, { recursive: true });
+                    await fs.writeFile(stagePath, surgicalCode, 'utf8');
+
+                    const checkProc = await new Promise(res => {
+                        const proc = spawn('node', ['--check', stagePath], { timeout: 5000, windowsHide: true });
+                        let errStr = '';
+                        proc.stderr.on('data', d => { errStr += d.toString(); });
+                        proc.on('close', c => res({ ok: c === 0, error: errStr.trim() }));
+                        proc.on('error', err => res({ ok: false, error: err.message }));
+                    });
+
+                    if (checkProc.ok) {
+                        console.log(`[SelfEditor] ⚡ Applied surgical block edit (${spec.mode || 'replace'}) to ${relPath}`);
+                        return surgicalCode;
+                    } else {
+                        console.warn(`[SelfEditor] Surgical block had syntax error (${checkProc.error.split('\n')[0]}), falling back to full-file generation...`);
+                    }
                 }
             }
         } catch (e) {
@@ -108,7 +128,7 @@ ${code}
 Return ONLY the complete modified file. No explanation. No markdown fences.
 No truncation — output the entire file even if most lines are unchanged.
 The output must be valid JavaScript that can directly replace the original file.`,
-            { temperature: 0.1, maxTokens: 6000, tier: 'smart' }
+            { temperature: 0.1, maxTokens: 6000, tier: 'code' }
         );
 
         // Strip accidental markdown fences

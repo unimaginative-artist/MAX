@@ -11,12 +11,17 @@ const execAsync = promisify(exec);
  * Ensures MAX can only improve his own code if it passes strict validation.
  */
 export class EvolutionArbiter {
-    constructor(config = {}) {
+    constructor(brainOrConfig = {}, memory = null, outcomes = null) {
+        const config    = (brainOrConfig && typeof brainOrConfig === 'object' && !brainOrConfig.think) ? brainOrConfig : {};
+        this.brain      = brainOrConfig?.think ? brainOrConfig : config.brain || null;
+        this.memory     = memory || config.memory || null;
+        this.outcomes   = outcomes || config.outcomes || null;
         this.baseDir    = process.cwd();
         this.stagingDir = path.join(this.baseDir, '.max', 'evolution', 'staging');
         this.backupDir  = path.join(this.baseDir, '.max', 'evolution', 'backups');
         this.swarm      = config.swarm || null;
         this.lastReport = null;
+        this.max        = config.max || null;
     }
 
     async initialize() {
@@ -67,11 +72,16 @@ export class EvolutionArbiter {
         const content = await fs.readFile(stagedPath, 'utf8');
         const filename = path.basename(stagedPath);
 
-        if (filename === 'MAX.js' && !content.includes('class MAX')) {
-            return { success: false, error: "Lobotomy Detected: 'class MAX' missing from core file." };
-        }
-        if (filename === 'AgentLoop.js' && !content.includes('runCycle')) {
-            return { success: false, error: "Brain Failure: 'runCycle' missing from AgentLoop." };
+        if (this.max?.selfImprovement?.checkLobotomy) {
+            const check = this.max.selfImprovement.checkLobotomy(filename, content);
+            if (!check.safe) return { success: false, error: check.error };
+        } else {
+            if (filename === 'MAX.js' && !content.includes('class MAX')) {
+                return { success: false, error: "Lobotomy Detected: 'class MAX' missing from core file." };
+            }
+            if (filename === 'AgentLoop.js' && !content.includes('runCycle')) {
+                return { success: false, error: "Brain Failure: 'runCycle' missing from AgentLoop." };
+            }
         }
 
         // 4. Automated Unit Test Check

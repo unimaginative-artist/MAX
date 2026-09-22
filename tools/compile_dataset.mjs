@@ -141,6 +141,29 @@ async function main() {
         }
     }
 
+    // 3.5. Harvest Curiosity Chains from Epistemic Exploration
+    const CURIOSITY_CHAINS_FILE = path.join(DATASET_DIR, 'curiosity_chains.jsonl');
+    if (fs.existsSync(CURIOSITY_CHAINS_FILE)) {
+        console.log(`Mining Epistemic Curiosity Chains: ${CURIOSITY_CHAINS_FILE}...`);
+        try {
+            const rawContent = fs.readFileSync(CURIOSITY_CHAINS_FILE, 'utf8');
+            const lines = rawContent.split('\n').filter(Boolean);
+            let curiosityCount = 0;
+            for (const line of lines) {
+                try {
+                    const record = JSON.parse(line);
+                    if (record.instruction && record.output) {
+                        addAlpaca(record.instruction, record.output, record.source || 'curiosity_engine');
+                        curiosityCount++;
+                    }
+                } catch { /* skip invalid JSON line */ }
+            }
+            console.log(`Found and integrated ${curiosityCount} curiosity reasoning chains...`);
+        } catch (chainErr) {
+            console.warn("Curiosity chains ingestion notice:", chainErr.message);
+        }
+    }
+
     // 4. Harvest High-Yield SOMA Architecture & Coding Patterns
     const SOMA_PATH = path.resolve('C:\\Users\\barry\\Desktop\\SOMA');
     if (fs.existsSync(SOMA_PATH)) {

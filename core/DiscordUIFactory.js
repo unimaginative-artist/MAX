@@ -126,4 +126,44 @@ export class DiscordUIFactory {
             .setFooter({ text: 'MAX 24/7 Sovereign Intelligence' })
             .setTimestamp();
     }
+
+    /**
+     * Creates a rich embed for a Self-Modification Proposal.
+     */
+    static createSelfImprovementEmbed(proposal) {
+        const diffSnippet = proposal.diff
+            ? (proposal.diff.length > 1000 ? proposal.diff.slice(0, 1000) + '\n... [truncated]' : proposal.diff)
+            : 'No diff preview available.';
+
+        return new EmbedBuilder()
+            .setColor(Colors.Purple)
+            .setTitle(`🔧 Self-Modification Proposal: [${proposal.id}]`)
+            .setDescription(`**Target File:** \`${proposal.file}\`\n**Source:** \`${proposal.source || 'deepseek_coder'}\` | **Priority:** \`${proposal.priority || 'standard'}\``)
+            .addFields(
+                { name: '🎯 Instruction', value: proposal.instruction ? proposal.instruction.slice(0, 1024) : 'N/A', inline: false },
+                { name: '💡 Rationale / Weakness', value: (proposal.rationale || proposal.weakness || 'Curiosity reflection').slice(0, 1024), inline: false },
+                { name: '📊 Changes Detected', value: `\`${proposal.changes || 0} line(s) modified\``, inline: true },
+                { name: '🛡️ Safety Guard', value: '`Anti-Lobotomy & AST Syntax Passed`', inline: true },
+                { name: '📝 Surgical Diff', value: `\`\`\`diff\n${diffSnippet}\n\`\`\``, inline: false }
+            )
+            .setFooter({ text: 'DeepSeek Flash Tier • Operator Approval Required' })
+            .setTimestamp();
+    }
+
+    /**
+     * Creates interactive Approve & Deny buttons for a Self-Modification Proposal.
+     */
+    static createSelfImprovementActionRow(proposalId) {
+        return new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`btn_approve_proposal:${proposalId}`)
+                .setLabel('✅ Approve & Commit')
+                .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId(`btn_deny_proposal:${proposalId}`)
+                .setLabel('❌ Deny & Rollback')
+                .setStyle(ButtonStyle.Danger)
+        );
+    }
 }
+

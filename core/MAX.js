@@ -36,6 +36,7 @@ import { ArtifactManager }     from './ArtifactManager.js';
 import { TestGenerator }       from './TestGenerator.js';
 import { SkillLibrary }        from './SkillLibrary.js';
 import { SelfEditor }          from './SelfEditor.js';
+import { AttentionEngine }     from './AttentionEngine.js';
 import { SwarmCoordinator }    from '../swarm/SwarmCoordinator.js';
 import { PersonaEngine }      from '../personas/PersonaEngine.js';
 import { MuseEngine }         from './MuseEngine.js';
@@ -149,7 +150,7 @@ export class MAX extends EventEmitter {
         this.brain      = new Brain(this, config);
         this.agentBrain = new Brain(this, config);  // dedicated lane for background agent work
         this.drive     = new DriveSystem(config.drive);
-        this.curiosity = new CuriosityEngine(config.curiosity);
+        this.curiosity = new CuriosityEngine({ ...config.curiosity, max: this });
         this.persona   = new PersonaEngine();
         this.muse      = new MuseEngine();
         this._subsystemErrors = [];
@@ -181,6 +182,7 @@ export class MAX extends EventEmitter {
         this.outcomes     = null;
         this.reasoning    = null;
         this.cognitive    = this._safeInstantiate('cognitive', () => new CognitiveFilter(this));
+        this.attention    = this._safeInstantiate('attention', () => new AttentionEngine());
         this.evolution    = null;
         this.goals        = null;
         this.agentLoop    = null;
@@ -662,7 +664,8 @@ Active Systems:
         this.reasoning = new ReasoningChamber(this.brain, this.memory, this.outcomes);
         this.goals     = new GoalEngine(this.agentBrain, this.outcomes, this.memory, {
             storageDir: path.join(__dirname, '..', '.max'),
-            vector:     this.vector
+            vector:     this.vector,
+            max:        this
         });
         
         // Agent loop
@@ -1226,8 +1229,9 @@ Actions:
         }
 
         if (this.clusterRole === 'worker' && process.env.MAX_AUTONOMOUS_GOALS !== 'true') {
-            console.log(`[MAX] 🧰 Worker-only mode active (${this.nodeId}). Autonomous heartbeat, schedules, and eager goals are disabled.`);
-            if (process.env.MAX_DISCORD_ENABLED === 'true') {
+            console.log(`[MAX] 🧰 Worker-only mode active (${this.nodeId}). Starting heartbeat for curiosity cycles; heavy scheduler and eager goals are disabled.`);
+            this.heartbeat.start();
+            if (process.env.MAX_DISCORD_ENABLED !== 'false') {
                 autoConnectDiscord(this).catch(() => {});
             }
             return;
@@ -1555,11 +1559,30 @@ Actions:
             }
 
             // ── Step 1: Brain Think ───────────────────────────────────────────
+            let chatTier = options.tier;
+            if (!chatTier) {
+                if (this.attention) {
+                    const att = this.attention.evaluate(userMessage, { activeGoals: this.goals?.list?.() || [] });
+                    if (att.allowedCost === 'REFLEX') chatTier = 'fast';
+                    else if (att.allowedCost === 'BRIDGE') chatTier = 'smart';
+                    else if (att.priority === 'CRITICAL' || att.priority === 'HIGH') chatTier = 'code';
+                    else {
+                        const isComplexCode = /\b(write|create|implement|fix|refactor|debug|patch|build|code|script)\b/i.test(userMessage)
+                            && /\b(function|code|class|method|script|file|endpoint|api|bug|error|test|component|app|server|db|database|handler|middleware)\b/i.test(userMessage);
+                        chatTier = isComplexCode ? 'code' : 'smart';
+                    }
+                } else {
+                    const isComplexCode = /\b(write|create|implement|fix|refactor|debug|patch|build|code|script)\b/i.test(userMessage)
+                        && /\b(function|code|class|method|script|file|endpoint|api|bug|error|test|component|app|server|db|database|handler|middleware)\b/i.test(userMessage);
+                    chatTier = isComplexCode ? 'code' : 'smart';
+                }
+            }
+
             let result = await this.brain.think(userMessage, {
                 systemPrompt,
                 temperature: driveTemp,
                 maxTokens:   maxTok,
-                tier:        options.tier || 'smart',
+                tier:        chatTier,
                 onToken,
                 messages,
                 signal
@@ -1572,6 +1595,18 @@ Actions:
             // Execute any TOOL: calls MAX emitted, feed results back, get a real answer.
             // mcp is meta — skip. goals ARE executed inline so MAX can queue work from chat.
             if (!signal.aborted && !options.skipInlineTools) {
+                // Cognitive pre-tool gating: Block hallucinated/uncertain tool calls
+                if (this.cognitive && response.includes('TOOL:')) {
+                    try {
+                        const preCheck = await this.cognitive.process(response, { userMessage });
+                        if (preCheck.confidence < 0.5) {
+                            console.log(`[CognitiveFilter] 🛑 Low confidence tool call detected (${preCheck.confidence.toFixed(2)}). Gating inline execution.`);
+                            response = preCheck.filteredText;
+                        }
+                    } catch (err) {
+                        console.warn('[MAX] CognitiveFilter pre-check warning:', err.message);
+                    }
+                }
                 const SKIP_INLINE = new Set(['mcp']);
                 for (let _toolRound = 0; _toolRound < 3; _toolRound++) {
                     const toolCalls = this.tools.parseToolCalls(response)
@@ -1601,7 +1636,7 @@ Actions:
                         systemPrompt,
                         temperature: driveTemp,
                         maxTokens:   maxTok,
-                        tier:        options.tier || 'smart',
+                        tier:        chatTier,
                         onToken,
                         signal,
                         messages: [
@@ -1638,7 +1673,7 @@ Actions:
                     );
                     const evidencePrompt = `\n\n## VERIFICATION EVIDENCE\nResult: ${JSON.stringify(vResult)}\n\nAdjust response.`;
                     result = await this.brain.think(userMessage + evidencePrompt, {
-                        systemPrompt, temperature: 0.3, maxTokens: maxTok, signal
+                        systemPrompt, temperature: 0.3, maxTokens: maxTok, signal, tier: 'fast'
                     });
                     response = stripLeakedPromptContext(result.text);
                 } catch { /* skip */ }

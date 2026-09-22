@@ -15,6 +15,7 @@ const STATS_FILE = path.join(process.cwd(), '.max', 'economics.json');
 const PRICING = {
     'deepseek-chat':     { input: 0.07, output: 1.10 },
     'deepseek-reasoner': { input: 0.55, output: 2.19 },
+    'deepseek-flash':    { input: 0.14, output: 0.28 },
     'ollama':            { input: 0.00, output: 0.00 }, // Local is free
     'gemini-2.0-flash':  { input: 0.10, output: 0.40 }, // High-speed flash
     'default':           { input: 0.10, output: 1.00 }

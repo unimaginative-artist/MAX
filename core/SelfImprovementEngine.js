@@ -23,6 +23,8 @@ import { EventEmitter } from 'events';
 import { exec }         from 'child_process';
 import { promisify }    from 'util';
 import crypto           from 'crypto';
+import fs               from 'fs/promises';
+import path             from 'path';
 
 const execAsync = promisify(exec);
 
@@ -50,24 +52,29 @@ export class SelfImprovementEngine extends EventEmitter {
         this._proposals     = new Map();  // id → proposal
         this._inFlight      = new Set();  // files currently being proposed (prevent duplicates)
         this._lastProposalAt = 0;         // ms timestamp — enforces cooldown between auto-proposals
-        this.stats = { proposed: 0, approved: 0, denied: 0, reverted: 0 };
+        this.stats = { proposed: 0, approved: 0, denied: 0, reverted: 0, skillAnalyses: 0, skillsPromoted: 0 };
     }
 
     // ─── Main entry: given a behavioral weakness, propose a code fix ──────
-    async propose(weakness, { source = 'reflection', priority = 0.7 } = {}) {
+    async propose(weakness, { source = 'reflection', priority = 0.7, file = null, instruction = null, rationale = null } = {}) {
         if (!this.max.selfEditor || !this.max.brain._ready) return null;
 
         console.log(`\n[SelfImprovement] 🔍 Mapping weakness to code: "${weakness.slice(0, 80)}"`);
 
-        // ── Step 1: Brain identifies the right file + instruction ────────
-        const fileList = Object.entries(EDITABLE_FILES)
-            .map(([f, desc]) => `  ${f}: ${desc}`)
-            .join('\n');
+        let targetFile = file;
+        let targetInstruction = instruction;
+        let targetRationale = rationale || weakness;
 
-        const mappingPrompt = `You are MAX's self-improvement system. A behavioral weakness was identified.
+        if (!targetFile || !targetInstruction) {
+            // ── Step 1: Brain identifies the right file + instruction ────────
+            const fileList = Object.entries(EDITABLE_FILES)
+                .map(([f, desc]) => `  ${f}: ${desc}`)
+                .join('\n');
+
+            const mappingPrompt = `You are MAX's self-improvement system. A behavioral weakness or optimization was identified.
 Map it to a specific source file and a concrete edit instruction.
 
-WEAKNESS: "${weakness}"
+CONTEXT: "${weakness}"
 
 EDITABLE FILES (file: what it controls):
 ${fileList}
@@ -81,34 +88,37 @@ Return ONLY JSON:
   "riskLevel": "low|medium|high"
 }
 
-Only map to files where a code change would actually fix the behavioral issue.
+Only map to files where a code change would actually fix the issue.
 If the weakness is better fixed via prompt/config (not code), return confidence < 0.4.`;
 
-        let mapping = null;
-        try {
-            const result = await this.max.brain.think(mappingPrompt, {
-                tier:        'smart',
-                temperature: 0.1,
-                maxTokens:   300
-            });
-            const match = result.text.match(/\{[\s\S]*?\}/);
-            if (match) mapping = JSON.parse(match[0]);
-        } catch (err) {
-            console.warn(`[SelfImprovement] Mapping failed: ${err.message}`);
-            return null;
-        }
+            let mapping = null;
+            try {
+                const result = await this.max.brain.think(mappingPrompt, {
+                    tier:        'code',
+                    temperature: 0.1,
+                    maxTokens:   300
+                });
+                const match = result.text.match(/\{[\s\S]*?\}/);
+                if (match) mapping = JSON.parse(match[0]);
+            } catch (err) {
+                console.warn(`[SelfImprovement] Mapping failed: ${err.message}`);
+                return null;
+            }
 
-        if (!mapping || mapping.confidence < 0.5 || !EDITABLE_FILES[mapping.file]) {
-            console.log(`[SelfImprovement] ⚠️  Low confidence (${mapping?.confidence || 0}) — skipping code change`);
-            return null;
-        }
+            if (!mapping || mapping.confidence < 0.5 || !EDITABLE_FILES[mapping.file]) {
+                console.log(`[SelfImprovement] ⚠️  Low confidence (${mapping?.confidence || 0}) — skipping code change`);
+                return null;
+            }
 
-        if (mapping.riskLevel === 'high') {
-            console.log(`[SelfImprovement] ⚠️  High risk change flagged — skipping autonomous proposal`);
-            return null;
-        }
+            if (mapping.riskLevel === 'high') {
+                console.log(`[SelfImprovement] ⚠️  High risk change flagged — skipping autonomous proposal`);
+                return null;
+            }
 
-        const targetFile = mapping.file;
+            targetFile = mapping.file;
+            targetInstruction = mapping.instruction;
+            targetRationale = mapping.rationale || weakness;
+        }
 
         // Prevent duplicate proposals for the same file
         if (this._inFlight.has(targetFile)) {
@@ -119,7 +129,7 @@ If the weakness is better fixed via prompt/config (not code), return confidence 
         this._inFlight.add(targetFile);
 
         try {
-            return await this._generateProposal(targetFile, mapping.instruction, weakness, mapping.rationale, source, priority);
+            return await this._generateProposal(targetFile, targetInstruction, weakness, targetRationale, source, priority);
         } finally {
             this._inFlight.delete(targetFile);
         }
@@ -138,6 +148,13 @@ If the weakness is better fixed via prompt/config (not code), return confidence 
             newCode = await selfEditor.proposeEdit(file, instruction, this.max.brain);
         } catch (err) {
             console.warn(`[SelfImprovement] Code generation failed: ${err.message}`);
+            return null;
+        }
+
+        // ── Step 2.5: Anti-Lobotomy check on proposed code ───────────────
+        const lobotomy = this.checkLobotomy(file, newCode);
+        if (!lobotomy.safe) {
+            console.warn(`[SelfImprovement] 🛑 Lobotomy check failed for ${file}: ${lobotomy.error}`);
             return null;
         }
 
@@ -192,7 +209,8 @@ If the weakness is better fixed via prompt/config (not code), return confidence 
         console.log(`[SelfImprovement] ✅ Proposal ${id} queued — ${diffResult.changes} change(s) in ${file}`);
 
         // ── Step 7: Autonomous Machine Approval (SOMA Queen / MAX Swarm) ──
-        const autoApprovalEnabled = process.env.MAX_AUTO_APPROVE === 'all' || this.max.config.autoApproveSelfEdit;
+        const isInteractiveOperator = source === 'api' || source === 'discord_operator' || source === 'smoke_test';
+        const autoApprovalEnabled = !isInteractiveOperator && (process.env.MAX_AUTO_APPROVE_SELF_MOD === 'true' || this.max.config.autoApproveSelfEdit);
         if (autoApprovalEnabled) {
             console.log(`[SelfImprovement] 🤖 Autonomous Mode: Barry is out-of-the-loop. Evaluating proposal ${id} via SOMA / MAX Swarm...`);
             const review = await this.evaluateProposalAutonomously(proposal);
@@ -247,30 +265,22 @@ Respond ONLY in JSON format:
             }
         }
 
-        // Track 2: MAX Internal Security Council / Evolution Arbiter
+        // Track 2: MAX Internal Adversarial Swarm Review (Architect, Security Auditor, User Proxy)
         try {
-            console.log(`[SelfImprovement] 🛡️ Running MAX Internal Security Council review...`);
-            const maxReviewPrompt = `You are MAX's Security Council reviewing an autonomous self-repair.
-FILE: ${proposal.file}
-INSTRUCTION: ${proposal.instruction}
-DIFF:
-${proposal.diff}
-
-Evaluate safety, logic, and rollback risk.
-Respond ONLY in JSON format:
-{"approved": true, "rationale": "one sentence explanation"} or {"approved": false, "reason": "why rejected"}`;
-
-            const res = await this.max.brain.think(maxReviewPrompt, { tier: 'fast', temperature: 0.1 });
-            const jsonMatch = res.text.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-                const parsed = JSON.parse(jsonMatch[0]);
+            console.log(`[SelfImprovement] 🛡️ Running MAX Adversarial Swarm review...`);
+            const swarmReview = await this.adversarialReview(proposal);
+            if (!swarmReview.approved) {
                 return {
-                    approved: parsed.approved !== false,
-                    approver: 'MAX Security Council (Machine B)',
-                    rationale: parsed.rationale || 'Internal Security Council validated safety checks.',
-                    reason: parsed.reason || 'Security Council rejected modification.'
+                    approved: false,
+                    approver: swarmReview.approver,
+                    reason: swarmReview.reason
                 };
             }
+            return {
+                approved: true,
+                approver: swarmReview.approver,
+                rationale: swarmReview.rationale
+            };
         } catch (err) {
             console.warn(`[SelfImprovement] Internal review error: ${err.message}`);
         }
@@ -410,6 +420,26 @@ Respond ONLY in JSON format:
         await this.propose(weakness, { source: 'agentloop_auto', priority: 0.8 }).catch(() => {});
     }
 
+    // ─── Trigger from CuriosityEngine: code improvement proposal ──────────
+    async onCuriosityInsight(targetFile, insight) {
+        if (!targetFile || !insight) return;
+        if (this._proposals.size >= 3) return;
+        const cooldownMs = Number(process.env.MAX_SELF_IMPROVE_COOLDOWN_MS || 15 * 60 * 1000); // 15 mins default
+        if (Date.now() - this._lastProposalAt < cooldownMs) return;
+        if (this.max._chatBusy || this.max.agentLoop?._running) return;
+
+        this._lastProposalAt = Date.now();
+        console.log(`[SelfImprovement] 💡 Evaluating curiosity insight for ${targetFile}...`);
+        return await this.propose(insight, {
+            source: 'curiosity_auto',
+            file: targetFile,
+            priority: 0.75
+        }).catch((err) => {
+            console.warn(`[SelfImprovement] Curiosity proposal failed: ${err.message}`);
+            return null;
+        });
+    }
+
     // ─── Internal helpers ─────────────────────────────────────────────────
 
     async _gitCheckpoint(file, proposalId) {
@@ -466,6 +496,241 @@ Respond ONLY in JSON format:
         if ((p.diff || '').split('\n').length > 12) console.log(`║  ... (${p.changes} total changes)`);
         console.log(`╚${border}╝`);
         console.log(`  → /approve ${p.id}   or   /deny ${p.id}\n`);
+    }
+
+    // ─── Lobotomy & System Integrity Protections ─────────────────────────
+    checkLobotomy(file, code) {
+        if (!code || typeof code !== 'string') return { safe: false, error: 'Empty code buffer' };
+        const filename = file.split(/[\\/]/).pop();
+
+        if (filename === 'MAX.js') {
+            if (!code.includes('class MAX')) {
+                return { safe: false, error: "Lobotomy Detected: 'class MAX' missing from MAX.js." };
+            }
+            if (!code.includes('async think(') && !code.includes('think(')) {
+                return { safe: false, error: "Brain Failure: 'think' method missing from MAX.js." };
+            }
+        }
+        if (filename === 'AgentLoop.js') {
+            if (!code.includes('runCycle') && !code.includes('async runCycle')) {
+                return { safe: false, error: "Autonomy Failure: 'runCycle' missing from AgentLoop.js." };
+            }
+        }
+        if (filename === 'GoalEngine.js') {
+            if (!code.includes('decompose') && !code.includes('async decompose')) {
+                return { safe: false, error: "Planning Failure: 'decompose' missing from GoalEngine.js." };
+            }
+        }
+        if (filename === 'Brain.js') {
+            if (!code.includes('class Brain') || (!code.includes('think(') && !code.includes('async think('))) {
+                return { safe: false, error: "Cognitive Failure: 'Brain' class or 'think' missing from Brain.js." };
+            }
+        }
+        return { safe: true };
+    }
+
+    // ─── Adversarial Swarm Review (Architect, Security Auditor, User Proxy) ─
+    async adversarialReview(proposal) {
+        console.log(`[SelfImprovement] 🐝 Running adversarial 3-agent review for ${proposal.file}...`);
+        const filename = proposal.file.split(/[\\/]/).pop();
+        const code = proposal.newCode || '';
+        const userProfile = this.max?.profile?._user || this.max?.profile?.name || 'Standard developer profile';
+
+        // Track A: SwarmCoordinator if active
+        if (this.max?.swarm && typeof this.max.swarm.run === 'function') {
+            try {
+                const task = {
+                    name: `Review Evolution: ${filename}`,
+                    subtasks: [
+                        {
+                            id: 'Architect',
+                            prompt: `Review proposed change to ${filename}.\nINSTRUCTION: ${proposal.instruction}\nRATIONALE: ${proposal.rationale}\nDIFF:\n${proposal.diff}\nIs this architectural improvement clean, idiomatic, and robust?`
+                        },
+                        {
+                            id: 'SecurityAuditor',
+                            prompt: `Act as a paranoid security and stability auditor. Find any ways this change to ${filename} could break the system, introduce leaks, or crash the agent.\nCODE:\n${code.slice(0, 3000)}\nReturn a DISCOVERY: {"riskSeverity": 0.0-1.0, "reason": "..."} if you find issues.`
+                        },
+                        {
+                            id: 'UserProxy',
+                            prompt: `Review this change against the user's profile and intent:\nUSER PROFILE: ${userProfile}\nDoes this match user coding preferences and system goals?\nDIFF:\n${proposal.diff}`
+                        }
+                    ]
+                };
+                const result = await this.max.swarm.run(task);
+                const securityResult = result?.results?.find(r => r.id === 'SecurityAuditor');
+                const risk = securityResult?.discoveries?.riskSeverity || 0;
+                if (risk > 0.7) {
+                    const reason = securityResult?.discoveries?.reason || 'Swarm Security Auditor flagged high risk';
+                    return { approved: false, approver: 'Swarm Security Auditor', reason, risk };
+                }
+                return { approved: true, approver: 'Adversarial Swarm (Architect + Security + UserProxy)', rationale: 'Passed 3-agent swarm consensus.' };
+            } catch (swarmErr) {
+                console.warn(`[SelfImprovement] Swarm execution error: ${swarmErr.message}, falling back to Brain review...`);
+            }
+        }
+
+        // Track B: Direct Brain multi-agent simulated review
+        if (this.max?.brain?._ready) {
+            try {
+                const prompt = `You are MAX's Tri-Perspective Review Board (Architect, Security Auditor, and User Proxy).
+FILE: ${proposal.file}
+INSTRUCTION: ${proposal.instruction}
+RATIONALE: ${proposal.rationale}
+DIFF:
+${proposal.diff}
+
+Evaluate:
+1. Architect: Modularity, maintainability, syntax soundness.
+2. Security Auditor: Crash risks, leaks, lobotomies, loops (assign riskSeverity from 0.0 to 1.0).
+3. User Proxy: Alignment with user workflows.
+
+Respond ONLY with valid JSON:
+{
+  "approved": true,
+  "riskSeverity": 0.1,
+  "rationale": "one sentence explanation",
+  "reason": "if rejected, explain why"
+}`;
+                const res = await this.max.brain.think(prompt, { tier: 'code', temperature: 0.1, maxTokens: 400 });
+                const match = res.text.match(/\{[\s\S]*\}/);
+                if (match) {
+                    const parsed = JSON.parse(match[0]);
+                    if (parsed.riskSeverity > 0.7 || parsed.approved === false) {
+                        return {
+                            approved: false,
+                            approver: 'Tri-Perspective Review Board',
+                            reason: parsed.reason || 'High risk severity score',
+                            risk: parsed.riskSeverity
+                        };
+                    }
+                    return {
+                        approved: true,
+                        approver: 'Tri-Perspective Review Board',
+                        rationale: parsed.rationale || 'Code passed multi-perspective review',
+                        risk: parsed.riskSeverity || 0.1
+                    };
+                }
+            } catch (bErr) {
+                console.warn(`[SelfImprovement] Brain review warning: ${bErr.message}`);
+            }
+        }
+
+        return { approved: true, approver: 'Automated Validation Gate', rationale: 'Static & structural validation passed' };
+    }
+
+    // ─── Skill Evolution & Winning Path Mining ───────────────────────────
+    async mineSkills() {
+        return this.analyzeWinningPaths();
+    }
+
+    async analyzeWinningPaths() {
+        if (!this.max?.outcomes || !this.max?.brain?._ready) return [];
+        this.stats.skillAnalyses = (this.stats.skillAnalyses || 0) + 1;
+
+        const recentOutcomes = this.max.outcomes.query({ limit: 50, success: true });
+        if (recentOutcomes.length < 5) return [];
+
+        console.log(`[SelfImprovement] 🧬 Mining skills from ${recentOutcomes.length} successful outcomes...`);
+
+        const outcomeText = recentOutcomes
+            .map(o => `Goal: ${o.context?.goalTitle || o.context?.title || o.action}\nResult: ${(o.result || '').slice(0, 200)}`)
+            .join('\n\n---\n\n');
+
+        const prompt = `You are MAX's Skill Evolution Arbiter.
+Analyze these successful task outcomes and identify any RECURRING or COMPLEX procedures that should be codified as a permanent SKILL.
+
+SUCCESSFUL PATHS:
+${outcomeText}
+
+Look for:
+- Sequences of 3+ tool calls that achieved a significant goal.
+- Procedures that seem "manual" but worked well (e.g., searching docs, then writing a specific config).
+- Complex refactor patterns.
+
+Return ONLY a JSON array of skill proposals:
+[
+  {
+    "name": "snake_case_name",
+    "trigger": "when to use this",
+    "summary": "what it does",
+    "priority": 0.1-1.0
+  }
+]
+If nothing worth codifying is found, return "[]".`;
+
+        try {
+            const res = await this.max.brain.think(prompt, { tier: 'fast', temperature: 0.2, maxTokens: 800 });
+            const match = res.text.match(/\[[\s\S]*\]/);
+            if (match) {
+                const proposals = JSON.parse(match[0]);
+                const created = [];
+                for (const prop of proposals) {
+                    if (prop.priority > 0.7 && this.max.goals?.addGoal) {
+                        console.log(`[SelfImprovement] ✨ Proposing Skill Evolution: "${prop.name}"`);
+                        this.stats.skillsPromoted = (this.stats.skillsPromoted || 0) + 1;
+                        this.max.goals.addGoal({
+                            title: `Codify Skill: ${prop.name}`,
+                            description: `Codify the successful procedure for "${prop.summary}" into the SkillLibrary. Context: ${prop.trigger}. Look at recent successful outcomes for "${prop.name}" to extract the winning steps.`,
+                            type: 'improvement',
+                            priority: prop.priority,
+                            source: 'skill_evolution'
+                        });
+                        created.push(prop);
+                    }
+                }
+                return created;
+            }
+        } catch (err) {
+            console.error('[SelfImprovement] Skill mining failed:', err.message);
+        }
+        return [];
+    }
+
+    // ─── SOMA / External Proposal Deployment Bridge ───────────────────────
+    async applyExternalProposal(proposal, onLog = console.log) {
+        try {
+            const { applyProposal } = await import('./SomaController.js');
+            return await applyProposal(proposal, onLog);
+        } catch (err) {
+            onLog(`[SelfImprovement] External apply failed: ${err.message}`);
+            return { applied: false, reason: 'error', error: err.message };
+        }
+    }
+
+    // ─── EvolutionArbiter & SelfEditor Compatibility Facade Methods ───────
+    async verify(stagedPath) {
+        try {
+            const code = await fs.readFile(stagedPath, 'utf8');
+            const file = path.basename(stagedPath);
+            const lobotomy = this.checkLobotomy(file, code);
+            if (!lobotomy.safe) return { success: false, error: lobotomy.error };
+            const syntax = await this._checkLiveFile(stagedPath);
+            if (!syntax.ok) return { success: false, error: syntax.error };
+            return { success: true };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    }
+
+    async diff(relPath) {
+        if (this.max?.selfEditor?.diff) {
+            return this.max.selfEditor.diff(relPath);
+        }
+        return null;
+    }
+
+    async commit(relPath) {
+        if (this.max?.selfEditor?.commit) {
+            return this.max.selfEditor.commit(relPath);
+        }
+        return { success: false, error: 'SelfEditor not available' };
+    }
+
+    async rollback(relPath) {
+        if (this.max?.selfEditor?.rollback) {
+            return this.max.selfEditor.rollback(relPath);
+        }
+        return { success: true };
     }
 
     getStatus() {

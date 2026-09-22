@@ -743,7 +743,9 @@ try { localStorage.setItem('maxwell_api_key', ${JSON.stringify(API_KEY)}); } cat
         pendingProposals.delete(proposal.taskId);
         pendingProposals.delete(proposal.taskId.slice(0, 8));
 
-        const result = await applyProposal(proposal, msg => console.log(msg));
+        const result = max?.selfImprovement?.applyExternalProposal
+            ? await max.selfImprovement.applyExternalProposal(proposal, msg => console.log(msg))
+            : await applyProposal(proposal, msg => console.log(msg));
 
         const SOMA_URL = process.env.SOMA_URL || 'http://127.0.0.1:3001';
         fetch(`${SOMA_URL}/api/soma/modification-result`, {
@@ -886,6 +888,56 @@ Reply ONLY with JSON: {"verdict":"approve"|"deny"|"escalate","confidence":0.0-1.
 
     // Expose pendingProposals for launcher commands
     app._somaProposals = pendingProposals;
+
+    // ── Self-Improvement Engine Routes (DeepSeek Flash Powered) ─────────────
+    app.post('/api/self-improve/propose', async (req, res) => {
+        if (!max.selfImprovement) return res.status(503).json({ error: 'Self-improvement engine not initialized' });
+        const { weakness, file, instruction, rationale, priority, source } = req.body || {};
+        if (!weakness && !instruction) {
+            return res.status(400).json({ error: 'weakness or instruction required' });
+        }
+        try {
+            const proposal = await max.selfImprovement.propose(weakness || instruction, {
+                file,
+                instruction,
+                rationale,
+                priority,
+                source: source || 'api'
+            });
+            if (!proposal) {
+                return res.status(422).json({ error: 'Proposal could not be generated (validation, high-risk flag, or duplicate in-flight)' });
+            }
+            res.json({ success: true, proposal });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.get('/api/self-improve/proposals', (req, res) => {
+        if (!max.selfImprovement) return res.status(503).json({ error: 'Self-improvement engine not initialized' });
+        res.json(max.selfImprovement.list());
+    });
+
+    app.post('/api/self-improve/approve/:id', async (req, res) => {
+        if (!max.selfImprovement) return res.status(503).json({ error: 'Self-improvement engine not initialized' });
+        const result = await max.selfImprovement.approve(req.params.id);
+        if (result.success) res.json(result);
+        else res.status(400).json(result);
+    });
+
+    app.post('/api/self-improve/deny/:id', async (req, res) => {
+        if (!max.selfImprovement) return res.status(503).json({ error: 'Self-improvement engine not initialized' });
+        const result = await max.selfImprovement.deny(req.params.id);
+        if (result.success) res.json(result);
+        else res.status(400).json(result);
+    });
+
+    app.delete('/api/self-improve/proposals/:id', async (req, res) => {
+        if (!max.selfImprovement) return res.status(503).json({ error: 'Self-improvement engine not initialized' });
+        const result = await max.selfImprovement.deny(req.params.id);
+        if (result.success) res.json(result);
+        else res.status(400).json(result);
+    });
 
     // ── SOMA bridge toggle ────────────────────────────────────────────────
     // Check if SOMA is reachable right now

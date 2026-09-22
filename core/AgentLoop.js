@@ -196,6 +196,36 @@ export class AgentLoop extends EventEmitter {
             // Recall a proven skill — inject into planner so it reuses what worked before
             const skill = await this.max.skills?.recall(goal.title) || null;
 
+            // Step 1.9: Contextual Recall — Memory & KnowledgeBase (eliminates autonomous amnesia)
+            let recalledMemories = [];
+            let kbChunks = [];
+            try {
+                if (this.max.memory?.recall) {
+                    recalledMemories = await this.max.memory.recall(goal.title, { topK: 3 }).catch(() => []);
+                }
+                if (this.max.kb?.query) {
+                    kbChunks = await this.max.kb.query(goal.title, { topK: 3 }).catch(() => []);
+                }
+            } catch { /* non-fatal recall */ }
+
+            if (recalledMemories.length > 0 || kbChunks.length > 0) {
+                goal.context = (goal.context ? goal.context + '\n' : '') +
+                    (recalledMemories.length > 0 ? `\nPast Memories:\n${recalledMemories.map(m => `• ${m.content}`).join('\n')}` : '') +
+                    (kbChunks.length > 0 ? `\nKnowledge Base Insights:\n${kbChunks.map(c => `• ${c.content || c.text}`).join('\n')}` : '');
+            }
+
+            // Step 1.95: Mental Simulation via WorldModel before decomposition
+            if (this.max.world?.simulate) {
+                try {
+                    const state = this.max.world.getCurrentState();
+                    const sim = this.max.world.simulate(state, goal.title);
+                    if (sim && sim.confidence < 0.4) {
+                        console.log(`[AgentLoop] 🌍 WorldModel flags high uncertainty (${(sim.confidence * 100).toFixed(0)}%) for "${goal.title}" — robust verification enabled`);
+                        goal.highUncertainty = true;
+                    }
+                } catch { /* non-fatal simulation */ }
+            }
+
             if (goals?.decompose) {
                 // ARCHITECT PHASE: Use smart tier (Reasoner) for planning
                 goal.steps = await goals.decompose(goal, { availableTools: toolNames, skill, tier: 'smart' });

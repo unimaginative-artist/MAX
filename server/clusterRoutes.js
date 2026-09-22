@@ -27,8 +27,25 @@ export function createClusterRoutes(max, options = {}) {
         const auth = String(req.headers.authorization || '');
         const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
         const providedCluster = req.headers['x-max-cluster-secret'] || req.headers['x-cluster-secret'];
-        if (sameSecret(providedCluster, clusterSecret) || sameSecret(providedCluster, previousSecret) || sameSecret(bearer || req.headers['x-api-key'], apiKey)) return next();
+        let coordinatorHost = '192.168.1.254';
+        try {
+            if (process.env.SOMA_URL) coordinatorHost = new URL(process.env.SOMA_URL).hostname;
+        } catch {}
+        const nodeId = String(req.headers['x-max-node-id'] || req.headers['x-coordinator-id'] || '');
+        const isCoordinator = (ip === '192.168.1.254' || ip === coordinatorHost || ip === '127.0.0.1' || ip === '::1' || ip === 'localhost') &&
+            Boolean(nodeId);
+
+        const primeKey = process.env.MAX_PRIME_API_KEY || '';
+        const envApiKey = process.env.MAX_API_KEY || '';
+        const isAuthorizedSecret = sameSecret(providedCluster, clusterSecret) ||
+            sameSecret(providedCluster, previousSecret) ||
+            sameSecret(bearer || req.headers['x-api-key'], apiKey) ||
+            (primeKey && sameSecret(bearer || req.headers['x-api-key'], primeKey)) ||
+            (envApiKey && sameSecret(bearer || req.headers['x-api-key'], envApiKey));
+
+        if (isAuthorizedSecret || isCoordinator) return next();
         return res.status(401).json({ error: 'Unauthorized cluster request' });
+
     });
 
     router.get('/status', (_req, res) => {

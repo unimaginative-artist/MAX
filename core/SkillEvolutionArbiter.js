@@ -23,6 +23,13 @@ export class SkillEvolutionArbiter {
      * Scans recent outcomes to find "The Winning Path" for a task.
      */
     async analyzeWinningPaths() {
+        if (this.max?.selfImprovement?.analyzeWinningPaths) {
+            const res = await this.max.selfImprovement.analyzeWinningPaths();
+            this.stats.totalAnalyses++;
+            if (res?.length > 0) this.stats.promotionsSuggested += res.length;
+            return res;
+        }
+
         if (!this.max.outcomes || !this.max.brain?._ready) return;
         this.stats.totalAnalyses++;
 

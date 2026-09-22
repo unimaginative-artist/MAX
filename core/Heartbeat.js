@@ -150,16 +150,34 @@ export class Heartbeat extends EventEmitter {
             } catch (err) {
                 console.error('[Heartbeat] AgentLoop error:', err.message);
             }
-        } else if (hasPendingGoals && !autonomousGoalsEnabled) {
-            this.emit('idle');
-            return false;
         }
 
+
+
         // â”€â”€ Otherwise run a curiosity task â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        if (this.max?.curiosity?.runCuriosityCycle) {
+            try {
+                const cycleResult = await this.max.curiosity.runCuriosityCycle(this.max);
+                if (cycleResult) {
+                    this.stats.lastTask = cycleResult.label || 'curiosity_cycle';
+                    this.stats.tasksExecuted++;
+                    this.emit('task', { label: cycleResult.label, prompt: cycleResult.vector?.prompt });
+                    this.emit('insight', {
+                        source: 'curiosity',
+                        label: `🔍 Explored: ${cycleResult.label}`,
+                        result: cycleResult.synthesis || cycleResult.whyChain
+                    });
+                    return true;
+                }
+            } catch (err) {
+                console.error('[Heartbeat] Error during curiosity cycle:', err.message);
+            }
+        }
+
         const curiosityTask = this.max?.curiosity?.getNextTask?.();
 
         if (curiosityTask) {
-            console.log(`[Heartbeat] ðŸ” Curiosity task: ${curiosityTask.label}`);
+            console.log(`[Heartbeat] ðŸ”  Curiosity task: ${curiosityTask.label}`);
             this.stats.lastTask = curiosityTask.label;
             this.stats.tasksExecuted++;
 

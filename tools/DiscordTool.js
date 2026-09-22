@@ -47,6 +47,8 @@ let _reconnectTimer = null;
 let _lastError = null;
 let _lastConnectedAt = null;
 let _reconnectAttempts = 0;
+let _maxInstance = null;
+let _selfImprovementWired = false;
 
 // Channels where MAX auto-reads and replies { channelId -> { guildName, channelName } }
 const _monitored = new Map();
@@ -165,6 +167,30 @@ async function connectClient(token) {
                         await interaction.reply({ content: '🚀 SOMA deployment signal emitted over LAN bridge!', ephemeral: true });
                     } else if (action === 'btn_run_tests') {
                         await interaction.reply({ content: '🧪 Executing local regression test suite...', ephemeral: true });
+                    } else if (action === 'btn_approve_proposal') {
+                        await interaction.deferReply({ ephemeral: false });
+                        if (!_maxInstance?.selfImprovement) {
+                            await interaction.editReply({ content: '❌ Self-improvement engine not available.' });
+                            return;
+                        }
+                        const result = await _maxInstance.selfImprovement.approve(targetId);
+                        if (result.success) {
+                            await interaction.editReply({ content: `✅ **Proposal \`${targetId}\` Approved & Applied!**\nFile: \`${result.file}\`\nBackup saved: \`${result.backup || 'verified'}\`` });
+                        } else {
+                            await interaction.editReply({ content: `❌ **Failed to apply proposal \`${targetId}\`:** ${result.error}` });
+                        }
+                    } else if (action === 'btn_deny_proposal') {
+                        await interaction.deferReply({ ephemeral: false });
+                        if (!_maxInstance?.selfImprovement) {
+                            await interaction.editReply({ content: '❌ Self-improvement engine not available.' });
+                            return;
+                        }
+                        const result = await _maxInstance.selfImprovement.deny(targetId);
+                        if (result.success) {
+                            await interaction.editReply({ content: `🛑 **Proposal \`${targetId}\` Denied & Staging Cleaned.** Target file unchanged.` });
+                        } else {
+                            await interaction.editReply({ content: `❌ **Failed to deny proposal \`${targetId}\`:** ${result.error}` });
+                        }
                     }
                 } catch (err) {
                     console.warn('[Discord] Button interaction error:', err.message);
@@ -249,6 +275,119 @@ async function connectClient(token) {
                         await msg.reply(reply);
                         return;
                     }
+                }
+
+                // 3. Self-Improvement Command Handlers (DeepSeek Flash Powered)
+                // 3a. List Proposals
+                if (/^(?:\/|@Max\s+)?proposals\b/i.test(msg.content.trim())) {
+                    if (!_maxInstance?.selfImprovement) {
+                        await msg.reply('❌ Self-improvement engine is not initialized.');
+                        return;
+                    }
+                    const list = _maxInstance.selfImprovement.list();
+                    if (!list || list.length === 0) {
+                        await msg.reply('ℹ️ No pending self-modification proposals in queue.');
+                        return;
+                    }
+                    const lines = list.map(p => `• **\`${p.id}\`**: \`${p.file}\` (${p.changes} lines) — "${p.instruction.slice(0, 60)}..." [source: \`${p.source}\`]`);
+                    await msg.reply(`📋 **Pending Self-Modification Proposals (${list.length}):**\n${lines.join('\n')}\n\n*Use \`@Max approve <id>\` or \`@Max deny <id>\` to manage.*`);
+                    return;
+                }
+
+                // 3b. Approve Proposal
+                const approveMatch = msg.content.trim().match(/^(?:\/|@Max\s+)?approve\s+([a-f0-9]+)/i);
+                if (approveMatch) {
+                    if (!_maxInstance?.selfImprovement) {
+                        await msg.reply('❌ Self-improvement engine is not initialized.');
+                        return;
+                    }
+                    const id = approveMatch[1];
+                    msg.channel?.sendTyping?.().catch(() => {});
+                    const result = await _maxInstance.selfImprovement.approve(id);
+                    if (result.success) {
+                        await msg.reply(`✅ **Proposal \`${id}\` Approved & Applied!**\nFile: \`${result.file}\`\nBackup saved: \`${result.backup || 'verified'}\``);
+                    } else {
+                        await msg.reply(`❌ **Failed to apply proposal \`${id}\`:** ${result.error}`);
+                    }
+                    return;
+                }
+
+                // 3c. Deny Proposal
+                const denyMatch = msg.content.trim().match(/^(?:\/|@Max\s+)?deny\s+([a-f0-9]+)/i);
+                if (denyMatch) {
+                    if (!_maxInstance?.selfImprovement) {
+                        await msg.reply('❌ Self-improvement engine is not initialized.');
+                        return;
+                    }
+                    const id = denyMatch[1];
+                    const result = await _maxInstance.selfImprovement.deny(id);
+                    if (result.success) {
+                        await msg.reply(`🛑 **Proposal \`${id}\` Denied & Staging Cleaned.** Target file unchanged.`);
+                    } else {
+                        await msg.reply(`❌ **Failed to deny proposal \`${id}\`:** ${result.error}`);
+                    }
+                    return;
+                }
+
+                // 3d. Direct Surgical Self-Modification (@Max self-mod <file> <instruction>)
+                const selfModMatch = msg.content.trim().match(/^(?:\/|@Max\s+)?(?:self-mod|mod)\s+([^\s]+)\s+([\s\S]+)/i);
+                if (selfModMatch) {
+                    if (!_maxInstance?.selfImprovement) {
+                        await msg.reply('❌ Self-improvement engine is not initialized.');
+                        return;
+                    }
+                    const targetFile = selfModMatch[1];
+                    const instruction = selfModMatch[2].trim();
+                    msg.channel?.sendTyping?.().catch(() => {});
+                    await msg.reply(`🔧 **DeepSeek Flash Self-Modification Triggered**\n• Target: \`${targetFile}\`\n• Instruction: "${instruction}"\nGenerating AST-safe surgical changes via DeepSeek Flash (\`tier: 'code'\`)...`);
+
+                    try {
+                        const proposal = await _maxInstance.selfImprovement.propose(instruction, {
+                            source: 'discord_operator',
+                            file: targetFile,
+                            instruction
+                        });
+                        if (proposal) {
+                            proposal._broadcastHandled = true;
+                            const embed = DiscordUIFactory.createSelfImprovementEmbed(proposal);
+                            const row = DiscordUIFactory.createSelfImprovementActionRow(proposal.id);
+                            await msg.reply({ embeds: [embed], components: [row] });
+                        } else {
+                            await msg.reply(`⚠️ Self-modification proposal could not be staged. (Check logs for syntax/AST validation or anti-lobotomy flags).`);
+                        }
+                    } catch (err) {
+                        await msg.reply(`❌ Self-modification error: ${err.message}`);
+                    }
+                    return;
+                }
+
+                // 3e. Architectural Improvement Proposal (@Max improve <weakness>)
+                const improveMatch = msg.content.trim().match(/^(?:\/|@Max\s+)?(?:improve|self-improve)\s+([\s\S]+)/i);
+                if (improveMatch) {
+                    if (!_maxInstance?.selfImprovement) {
+                        await msg.reply('❌ Self-improvement engine is not initialized.');
+                        return;
+                    }
+                    const weakness = improveMatch[1].trim();
+                    msg.channel?.sendTyping?.().catch(() => {});
+                    await msg.reply(`🧠 **DeepSeek Flash Codebase Mapping Triggered**\n• Weakness/Goal: "${weakness}"\nMapping architectural target files and synthesizing surgical patch...`);
+
+                    try {
+                        const proposal = await _maxInstance.selfImprovement.propose(weakness, {
+                            source: 'discord_operator'
+                        });
+                        if (proposal) {
+                            proposal._broadcastHandled = true;
+                            const embed = DiscordUIFactory.createSelfImprovementEmbed(proposal);
+                            const row = DiscordUIFactory.createSelfImprovementActionRow(proposal.id);
+                            await msg.reply({ embeds: [embed], components: [row] });
+                        } else {
+                            await msg.reply(`⚠️ No safe low/medium-risk proposal could be generated for that weakness. (High-risk changes are autonomously rejected).`);
+                        }
+                    } catch (err) {
+                        await msg.reply(`❌ Improvement error: ${err.message}`);
+                    }
+                    return;
                 }
 
                 const payload = {
@@ -627,11 +766,40 @@ async function resolveChannel(channelId, channelName) {
 
 // ── Auto-reconnect on boot if credentials saved ───────────────────────────
 export async function autoConnectDiscord(max) {
+    if (max) _maxInstance = max;
     const creds = loadCreds();
     if (!creds.discord?.token) return false;
     try {
         await connectClient(creds.discord.token);
         if (max?.notifier) max.notifier.setDiscordTool(DiscordTool);
+
+        // Wire autonomous self-improvement proposals to Discord broadcast
+        if (max?.selfImprovement && !_selfImprovementWired) {
+            _selfImprovementWired = true;
+            max.selfImprovement.on('proposal', async (proposal) => {
+                try {
+                    if (!_connected || !_client || proposal._broadcastHandled) return;
+                    const targetChannelId = loadCreds().discord?.channelId || '279381115805106176';
+                    let ch = null;
+                    try {
+                        ch = await _client.channels.fetch(targetChannelId);
+                    } catch {
+                        for (const cId of _monitored.keys()) {
+                            ch = await _client.channels.fetch(cId).catch(() => null);
+                            if (ch) break;
+                        }
+                    }
+                    if (!ch) return;
+                    const embed = DiscordUIFactory.createSelfImprovementEmbed(proposal);
+                    const row = DiscordUIFactory.createSelfImprovementActionRow(proposal.id);
+                    await ch.send({ embeds: [embed], components: [row] });
+                    console.log(`[Discord] 📢 Broadcasted self-improvement proposal ${proposal.id} to #${ch.name || ch.id}`);
+                } catch (err) {
+                    console.warn('[Discord] Failed to broadcast self-improvement proposal:', err.message);
+                }
+            });
+        }
+
         // Restore monitored channels + default channels (soma-chat, General, bots-commands)
         const defaultChannels = ['279381115805106176', '360843306394976256', '345219851436163073'];
         const channelsToMonitor = new Set([...(creds.discord.monitored || []), ...defaultChannels]);
@@ -650,3 +818,8 @@ export async function autoConnectDiscord(max) {
         return false;
     }
 }
+
+export function setDiscordMaxInstance(max) {
+    if (max) _maxInstance = max;
+}
+

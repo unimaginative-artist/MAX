@@ -6,9 +6,79 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 export class ReasoningChamber {
-    constructor(brain, config = {}) {
-        this.brain = brain;
-        this.stats = { total: 0, byType: {}, byStrategy: {}, avgConfidence: 0 };
+    constructor(brain, memoryOrConfig = null, outcomes = null, config = {}) {
+        this.brain    = brain;
+        this.memory   = (typeof memoryOrConfig === 'object' && memoryOrConfig !== null && !memoryOrConfig.topK && !memoryOrConfig.debug) ? memoryOrConfig : null;
+        this.outcomes = outcomes;
+        this.config   = (typeof memoryOrConfig === 'object' && memoryOrConfig !== null && (memoryOrConfig.topK || memoryOrConfig.debug)) ? memoryOrConfig : config;
+        this.stats    = { total: 0, byType: {}, byStrategy: {}, avgConfidence: 0 };
+    }
+
+    /**
+     * Hierarchical goal decomposition into concrete execution steps
+     */
+    async decompose(goal, { availableTools = [], skill = null, tier = 'smart' } = {}) {
+        const title = typeof goal === 'string' ? goal : (goal.title || goal.description || 'Unknown Goal');
+        const desc  = typeof goal === 'object' ? (goal.description || '') : '';
+        const toolList = availableTools.length > 0 ? availableTools.join(', ') : 'file, shell, git, web, memory, kb, brain';
+
+        const prompt = `You are MAX's hierarchical planning architect. Decompose this goal into 2 to 5 concrete, actionable sequential steps.
+
+GOAL: "${title}"
+${desc ? `DETAILS: "${desc}"` : ''}
+${skill ? `RECALLED SKILL: "${skill.name}": ${skill.description}` : ''}
+AVAILABLE TOOLS: ${toolList}
+
+Each step must specify:
+1. "step": Step number (1, 2, 3...)
+2. "action": Specific description of what to do
+3. "tool": Which tool to use (from available tools, or 'brain' for pure analysis)
+4. "action_name": (optional) sub-action like 'read', 'write', 'search', 'run'
+5. "success": What success looks like
+6. "dependsOn": Array of prior step numbers
+
+Return ONLY a valid JSON array of step objects:
+[
+  { "step": 1, "action": "...", "tool": "...", "action_name": "...", "success": "...", "dependsOn": [] },
+  { "step": 2, "action": "...", "tool": "...", "action_name": "...", "success": "...", "dependsOn": [1] }
+]`;
+
+        try {
+            const resObj = await this.brain.think(prompt, {
+                systemPrompt: 'You are MAX, an expert software engineer and autonomous planner. Output ONLY valid JSON array.',
+                tier,
+                temperature: 0.2,
+                maxTokens: 1024
+            });
+
+            const text = resObj?.text || '';
+            const match = text.match(/\[\s*\{[\s\S]*\}\s*\]/);
+            if (match) {
+                const steps = JSON.parse(match[0]);
+                if (Array.isArray(steps) && steps.length > 0) {
+                    return steps.map((s, idx) => ({
+                        step: s.step || idx + 1,
+                        action: s.action || title,
+                        tool: s.tool || 'brain',
+                        action_name: s.action_name || 'run',
+                        success: s.success || 'completed',
+                        dependsOn: Array.isArray(s.dependsOn) ? s.dependsOn : []
+                    }));
+                }
+            }
+        } catch (err) {
+            console.warn(`[ReasoningChamber] Decomposition failed: ${err.message}`);
+        }
+
+        // Fallback to single-step execution
+        return [{
+            step: 1,
+            action: title,
+            tool: 'brain',
+            action_name: 'run',
+            success: 'completed',
+            dependsOn: []
+        }];
     }
 
     // ─── Main entry point ─────────────────────────────────────────────────
