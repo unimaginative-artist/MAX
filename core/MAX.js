@@ -1106,8 +1106,8 @@ Actions:
     _scheduleBackgroundLoops() {
         const configured = Number(process.env.MAX_BACKGROUND_START_DELAY_MS);
         const mode = this.config.mode || this.config.runtimeMode || 'chat';
-        if (mode === 'api' && process.env.MAX_API_BACKGROUND === 'false') {
-            console.log('[MAX] API mode — background loops disabled (MAX_API_BACKGROUND=false)');
+        if (process.env.MAX_API_BACKGROUND === 'false' || mode === 'test') {
+            console.log('[MAX] Background loops disabled (MAX_API_BACKGROUND=false)');
             return;
         }
 

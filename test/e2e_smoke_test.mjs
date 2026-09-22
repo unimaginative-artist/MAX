@@ -10,7 +10,7 @@ import fetch from 'node-fetch';
 
 async function runE2ETest() {
     console.log('--- STARTING E2E SMOKE TEST FOR MAX EXECUTION ENGINE ---');
-    const max = new MAX({ mode: 'chat' });
+    const max = new MAX({ mode: 'test' });
     await max.initialize();
 
     // Verify tools are registered
