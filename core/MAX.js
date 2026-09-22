@@ -40,7 +40,7 @@ import { AttentionEngine }     from './AttentionEngine.js';
 import { SwarmCoordinator }    from '../swarm/SwarmCoordinator.js';
 import { PersonaEngine }      from '../personas/PersonaEngine.js';
 import { MuseEngine }         from './MuseEngine.js';
-import { ToolRegistry }       from '../tools/ToolRegistry.js';
+import { ToolRegistry, ObservationTool } from '../tools/ToolRegistry.js';
 import { FileTools }          from '../tools/FileTools.js';
 import { ShellTool, getRunningProcesses } from '../tools/ShellTool.js';
 import { SomaTool }           from '../tools/SomaTool.js';
@@ -371,6 +371,7 @@ export class MAX extends EventEmitter {
         this.tools.register(GameWorldTool);
         this.tools.register(GameCodeTool);
         this.tools.register(GameAssetFetcherTool);
+        this.tools.register(ObservationTool);
         const officeToolInstance = new OfficeTool(this);
         this.tools.register({
             name: 'office',
@@ -1366,11 +1367,16 @@ Actions:
             { role: 'user', content: prompt }
         ];
 
+        let formatErrors = 0;
+        const maxFormatErrors = 3;
+        const toolExecutionReceipts = [];
+        const observedEvidence = [];
+
         while (iteration < maxIterations) {
             iteration++;
             
             // Use dedicated agentBrain lane to avoid blocking chat queue and polluting conversational context
-            const brain = this.agentBrain || this.brain;
+            const brain = (this.agentBrain && this.agentBrain._ready) ? this.agentBrain : this.brain;
             const currentContent = fullHistory[fullHistory.length - 1].content;
             const result = await brain.think(currentContent, {
                 ...options,
@@ -1402,15 +1408,59 @@ Actions:
             }
 
             if (toolCalls.length === 0) {
-                // Task complete or no more tools needed
-                return { 
-                    response, 
-                    text: response, 
-                    success: true, 
-                    iterations: iteration, 
-                    toolCallsMade: allToolCalls 
+                // If the model output BLOCKED: reason, respect it
+                if (/\bBLOCKED\b/i.test(response)) {
+                    return {
+                        response,
+                        text: response,
+                        success: false,
+                        state: 'blocked',
+                        summary: response.replace(/.*BLOCKED:?/i, '').trim() || response,
+                        iterations: iteration,
+                        toolCallsMade: allToolCalls,
+                        toolResults: toolExecutionReceipts,
+                        evidence: observedEvidence
+                    };
+                }
+
+                // If tools have already run in prior iterations, check if model declared completion
+                if (allToolCalls.length > 0) {
+                    return { 
+                        response, 
+                        text: response, 
+                        success: true, 
+                        state: 'completed',
+                        summary: response.replace(/^DONE:?\s*/i, '').trim(),
+                        iterations: iteration, 
+                        toolCallsMade: allToolCalls,
+                        toolResults: toolExecutionReceipts,
+                        evidence: observedEvidence
+                    };
+                }
+
+                // Narrative-only on execution task without ANY tools executed: NOT success!
+                formatErrors++;
+                if (formatErrors <= maxFormatErrors) {
+                    const correctionPrompt = `Your previous response described an action or plan but did not execute it. In execution mode, narrative prose is not accepted as evidence.\n\nEmit exactly one valid TOOL: call now (e.g. TOOL:file:grep:{"pattern":"..."} or TOOL:observation:record:{"summary":"...","evidence":[...]}), or return BLOCKED with the exact reason.`;
+                    fullHistory.push({ role: 'user', content: correctionPrompt });
+                    continue;
+                }
+
+                return {
+                    response,
+                    text: response,
+                    success: false,
+                    state: 'incomplete',
+                    error: 'Model emitted narrative prose without executing tools after format corrections.',
+                    iterations: iteration,
+                    toolCallsMade: allToolCalls,
+                    toolResults: toolExecutionReceipts,
+                    evidence: observedEvidence
                 };
             }
+
+            // Reset format error count on successful tool emission
+            formatErrors = 0;
 
             // Execute tool calls and gather results
             let toolResults = [];
@@ -1423,7 +1473,9 @@ Actions:
                     console.log(`  [MAX] 🛑 Approval required for: ${tool}.${action}`);
                     const approved = await this.agentLoop.requestApproval(tool, action, params, options.goal);
                     if (!approved) {
-                        toolResults.push(`TOOL_ERROR:${tool}:${action}:User denied execution.`);
+                        const errReceipt = { tool, action, success: false, error: 'User denied execution.' };
+                        toolExecutionReceipts.push(errReceipt);
+                        toolResults.push(`TOOL_RESULT:\n${JSON.stringify(errReceipt)}`);
                         continue;
                     }
                 }
@@ -1433,15 +1485,35 @@ Actions:
                 
                 try {
                     const toolResult = await this.tools.execute(tool, action, params);
-                    const resultStr = JSON.stringify(toolResult);
-                    toolResults.push(`TOOL_RESULT:${tool}:${action}:${resultStr}`);
+                    const isSuccess = toolResult?.success !== false;
+                    const receipt = {
+                        tool,
+                        action,
+                        success: isSuccess,
+                        ...(isSuccess ? { result: toolResult } : { error: toolResult?.error || 'Execution failed' })
+                    };
+                    toolExecutionReceipts.push(receipt);
+
+                    // Track observations as formal evidence
+                    if (tool === 'observation' && action === 'record' && isSuccess) {
+                        if (Array.isArray(toolResult.evidence)) {
+                            observedEvidence.push(...toolResult.evidence);
+                        } else if (toolResult.evidence) {
+                            observedEvidence.push(String(toolResult.evidence));
+                        }
+                    }
+
+                    const resultStr = JSON.stringify(receipt).slice(0, 4000);
+                    toolResults.push(`TOOL_RESULT:\n${resultStr}`);
                 } catch (err) {
-                    toolResults.push(`TOOL_ERROR:${tool}:${action}:${err.message}`);
+                    const errReceipt = { tool, action, success: false, error: err.message };
+                    toolExecutionReceipts.push(errReceipt);
+                    toolResults.push(`TOOL_RESULT:\n${JSON.stringify(errReceipt)}`);
                 }
             }
 
             // Feed results back to the brain with full multi-turn conversational history
-            const nextFeedback = `TOOL RESULTS:\n${toolResults.join('\n\n')}\n\nReview the tool results. If further edits, verifications, or tests are needed, invoke additional TOOL: calls. If the task is finished, output "DONE: [summary]".`;
+            const nextFeedback = `TOOL RESULTS:\n${toolResults.join('\n\n')}\n\nTOOL_RESULT blocks above are factual execution evidence. Never claim a tool ran unless a TOOL_RESULT exists. If more actions, observations, or verifications are required, emit additional TOOL: calls. If the task is finished, output "DONE: [summary]". If execution cannot continue, output "BLOCKED: [reason]".`;
             fullHistory.push({ role: 'user', content: nextFeedback });
 
             // Eco Thermal Breathing: give laptop heat pipe time to dissipate heat between tool steps
@@ -1454,8 +1526,122 @@ Actions:
             response: 'Max iterations reached without completion.', 
             text: 'Max iterations reached without completion.', 
             success: false, 
+            state: 'incomplete',
+            error: 'Max iterations reached without completion.',
             iterations: iteration, 
-            toolCallsMade: allToolCalls 
+            toolCallsMade: allToolCalls,
+            toolResults: toolExecutionReceipts,
+            evidence: observedEvidence
+        };
+    }
+
+    /**
+     * Dedicated programmatic task execution entry point.
+     * Separates real execution from casual conversational chat.
+     * @param {string} task - Concrete task instruction.
+     * @param {Object} options - { mode: 'inspect'|'modify'|'general', ... }
+     * @returns {Promise<Object>} Standardized execution result contract.
+     */
+    async execute(task, options = {}) {
+        if (!task || typeof task !== 'string' || task.trim().length === 0) {
+            return {
+                success: false,
+                state: 'failed',
+                summary: 'Task must be a non-empty string',
+                evidence: [],
+                toolsUsed: [],
+                toolResults: [],
+                verification: { passed: false, reason: 'invalid_task_input' },
+                errors: ['Task must be a non-empty string'],
+                nextStep: null
+            };
+        }
+
+        if (!this._ready) {
+            return {
+                success: false,
+                state: 'failed',
+                summary: 'MAX is not initialized or ready',
+                evidence: [],
+                toolsUsed: [],
+                toolResults: [],
+                verification: { passed: false, reason: 'system_not_ready' },
+                errors: ['MAX is not initialized or ready'],
+                nextStep: null
+            };
+        }
+
+        const mode = options.mode || 'general';
+        const goalId = options.goalId || `exec_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        
+        // Register execution goal in GoalEngine if available
+        if (this.goals?.addGoal) {
+            try {
+                this.goals.addGoal({
+                    id: goalId,
+                    title: `Execution: ${task.slice(0, 80)}`,
+                    description: task,
+                    type: mode === 'modify' ? 'fix' : 'research',
+                    priority: 0.95,
+                    source: 'api_execute'
+                });
+            } catch {}
+        }
+
+        const agenticRes = await this.executeAgenticThink(task, {
+            ...options,
+            goal: goalId,
+            mode
+        });
+
+        const toolsUsed = [...new Set((agenticRes.toolCallsMade || []).map(call => {
+            const m = call.match(/^TOOL:([a-zA-Z0-9_-]+):([a-zA-Z0-9_-]+)/);
+            return m ? `${m[1]}.${m[2]}` : call.slice(0, 30);
+        }))];
+
+        const evidence = agenticRes.evidence || [];
+        const toolResults = agenticRes.toolResults || [];
+        const errors = [];
+        if (agenticRes.error) errors.push(agenticRes.error);
+        for (const r of toolResults) {
+            if (r.success === false && r.error) errors.push(`${r.tool}.${r.action}: ${r.error}`);
+        }
+
+        // Verification evaluation
+        let passedVerification = agenticRes.success === true;
+        let verificationReason = null;
+
+        if (mode === 'inspect') {
+            // Inspection mode requires real evidence or at least one successful observation/read/grep
+            const hasInspectionEvidence = evidence.length > 0 || toolResults.some(r => r.success && ['grep', 'read', 'search', 'record'].includes(r.action));
+            if (!hasInspectionEvidence && passedVerification) {
+                passedVerification = false;
+                verificationReason = 'no_inspection_evidence_found';
+            }
+        } else if (mode === 'modify') {
+            // Modification mode requires write/patch/replace action executed successfully
+            const hasModAction = toolResults.some(r => r.success && ['write', 'patch', 'replace'].includes(r.action));
+            if (!hasModAction && passedVerification) {
+                passedVerification = false;
+                verificationReason = 'no_modification_executed';
+            }
+        }
+
+        const finalState = agenticRes.state || (passedVerification ? 'completed' : (agenticRes.error ? 'failed' : 'incomplete'));
+
+        return {
+            success: passedVerification && finalState === 'completed',
+            state: finalState,
+            summary: agenticRes.summary || agenticRes.response || (passedVerification ? 'Task completed successfully' : 'Task incomplete'),
+            evidence,
+            toolsUsed,
+            toolResults,
+            verification: {
+                passed: passedVerification,
+                ...(verificationReason ? { reason: verificationReason } : {})
+            },
+            errors,
+            nextStep: agenticRes.nextStep || null
         };
     }
 
@@ -1545,9 +1731,12 @@ Actions:
                 : defaultSystemPrompt;
 
             // Fix 6: use provided messages (e.g. from Discord) or fallback to rolling context window
+            let historyMsgs = [];
             let messages = options.messages || null;
-            if (!messages) {
-                const historyMsgs = this._context.slice(-21, -1).map(m => ({
+            if (messages && Array.isArray(messages)) {
+                historyMsgs = messages.filter(m => m && m.role !== 'system' && m.content !== userMessage);
+            } else {
+                historyMsgs = this._context.slice(-21, -1).map(m => ({
                     role:    m.role,
                     content: m.content.slice(0, 4000)
                 }));

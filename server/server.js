@@ -1262,6 +1262,65 @@ Reply ONLY with JSON: {"verdict":"approve"|"deny"|"escalate","confidence":0.0-1.
         res.end();
     });
 
+    // ── Dedicated Execution Endpoint ──────────────────────────────────────
+    // Executes a task using real allowlisted tools, receipt evidence, and verification.
+    // Never claims success based only on narrative prose.
+    app.post('/api/execute', async (req, res) => {
+        const { task, mode = 'general', sessionId, ...options } = req.body || {};
+        if (!task || typeof task !== 'string' || !task.trim()) {
+            return res.status(400).json({ 
+                success: false, 
+                state: 'failed', 
+                error: 'task is required and must be a non-empty string' 
+            });
+        }
+
+        if (!max._ready && !max.brain?._ready) {
+            return res.status(503).json({
+                success: false,
+                state: 'blocked',
+                error: 'MAX is not ready or brain is initializing'
+            });
+        }
+
+        try {
+            emitActivity({
+                action: 'task_started',
+                task: task.trim(),
+                mode
+            });
+
+            const result = await max.execute(task.trim(), { mode, ...options });
+
+            emitActivity({
+                action: 'task_completed',
+                task: task.trim(),
+                state: result.state,
+                success: result.success
+            });
+
+            trackRequest(sessionId);
+            res.json(result);
+        } catch (err) {
+            emitActivity({
+                action: 'task_failed',
+                task: task.trim(),
+                error: err.message
+            });
+            res.status(500).json({
+                success: false,
+                state: 'failed',
+                summary: 'Execution failed due to server error',
+                evidence: [],
+                toolsUsed: [],
+                toolResults: [],
+                verification: { passed: false, error: err.message },
+                errors: [err.message],
+                nextStep: null
+            });
+        }
+    });
+
     // ── SOMA-compatible chat endpoint (for other MAX/SOMA instances on the LAN) ──
     // Accepts the same JSON shape SomaBridge.think() sends; returns a plain JSON response.
     app.post('/api/soma/chat', async (req, res) => {

@@ -8,7 +8,7 @@ process.env.MAX_AUTONOMOUS_GOALS = 'false';
 process.env.MAX_AUTONOMOUS_CI = 'false'; // Keep infinite CI test loops strictly off
 process.env.MAX_CLUSTER_ROLE = 'worker';
 process.env.MAX_NODE_ID = 'machine_b';
-process.env.MAX_AUTO_APPROVE = 'all';
+process.env.MAX_AUTO_APPROVE = process.env.MAX_AUTO_APPROVE || 'read';
 process.env.MAX_ECO_MODE = 'true'; // Thermal governor: 45s pacing & unit-only test runs
 process.env.MAX_WORKER_ALLOW_CLOUD = 'true'; // Permit DeepSeek & SOMA cloud/LAN tiers when available
 process.env.MAX_DISCORD_ENABLED = 'true';
@@ -43,7 +43,7 @@ console.log(`✅ MAX REST API running at http://0.0.0.0:${port}`);
 
 // Announce worker readiness to Machine A coordinator
 const coordinatorUrl = process.env.MAX_COORDINATOR_URL || 'http://192.168.1.254:3100';
-const primeApiKey = process.env.MAX_PRIME_API_KEY || 'max_a1c4f354218ccb85d8ce62a2e6233a1adb0422930fb58ecb';
+const primeApiKey = process.env.MAX_PRIME_API_KEY || '';
 setTimeout(async () => {
     try {
         console.log(`[Cluster] 📡 Announcing machine_b to coordinator at ${coordinatorUrl}...`);

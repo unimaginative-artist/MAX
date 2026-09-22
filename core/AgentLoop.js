@@ -738,7 +738,9 @@ export class AgentLoop extends EventEmitter {
                 );
                 result = resObj.text;
             } else {
-                const tool = this.max.tools.get(toolName);
+                const tool = typeof this.max.tools?.get === 'function' 
+                    ? this.max.tools.get(toolName) 
+                    : (this.max.tools?.has?.(toolName) ? {} : null);
 
                 if (tool) {
                     // step.params is the authoritative source (set by the planner).
@@ -855,23 +857,15 @@ export class AgentLoop extends EventEmitter {
 
                     result = JSON.stringify(toolResult).slice(0, 500);
                 } else {
-                    // Unknown tool â€” fall back to brain
-                    const resObj = await withTimeout(
-                        this.max.agentBrain.think(
-                            `Complete this step: ${action}`,
-                            { temperature: 0.4, maxTokens: 512, tier: 'fast', signal }
-                        ),
-                        timeoutMs,
-                        'brain fallback',
-                        signal
-                    );
-                    result = resObj.text;
+                    // Unknown tool — reject immediately. An execution step must either execute its tool or fail.
+                    console.error(`  [AgentLoop] ❌ Unknown tool requested: ${toolName}`);
+                    return { step: step.step, success: false, error: `Unknown tool: ${toolName}`, summary: '' };
                 }
             }
 
             const summary = typeof result === 'string' ? result.slice(0, 200) : JSON.stringify(result).slice(0, 200);
 
-            // â”€â”€ Verification Gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ── Verification Gate ──────────────────────────────────────────
             // Success criterion is a substring that should appear in the output.
             // "completed" means no output check needed (write/create steps).
             if (this.config.verifySteps && step.success && step.success !== 'completed') {
@@ -896,10 +890,9 @@ export class AgentLoop extends EventEmitter {
                             throw new Error(`Verification failed: expected "${step.success}" but output was: ${summary.slice(0, 100)}`);
                         }
                     } catch (verifyErr) {
-                        // Only treat as failure if it's our own thrown error, not a brain timeout
-                        if (verifyErr.message.startsWith('Verification failed')) throw verifyErr;
-                        // Brain timeout â†’ skip verification, proceed
-                        console.warn(`  [AgentLoop] Verify skipped: ${verifyErr.message}`);
+                        // Verification failure or timeout must never automatically default to passed
+                        console.warn(`  [AgentLoop] ❌ Verification failed: ${verifyErr.message}`);
+                        throw new Error(`Verification failed: ${verifyErr.message}`);
                     }
                 }
             }
@@ -908,31 +901,52 @@ export class AgentLoop extends EventEmitter {
             return { step: step.step, success: true, result, summary };
 
         } catch (err) {
-            // â”€â”€ Search-and-Retry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ── Search-and-Retry ─────────────────────────────────────────
             // Before giving up, search the web for a solution and retry once.
             if (signal?.aborted || err.message.includes('aborted')) {
                 this.emit('stepDone', { step: step.step, success: false, summary: 'Aborted', tool: toolName, toolAction: action, params: step.params || {} });
                 return { step: step.step, success: false, error: 'Aborted', summary: '' };
             }
-            console.log(`  [AgentLoop] ðŸ” Searching for a solution to: ${err.message.slice(0, 80)}`);
+            console.log(`  [AgentLoop] 🔍 Searching for a solution to: ${err.message.slice(0, 80)}`);
             const searchContext = await this._searchForSolution(step, goal, err.message);
 
             if (searchContext) {
                 try {
                     const retryObj = await withTimeout(
                         this.max.agentBrain.think(
-                            `Complete this step. A previous attempt failed.\n\nGOAL: ${goal.title}\nSTEP: ${action}\nERROR: ${err.message}\n\nSEARCH RESULTS:\n${searchContext}\n\nUse the search results to find the correct approach.`,
-                            { systemPrompt: 'You are MAX completing an autonomous task step. Be concrete and brief.', temperature: 0.3, maxTokens: 512, tier: 'fast', signal }
+                            `A previous attempt failed.\n\nGOAL: ${goal.title}\nSTEP: ${action}\nERROR: ${err.message}\n\nSEARCH RESULTS:\n${searchContext}\n\nEmit a replacement TOOL: call to execute the step correctly (e.g. TOOL:tool:action:{...}). If you cannot fix it, output FAILED.`,
+                            { systemPrompt: 'You are MAX completing an autonomous task step. You MUST emit a valid TOOL: call to retry. Explanations without tool calls are rejected.', temperature: 0.2, maxTokens: 512, tier: 'fast', signal }
                         ),
                         this.config.stepTimeoutMs,
                         'search retry',
                         signal
                     );
-                    const retrySummary = retryObj.text.slice(0, 200);
-                    console.log(`  [AgentLoop] âœ… Search retry succeeded`);
-                    this.stats.searches++;
-                    this.emit('stepDone', { step: step.step, success: true, summary: retrySummary, tool: toolName, toolAction: action, params: step.params || {} });
-                    return { step: step.step, success: true, result: retryObj.text, summary: retrySummary };
+
+                    // A retry is ONLY successful if the model emits a real tool call,
+                    // that tool call executes, returns success, and satisfies verification.
+                    const retryToolCalls = this.max.tools.parseToolCalls(retryObj.text);
+                    if (retryToolCalls.length > 0) {
+                        const firstCall = retryToolCalls[0];
+                        console.log(`  [AgentLoop] 🔄 Executing retry tool call: ${firstCall.toolName}.${firstCall.actionName}`);
+                        const retryResult = await withTimeout(
+                            this.max.tools.execute(firstCall.toolName, firstCall.actionName, { ...(firstCall.params || {}), signal }),
+                            this.config.stepTimeoutMs,
+                            `retry ${firstCall.toolName}.${firstCall.actionName}`,
+                            signal
+                        );
+
+                        if (retryResult?.success !== false) {
+                            const retrySummary = JSON.stringify(retryResult).slice(0, 200);
+                            console.log(`  [AgentLoop] ✅ Search retry tool execution succeeded`);
+                            this.stats.searches++;
+                            this.emit('stepDone', { step: step.step, success: true, summary: retrySummary, tool: firstCall.toolName, toolAction: firstCall.actionName, params: firstCall.params || {} });
+                            return { step: step.step, success: true, result: JSON.stringify(retryResult), summary: retrySummary };
+                        } else {
+                            console.warn(`  [AgentLoop] ❌ Retry tool call failed:`, retryResult?.error);
+                        }
+                    } else {
+                        console.warn(`  [AgentLoop] ⚠️ Retry produced narrative prose without executing a tool. Rejecting as step failure.`);
+                    }
                 } catch (retryErr) {
                     console.error(`  [AgentLoop] Search retry also failed:`, retryErr.message);
                 }

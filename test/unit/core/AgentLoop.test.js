@@ -7,7 +7,7 @@ function makeLoop(overrides = {}) {
         profile: { getActiveTasks: jest.fn(() => []) },
         drive:   { onIdleTick: jest.fn(), tension: 0.5 },
         brain:   { think: jest.fn(async () => ({ response: 'ok', tokens: 10 })), _ready: true },
-        tools:   { list: jest.fn(() => []), execute: jest.fn(async () => ({ success: true })) },
+        tools:   { list: jest.fn(() => []), get: jest.fn(() => null), has: jest.fn(() => false), execute: jest.fn(async () => ({ success: true })) },
         skills:  null,
         swarm:   null,
         memory:  null,
@@ -127,6 +127,43 @@ describe('AgentLoop', () => {
                 expect(typeof status.busy).toBe('boolean');
                 expect(typeof status.pending).toBe('boolean');
             }
+        });
+    });
+
+    describe('_executeStep() hardening', () => {
+        it('returns failure for unknown tool without falling back to brain prose', async () => {
+            const { loop } = makeLoop();
+            const step = { step: 1, tool: 'nonexistent_tool', action: 'do_something' };
+            const goal = { id: 'g1', title: 'Test goal' };
+            const result = await loop._executeStep(step, goal);
+            expect(result.success).toBe(false);
+            expect(result.error).toMatch(/unknown tool/i);
+        });
+
+        it('rejects failed-tool retry if model returns prose without emitting a TOOL call', async () => {
+            const { loop, mockMax } = makeLoop();
+            mockMax.tools.has = jest.fn((name) => name === 'file');
+            mockMax.tools.execute = jest.fn(async () => { throw new Error('File read failed'); });
+            mockMax.tools.parseToolCalls = jest.fn(() => []); // model emits prose only
+            mockMax.agentBrain = {
+                think: jest.fn(async () => ({ text: 'I fixed it by analyzing the file manually.' }))
+            };
+            loop._searchForSolution = jest.fn(async () => 'Search docs on file read');
+            const step = { step: 1, tool: 'file', action: 'read', params: { filePath: 'bad.txt' } };
+            const goal = { id: 'g1', title: 'Test goal' };
+            const result = await loop._executeStep(step, goal);
+            expect(result.success).toBe(false);
+        });
+
+        it('fails step if verification check fails', async () => {
+            const { loop, mockMax } = makeLoop();
+            mockMax.tools.has = jest.fn((name) => name === 'file');
+            mockMax.tools.execute = jest.fn(async () => ({ success: true, content: 'some output' }));
+            const step = { step: 1, tool: 'file', action: 'read', success: 'MUST_CONTAIN_THIS_STRING' };
+            const goal = { id: 'g1', title: 'Test goal' };
+            loop._searchForSolution = jest.fn(async () => null); // no retry
+            const result = await loop._executeStep(step, goal);
+            expect(result.success).toBe(false);
         });
     });
 });

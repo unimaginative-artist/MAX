@@ -6,12 +6,30 @@ import fs   from 'fs/promises';
 import path  from 'path';
 import { execFileSync } from 'child_process';
 
+export function assertSafeWorkspacePath(targetPath) {
+    if (!targetPath || typeof targetPath !== 'string') {
+        throw new Error('Invalid path: path must be a non-empty string');
+    }
+    const root = path.resolve(process.cwd());
+    const resolved = path.resolve(root, targetPath);
+    const rel = path.relative(root, resolved);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) {
+        throw new Error(`Path traversal denied: ${targetPath} is outside workspace root`);
+    }
+    return resolved;
+}
+
 export const FileTools = {
     name: 'file',
     description: 'Read, write, list, and search files on disk',
 
     actions: {
         async read({ filePath, maxLines = 500, maxBytes = 10 * 1024 * 1024, startLine = null, endLine = null }) {
+            try {
+                assertSafeWorkspacePath(filePath);
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
             const stat = await fs.stat(filePath).catch(() => null);
             if (!stat) return { success: false, error: `File not found: ${filePath}` };
 
@@ -62,6 +80,11 @@ export const FileTools = {
         },
 
         async write({ filePath, content, append = false, aegisOverride = false }) {
+            try {
+                filePath = assertSafeWorkspacePath(filePath);
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
             const dir = path.dirname(filePath);
             await fs.mkdir(dir, { recursive: true });
 
@@ -97,6 +120,11 @@ export const FileTools = {
         },
 
         async replace({ filePath, oldText, newText, all = false }) {
+            try {
+                filePath = assertSafeWorkspacePath(filePath);
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
             const content = await fs.readFile(filePath, 'utf8').catch(() => null);
             if (content === null) return { success: false, error: `File not found: ${filePath}` };
 
@@ -150,6 +178,11 @@ export const FileTools = {
         },
 
         async patch({ filePath, blocks }) {
+            try {
+                filePath = assertSafeWorkspacePath(filePath);
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
             // Blocks: Array of { find: string, replace: string }
             let content = await fs.readFile(filePath, 'utf8').catch(() => null);
             if (content === null) return { success: false, error: `File not found: ${filePath}` };
@@ -179,6 +212,11 @@ export const FileTools = {
         },
 
         async list({ dir = '.', pattern = null, recursive = false }) {
+            try {
+                dir = assertSafeWorkspacePath(dir);
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
             async function walk(d, depth = 0) {
                 const entries = await fs.readdir(d, { withFileTypes: true });
                 const results = [];
@@ -201,6 +239,11 @@ export const FileTools = {
         },
 
         async search({ dir = '.', query, filePattern = null }) {
+            try {
+                dir = assertSafeWorkspacePath(dir);
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
             const results = [];
             async function walk(d) {
                 const entries = await fs.readdir(d, { withFileTypes: true }).catch(() => []);
@@ -230,6 +273,11 @@ export const FileTools = {
         },
 
         async grep({ dir = '.', pattern, filePattern = null, maxResults = 150, ignoreCase = false }) {
+            try {
+                dir = assertSafeWorkspacePath(dir);
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
             if (!pattern) return { success: false, error: 'pattern is required' };
             let regex;
             try {
@@ -293,6 +341,11 @@ export const FileTools = {
         //      "content":"import { ProactiveCouncil } from './ProactiveCouncil.js';"}
         //   ]}
         async patch({ filePath, hunks = [], createIfMissing = false }) {
+            try {
+                filePath = assertSafeWorkspacePath(filePath);
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
             if (!Array.isArray(hunks) || hunks.length === 0) {
                 return { success: false, error: 'hunks must be a non-empty array' };
             }
@@ -374,6 +427,11 @@ export const FileTools = {
         },
 
         async delete({ filePath }) {
+            try {
+                filePath = assertSafeWorkspacePath(filePath);
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
             await fs.unlink(filePath);
             return { success: true, deleted: filePath };
         }

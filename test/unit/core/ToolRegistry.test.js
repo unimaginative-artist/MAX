@@ -135,6 +135,37 @@ describe('ToolRegistry', () => {
             await r.executeLLMToolCall('TOOL:shell:run:npm test');
             expect(fn).toHaveBeenCalledWith(expect.objectContaining({ value: 'npm test' }));
         });
+
+        it('rejects malformed JSON parameters for structured tools', async () => {
+            const r = makeRegistry();
+            const fn = jest.fn();
+            r.register({ name: 'file', actions: { read: fn } });
+            const result = await r.executeLLMToolCall('TOOL:file:read:{"bad json');
+            expect(result.success).toBe(false);
+            expect(result.error).toMatch(/malformed/i);
+            expect(fn).not.toHaveBeenCalled();
+        });
+
+        it('rejects raw string parameters for non-allowlisted tools', async () => {
+            const r = makeRegistry();
+            const fn = jest.fn();
+            r.register({ name: 'file', actions: { read: fn } });
+            const result = await r.executeLLMToolCall('TOOL:file:read:foo.txt');
+            expect(result.success).toBe(false);
+            expect(result.error).toMatch(/malformed/i);
+            expect(fn).not.toHaveBeenCalled();
+        });
+
+        it('executes ObservationTool receipt successfully', async () => {
+            const r = makeRegistry();
+            const { ObservationTool } = await import('../../../tools/ToolRegistry.js');
+            r.register(ObservationTool);
+            const result = await r.executeLLMToolCall('TOOL:observation:record:{"summary":"found 5 matches","evidence":["file1.js:10"]}');
+            expect(result.success).toBe(true);
+            expect(result.type).toBe('inspection');
+            expect(result.summary).toBe('found 5 matches');
+            expect(result.evidence).toEqual(['file1.js:10']);
+        });
     });
 
     describe('buildManifest()', () => {

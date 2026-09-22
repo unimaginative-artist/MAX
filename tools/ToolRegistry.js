@@ -101,19 +101,27 @@ export class ToolRegistry {
      */
     async execute(toolName, action, params = {}) {
         try {
+            if (params && params.__parseError) {
+                return { success: false, error: `Malformed tool parameters: ${params.__parseError}. Raw: ${params.rawParams || ''}` };
+            }
             const resolved = this.resolveCall(toolName, action);
-            if (!resolved.success) throw new Error(resolved.error);
+            if (!resolved.success) return { success: false, error: resolved.error };
             const tool = this._tools.get(resolved.toolName);
             const resolvedAction = resolved.action;
+            let result;
             // Handle Object-based tools (actions map)
             if (tool.actions) {
-                return await tool.actions[resolvedAction](params);
+                result = await tool.actions[resolvedAction](params);
+            } else if (typeof tool.run === 'function') {
+                // Handle Class-based tools (run method)
+                result = await tool.run({ action: resolvedAction, ...params });
+            } else {
+                return { success: false, error: `Action ${resolvedAction} not supported by tool ${resolved.toolName}` };
             }
-            // Handle Class-based tools (run method)
-            if (typeof tool.run === 'function') {
-                return await tool.run({ action: resolvedAction, ...params });
+            if (result && typeof result === 'object' && typeof result.success === 'boolean') {
+                return result;
             }
-            throw new Error(`Action ${resolvedAction} not supported by tool ${resolved.toolName}`);
+            return { success: true, result };
         } catch (err) {
             return { success: false, error: err.message };
         }
@@ -207,11 +215,7 @@ export class ToolRegistry {
                         const endIdx = nextNewline !== -1 ? nextNewline : text.length;
                         paramString = text.slice(paramStart, endIdx);
                         rawCall = text.slice(nextTool, endIdx);
-                        try {
-                            params = JSON.parse(paramString.trim());
-                        } catch (e) {
-                            params = { value: paramString.trim() };
-                        }
+                        params = { __parseError: 'Unbalanced JSON object in tool call', rawParams: paramString.trim() };
                         index = endIdx;
                     }
                 } else {
@@ -220,7 +224,12 @@ export class ToolRegistry {
                     const endIdx = nextNewline !== -1 ? nextNewline : text.length;
                     paramString = text.slice(paramStart, endIdx);
                     rawCall = text.slice(nextTool, endIdx);
-                    params = { value: paramString.trim() };
+                    const isRawAllowed = ['shell:run', 'shell:exec', 'shell:runstateful', 'shell:run_stateful'].includes(`${toolName.toLowerCase()}:${actionName.toLowerCase()}`);
+                    if (isRawAllowed) {
+                        params = { value: paramString.trim(), command: paramString.trim() };
+                    } else {
+                        params = { __parseError: 'Tool parameters must be a valid JSON object starting with {', rawParams: paramString.trim() };
+                    }
                     index = endIdx;
                 }
             } else {
@@ -289,3 +298,21 @@ export class ToolRegistry {
         return manifest;
     }
 }
+
+export const ObservationTool = {
+    name: 'observation',
+    description: 'Record verified inspection findings, search results, and evidence receipts without modifying files.',
+    actions: {
+        record: async ({ summary, evidence = [], findings = [] }) => {
+            const finalEvidence = Array.isArray(evidence) && evidence.length > 0
+                ? evidence
+                : (Array.isArray(findings) && findings.length > 0 ? findings : [summary].filter(Boolean));
+            return {
+                success: true,
+                type: 'inspection',
+                summary: summary || 'Observation recorded',
+                evidence: finalEvidence
+            };
+        }
+    }
+};

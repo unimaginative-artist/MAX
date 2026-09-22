@@ -3,6 +3,7 @@ node_modules/
 
 # API keys — NEVER commit
 config/api-keys.env
+credentials.json
 *.env
 !config/api-keys.env.example
 
