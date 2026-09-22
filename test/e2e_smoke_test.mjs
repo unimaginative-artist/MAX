@@ -1,3 +1,9 @@
+process.env.MAX_API_BACKGROUND = 'false';
+process.env.MAX_AUTONOMOUS_GOALS = 'false';
+process.env.MAX_AUTONOMOUS_CI = 'false';
+process.env.MAX_DISCORD_ENABLED = 'false';
+process.env.MAX_AUTONOMOUS_SELF_IMPROVE = 'false';
+
 import { MAX } from '../core/MAX.js';
 import { createServer } from '../server/server.js';
 import fetch from 'node-fetch';
