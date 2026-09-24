@@ -26,6 +26,10 @@ export const SomaTool = {
             }
         },
         stop: { description: 'Stop the SOMA server.', params: {} },
+        swarm_status: { description: 'Get live status of SOMA Engineering Swarm and candidate files.', params: {} },
+        swarm_debate: { description: 'Submit an architectural engineering proposal to SOMA 3-role adversarial debate.', params: { title: 'string', description: 'string', files: 'array' } },
+        swarm_validate: { description: 'Validate patch files through SOMA Security Council.', params: { files: 'array', patch: 'object' } },
+        swarm_deploy: { description: 'Deploy verified patch to SOMA through transactional engine.', params: { patch: 'object', note: 'string' } }
     },
 
     actions: {
@@ -67,5 +71,69 @@ export const SomaTool = {
             await stopSoma();
             return { success: true, healthy: false, ...getSomaConfig(), message: 'SOMA stopped.' };
         },
+
+        async swarm_status() {
+            const url = process.env.SOMA_URL || 'http://127.0.0.1:3001';
+            try {
+                const fetch = (await import('node-fetch')).default;
+                const r = await fetch(`${url}/api/soma/swarm/status`);
+                if (!r.ok) return { success: false, error: `SOMA HTTP ${r.status}` };
+                const data = await r.json();
+                return { success: true, ...data };
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
+        },
+
+        async swarm_debate({ title, description, files = [] } = {}) {
+            const url = process.env.SOMA_URL || 'http://127.0.0.1:3001';
+            try {
+                const fetch = (await import('node-fetch')).default;
+                const r = await fetch(`${url}/api/soma/swarm/debate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, description, files })
+                });
+                if (!r.ok) return { success: false, error: `SOMA HTTP ${r.status}` };
+                const data = await r.json();
+                return { success: true, ...data };
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
+        },
+
+        async swarm_validate({ files = [], patch = null } = {}) {
+            const url = process.env.SOMA_URL || 'http://127.0.0.1:3001';
+            try {
+                const fetch = (await import('node-fetch')).default;
+                const r = await fetch(`${url}/api/soma/swarm/validate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ files, patch })
+                });
+                if (!r.ok) return { success: false, error: `SOMA HTTP ${r.status}` };
+                const data = await r.json();
+                return { success: true, ...data };
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
+        },
+
+        async swarm_deploy({ patch, note = '' } = {}) {
+            const url = process.env.SOMA_URL || 'http://127.0.0.1:3001';
+            try {
+                const fetch = (await import('node-fetch')).default;
+                const r = await fetch(`${url}/api/soma/swarm/deploy`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ patch, note })
+                });
+                if (!r.ok) return { success: false, error: `SOMA HTTP ${r.status}` };
+                const data = await r.json();
+                return { success: true, ...data };
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
+        }
     },
 };

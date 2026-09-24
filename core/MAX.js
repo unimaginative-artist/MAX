@@ -54,6 +54,7 @@ import { createVisionTool }   from '../tools/VisionTool.js';
 import { createSelfEvolutionTool } from '../tools/SelfEvolutionTool.js';
 import { createSystemTool }    from '../tools/SystemTool.js';
 import { createDiagnosticsTool } from '../tools/DiagnosticsTool.js';
+import { createTreeSearchTool }  from '../tools/TreeSearchTool.js';
 import { DiscordTool, autoConnectDiscord, isAuthorizedDiscordOperator } from '../tools/DiscordTool.js';
 import { EmailTool,   autoConnectEmail   } from '../tools/EmailTool.js';
 import { KnowledgeTool }      from '../tools/KnowledgeTool.js';
@@ -368,6 +369,7 @@ export class MAX extends EventEmitter {
         this.tools.register(createSelfEvolutionTool(this));
         this.tools.register(createSystemTool(this));
         this.tools.register(createDiagnosticsTool(this));
+        this.tools.register(createTreeSearchTool(this));
         this.tools.register(DiscordTool);
         this.tools.register(EmailTool);
         this.tools.register(KnowledgeTool);

@@ -898,7 +898,7 @@ export class AgentLoop extends EventEmitter {
                                     const testStat = await fs.stat(testFile);
                                     if (testStat.isFile()) {
                                         console.log(`  [AgentLoop] 🧪 Found matching test file: ${testFile}. Running validation...`);
-                                        const testCmd = `npm test ${testFile} -- --passWithNoTests`;
+                                        const testCmd = `node --experimental-vm-modules node_modules/jest/bin/jest.js "${testFile}" --passWithNoTests --forceExit`;
                                         const testResult = await withTimeout(
                                             this.max.tools.execute('shell', 'run', { command: testCmd, signal }),
                                             30000,

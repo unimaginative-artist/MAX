@@ -1,4 +1,4 @@
-﻿// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // KnowledgeBase.js â€” MAX's RAG layer
 //
 // Episodic memory (MaxMemory) stores conversations and discoveries.
@@ -34,7 +34,9 @@ export class KnowledgeBase {
     constructor(config = {}) {
         this.dbPath    = config.dbPath || path.join(process.cwd(), '.max', 'knowledge.db');
         this.embedder  = new Embedder();
-        this._vectors  = new Map();   // chunkId â†’ float[]
+        this._vectors  = new Map();   // chunkId → float[]
+        this._dirtyVectorIds   = new Set();
+        this._deletedVectorIds = new Set();
         this._db       = null;
         this._ready    = false;
     }
@@ -83,6 +85,12 @@ export class KnowledgeBase {
                 id UNINDEXED,
                 content,
                 tokenize='porter unicode61'
+            );
+
+            -- SQLite binary BLOB vector table (Float32Array: 384 * 4 = 1,536 bytes/vec)
+            CREATE TABLE IF NOT EXISTS kb_vectors (
+                id     TEXT PRIMARY KEY,
+                vector BLOB NOT NULL
             );
         `);
     }
@@ -254,7 +262,12 @@ export class KnowledgeBase {
         for (const { id, content } of chunkRows) {
             try {
                 const vec = await this.embedder.embed(content);
-                if (vec) this._vectors.set(id, vec);
+                if (vec) {
+                    const f32 = (vec instanceof Float32Array) ? vec : new Float32Array(vec);
+                    this._vectors.set(id, f32);
+                    this._dirtyVectorIds.add(id);
+                    this._deletedVectorIds.delete(id);
+                }
             } catch { /* non-fatal */ }
         }
         this._saveVectors();
@@ -415,6 +428,8 @@ export class KnowledgeBase {
         const chunks = this._db.prepare('SELECT id FROM kb_chunks WHERE source_id = ?').all(sourceId);
         for (const { id } of chunks) {
             this._vectors.delete(id);
+            this._dirtyVectorIds.delete(id);
+            this._deletedVectorIds.add(id);
             this._db.prepare('DELETE FROM kb_fts WHERE id = ?').run(id);
         }
         this._db.prepare('DELETE FROM kb_chunks WHERE source_id = ?').run(sourceId);
@@ -457,31 +472,89 @@ export class KnowledgeBase {
     }
 
     _saveVectors() {
+        if (this._dirtyVectorIds.size === 0 && this._deletedVectorIds.size === 0) return;
         try {
-            const vecPath = this.dbPath.replace('.db', '_vectors.json');
-            const obj = {};
-            for (const [id, vec] of this._vectors) obj[id] = vec;
-            fs.writeFileSync(vecPath, JSON.stringify(obj));
-        } catch { /* non-fatal */ }
+            const upsertStmt = this._db.prepare('INSERT OR REPLACE INTO kb_vectors (id, vector) VALUES (?, ?)');
+            const deleteStmt = this._db.prepare('DELETE FROM kb_vectors WHERE id = ?');
+
+            const toSave = Array.from(this._dirtyVectorIds);
+            const toDelete = Array.from(this._deletedVectorIds);
+            this._dirtyVectorIds.clear();
+            this._deletedVectorIds.clear();
+
+            const tx = this._db.transaction(() => {
+                for (const id of toSave) {
+                    const vec = this._vectors.get(id);
+                    if (vec) {
+                        const buf = (vec instanceof Float32Array)
+                            ? Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength)
+                            : Buffer.from(new Float32Array(vec).buffer);
+                        upsertStmt.run(id, buf);
+                    }
+                }
+                for (const id of toDelete) {
+                    deleteStmt.run(id);
+                }
+            });
+            tx();
+        } catch (err) {
+            console.warn(`[KnowledgeBase] ⚠️ Vector save failed: ${err.message}`);
+        }
     }
 
     async _loadVectors() {
         try {
+            const countRow = this._db.prepare('SELECT COUNT(*) as c FROM kb_vectors').get();
             const vecPath = this.dbPath.replace('.db', '_vectors.json');
-            if (!fs.existsSync(vecPath)) return;
-            const raw = await fs.promises.readFile(vecPath, 'utf8');
-            const data = JSON.parse(raw);
+            if ((!countRow || countRow.c === 0) && fs.existsSync(vecPath)) {
+                await this._migrateLegacyVectors(vecPath);
+            }
 
+            const rows = this._db.prepare('SELECT id, vector FROM kb_vectors').all();
             let count = 0;
-            for (const [id, vec] of Object.entries(data)) {
-                this._vectors.set(id, vec);
+            for (const row of rows) {
+                const buf = row.vector;
+                const f32 = new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+                this._vectors.set(row.id, f32);
                 count++;
-                if (count % 1000 === 0) {
+                if (count % 2000 === 0) {
                     await new Promise(resolve => setImmediate(resolve));
                 }
             }
-            console.log(`[KnowledgeBase] Loaded ${this._vectors.size} chunk vectors`);
-        } catch { /* start fresh */ }
+            console.log(`[KnowledgeBase] Loaded ${this._vectors.size} chunk vectors from SQLite`);
+        } catch (err) {
+            console.warn(`[KnowledgeBase] ⚠️ Vector load failed: ${err.message}`);
+        }
+    }
+
+    async _migrateLegacyVectors(vecPath) {
+        console.log(`[KnowledgeBase] 🔄 Migrating legacy vectors from ${vecPath} into SQLite BLOB storage...`);
+        try {
+            const raw = await fs.promises.readFile(vecPath, 'utf8');
+            const data = JSON.parse(raw);
+            const entries = Object.entries(data);
+            const upsertStmt = this._db.prepare('INSERT OR REPLACE INTO kb_vectors (id, vector) VALUES (?, ?)');
+
+            const BATCH_SIZE = 2000;
+            for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+                const batch = entries.slice(i, i + BATCH_SIZE);
+                const tx = this._db.transaction(() => {
+                    for (const [id, vec] of batch) {
+                        const buf = Buffer.from(new Float32Array(vec).buffer);
+                        upsertStmt.run(id, buf);
+                    }
+                });
+                tx();
+                await new Promise(resolve => setImmediate(resolve));
+            }
+
+            console.log(`[KnowledgeBase] ✅ Migrated ${entries.length} vectors to SQLite BLOB storage.`);
+            try {
+                await fs.promises.rename(vecPath, vecPath + '.migrated');
+            } catch { /* non-fatal rename */ }
+        } catch (err) {
+            console.warn(`[KnowledgeBase] ⚠️ Legacy migration warning: ${err.message}`);
+        }
     }
 
     _counts() {

@@ -34,6 +34,8 @@ export class MaxMemory {
         this._db      = null;
 
         this._vectorsDirty = false;
+        this._dirtyVectorIds = new Set();
+        this._deletedVectorIds = new Set();
         this._persistTimer = null;
         this._cleanupTimer = null;
 
@@ -91,6 +93,12 @@ export class MaxMemory {
                 id UNINDEXED,
                 content,
                 tokenize='porter unicode61'
+            );
+
+            -- SQLite binary BLOB vector table (Float32Array: 384 * 4 = 1,536 bytes/vec)
+            CREATE TABLE IF NOT EXISTS memory_vectors (
+                id     TEXT PRIMARY KEY,
+                vector BLOB NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS conversations (
@@ -152,7 +160,10 @@ export class MaxMemory {
         try {
             const vec = await this.embedder.embed(content);
             if (vec) {
-                this._vectors.set(id, vec);
+                const f32 = (vec instanceof Float32Array) ? vec : new Float32Array(vec);
+                this._vectors.set(id, f32);
+                this._dirtyVectorIds.add(id);
+                this._deletedVectorIds.delete(id);
                 this._vectorsDirty = true;
             }
         } catch { /* non-fatal */ }
@@ -436,6 +447,8 @@ export class MaxMemory {
     forget(id) {
         this._hot.delete(id);
         this._vectors.delete(id);
+        this._dirtyVectorIds.delete(id);
+        this._deletedVectorIds.add(id);
         this._db.prepare('DELETE FROM memories WHERE id = ?').run(id);
         this._db.prepare('DELETE FROM memories_fts WHERE id = ?').run(id);
         this._vectorsDirty = true;
@@ -477,6 +490,8 @@ export class MaxMemory {
                 for (const id of this._vectors.keys()) {
                     if (!livingIds.has(id)) {
                         this._vectors.delete(id);
+                        this._dirtyVectorIds.delete(id);
+                        this._deletedVectorIds.add(id);
                         this._vectorsDirty = true;
                     }
                 }
@@ -497,22 +512,33 @@ export class MaxMemory {
         }
     }
 
-    // ─── Persist vectors to disk ──────────────────────────────────────────
+    // ─── Persist vectors to disk (SQLite BLOB transactions) ──────────────
     async _persistVectors() {
-        if (!this._vectorsDirty) return;
+        if (this._dirtyVectorIds.size === 0 && this._deletedVectorIds.size === 0) return;
         try {
-            const obj = {};
-            for (const [id, vec] of this._vectors) obj[id] = vec;
-            const json = JSON.stringify(obj);
-            const tmp  = this.vectorPath + '.tmp';
-            await fs.promises.writeFile(tmp, json);
-            // Atomic rename — fall back to direct write on Windows if rename fails
-            try {
-                await fs.promises.rename(tmp, this.vectorPath);
-            } catch {
-                await fs.promises.writeFile(this.vectorPath, json);
-                try { await fs.promises.unlink(tmp); } catch { /* tmp already gone */ }
-            }
+            const upsertStmt = this._db.prepare('INSERT OR REPLACE INTO memory_vectors (id, vector) VALUES (?, ?)');
+            const deleteStmt = this._db.prepare('DELETE FROM memory_vectors WHERE id = ?');
+
+            const toSave = Array.from(this._dirtyVectorIds);
+            const toDelete = Array.from(this._deletedVectorIds);
+            this._dirtyVectorIds.clear();
+            this._deletedVectorIds.clear();
+
+            const tx = this._db.transaction(() => {
+                for (const id of toSave) {
+                    const vec = this._vectors.get(id);
+                    if (vec) {
+                        const buf = (vec instanceof Float32Array)
+                            ? Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength)
+                            : Buffer.from(new Float32Array(vec).buffer);
+                        upsertStmt.run(id, buf);
+                    }
+                }
+                for (const id of toDelete) {
+                    deleteStmt.run(id);
+                }
+            });
+            tx();
             this._vectorsDirty = false;
         } catch (err) {
             console.warn(`[Memory] ⚠️ Vector persistence failed: ${err.message}`);
@@ -521,14 +547,51 @@ export class MaxMemory {
 
     async _loadVectors() {
         try {
-            if (!fs.existsSync(this.vectorPath)) return;
+            const countRow = this._db.prepare('SELECT COUNT(*) as c FROM memory_vectors').get();
+            if ((!countRow || countRow.c === 0) && fs.existsSync(this.vectorPath)) {
+                await this._migrateLegacyVectors();
+            }
+
+            const rows = this._db.prepare('SELECT id, vector FROM memory_vectors').all();
+            for (const row of rows) {
+                const buf = row.vector;
+                const f32 = new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+                this._vectors.set(row.id, f32);
+            }
+            console.log(`[Memory] Loaded ${this._vectors.size} vectors from SQLite BLOB storage`);
+        } catch (err) {
+            console.warn(`[Memory] ⚠️ Vector loading failed: ${err.message}`);
+        }
+    }
+
+    async _migrateLegacyVectors() {
+        console.log(`[Memory] 🔄 Migrating legacy JSON vectors from ${this.vectorPath} into SQLite BLOB storage...`);
+        try {
             const raw = await fs.promises.readFile(this.vectorPath, 'utf8');
             const data = JSON.parse(raw);
-            for (const [id, vec] of Object.entries(data)) {
-                this._vectors.set(id, vec);
+            const entries = Object.entries(data);
+            const upsertStmt = this._db.prepare('INSERT OR REPLACE INTO memory_vectors (id, vector) VALUES (?, ?)');
+
+            const BATCH_SIZE = 2000;
+            for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+                const batch = entries.slice(i, i + BATCH_SIZE);
+                const tx = this._db.transaction(() => {
+                    for (const [id, vec] of batch) {
+                        const buf = Buffer.from(new Float32Array(vec).buffer);
+                        upsertStmt.run(id, buf);
+                    }
+                });
+                tx();
+                await new Promise(resolve => setImmediate(resolve));
             }
-            console.log(`[Memory] Loaded ${this._vectors.size} vectors from disk`);
-        } catch { /* start fresh */ }
+
+            console.log(`[Memory] ✅ Migrated ${entries.length} vectors to SQLite BLOB storage.`);
+            try {
+                await fs.promises.rename(this.vectorPath, this.vectorPath + '.migrated');
+            } catch { /* non-fatal rename */ }
+        } catch (err) {
+            console.warn(`[Memory] ⚠️ Legacy migration warning: ${err.message}`);
+        }
     }
 
     _startPersistence() {

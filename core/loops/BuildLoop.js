@@ -32,17 +32,42 @@ export class BuildLoop {
         // ── Phase 3: Adversarial debate ───────────────────────────────────
         let finalPlan = draft;
 
-        if (max.debate) {
-            console.log(`  [BuildLoop] ⚔️  Running adversarial debate...`);
+        // Try SOMA 3-role Engineering Swarm first if available, else local DebateEngine
+        let verdict = null;
+        if (max.soma?.available && typeof max.tools?.execute === 'function' && (typeof max.tools.has !== 'function' || max.tools.has('soma'))) {
+            try {
+                console.log(`  [BuildLoop] 🐝 Querying SOMA Engineering Swarm debate...`);
+                const swarmRes = await max.tools.execute('soma', 'swarm_debate', {
+                    plan: draft,
+                    target: goal.title
+                });
+                if (swarmRes?.success && swarmRes.debate) {
+                    const d = swarmRes.debate;
+                    verdict = {
+                        recommendation: d.recommendation || (d.approved ? 'APPROVE' : (d.rejected ? 'REJECT' : 'MODIFY')),
+                        confidence: d.confidence ?? 0.85,
+                        reasoning: d.reasoning || d.summary || JSON.stringify(d),
+                        conditions: d.conditions || d.requiredChanges || null
+                    };
+                    console.log(`  [BuildLoop] 🐝 SOMA Swarm Verdict: ${verdict.recommendation} (confidence: ${(verdict.confidence * 100).toFixed(0)}%)`);
+                }
+            } catch (err) {
+                console.warn(`  [BuildLoop] SOMA Swarm debate query failed, falling back to local: ${err.message}`);
+            }
+        }
+
+        if (!verdict && max.debate) {
+            console.log(`  [BuildLoop] ⚔️  Running local adversarial debate...`);
             const debateResult = await max.debate.debate({
                 title:       `Implementation plan: "${goal.title}"`,
                 description: `Proposed approach:\n${draft}`,
                 stakes:      'medium'
             });
-
-            const verdict = debateResult.verdict;
+            verdict = debateResult.verdict;
             console.log(`  [BuildLoop] 📋 Verdict: ${verdict.recommendation} (confidence: ${(verdict.confidence * 100).toFixed(0)}%)`);
+        }
 
+        if (verdict) {
             if (verdict.recommendation === 'REJECT' && verdict.confidence >= 0.75) {
                 console.log(`  [BuildLoop] ❌ Plan rejected — ${verdict.reasoning?.slice(0, 80)}`);
                 max.outcomes?.record({
