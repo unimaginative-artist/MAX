@@ -24,6 +24,8 @@ import { EvolutionArbiter }   from './EvolutionArbiter.js';
 import { SelfCodeInspector }  from './SelfCodeInspector.js';
 import { ReflectionEngine }   from './ReflectionEngine.js';
 import { PoseidonResearch }    from './PoseidonResearch.js';
+import { ExecutionJobStore }  from './ExecutionJobStore.js';
+import { ExecutionReporter }  from './ExecutionReporter.js';
 import { MaxMemory }           from '../memory/MaxMemory.js';
 import { KnowledgeBase }       from '../memory/KnowledgeBase.js';
 import { CodeIndexer }         from '../memory/CodeIndexer.js';
@@ -51,6 +53,7 @@ import { CodeRunnerTool }     from '../tools/CodeRunnerTool.js';
 import { createVisionTool }   from '../tools/VisionTool.js';
 import { createSelfEvolutionTool } from '../tools/SelfEvolutionTool.js';
 import { createSystemTool }    from '../tools/SystemTool.js';
+import { createDiagnosticsTool } from '../tools/DiagnosticsTool.js';
 import { DiscordTool, autoConnectDiscord, isAuthorizedDiscordOperator } from '../tools/DiscordTool.js';
 import { EmailTool,   autoConnectEmail   } from '../tools/EmailTool.js';
 import { KnowledgeTool }      from '../tools/KnowledgeTool.js';
@@ -364,6 +367,7 @@ export class MAX extends EventEmitter {
         this.tools.register(createVisionTool(this.edge));
         this.tools.register(createSelfEvolutionTool(this));
         this.tools.register(createSystemTool(this));
+        this.tools.register(createDiagnosticsTool(this));
         this.tools.register(DiscordTool);
         this.tools.register(EmailTool);
         this.tools.register(KnowledgeTool);
@@ -688,6 +692,23 @@ Active Systems:
         await this.odyssey.initialize();
 
         this._ready = true;
+
+        // Durable Execution Store & Resilient Outbox
+        if (!this.jobStore) {
+            this.jobStore = new ExecutionJobStore();
+        }
+        if (!this.executionReporter) {
+            this.executionReporter = new ExecutionReporter(this, this.jobStore);
+        }
+        try {
+            const recoveredJobs = this.jobStore.recoverStaleJobs(60000);
+            if (recoveredJobs && recoveredJobs.length > 0) {
+                console.log(`[MAX] 🔄 Recovered ${recoveredJobs.length} stale running job(s) from prior session.`);
+            }
+        } catch (err) {
+            console.warn('[MAX] Stale job recovery warning:', err.message);
+        }
+        this.executionReporter.startOutboxWorker();
 
         // Swarm and scheduler (final systems)
         this.swarm     = new SwarmCoordinator(this.brain, this.tools);
@@ -1573,6 +1594,12 @@ Actions:
 
         const mode = options.mode || 'general';
         const goalId = options.goalId || `exec_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const jobId = options.jobId || (this.jobStore ? this.jobStore.createJob({
+            task: task.trim(),
+            goalId,
+            status: 'running',
+            mode
+        }).jobId : null);
         
         // Register execution goal in GoalEngine if available
         if (this.goals?.addGoal) {
@@ -1628,11 +1655,31 @@ Actions:
         }
 
         const finalState = agenticRes.state || (passedVerification ? 'completed' : (agenticRes.error ? 'failed' : 'incomplete'));
+        const summary = agenticRes.summary || agenticRes.response || (passedVerification ? 'Task completed successfully' : 'Task incomplete');
+
+        if (this.jobStore && jobId) {
+            try {
+                this.jobStore.updateJob(jobId, {
+                    status: finalState,
+                    summary,
+                    evidence,
+                    toolsUsed,
+                    toolResults,
+                    verification: {
+                        passed: passedVerification,
+                        ...(verificationReason ? { reason: verificationReason } : {})
+                    },
+                    error: errors.join('; ') || null,
+                    nextStep: agenticRes.nextStep || null,
+                    completedAt: Date.now()
+                });
+            } catch {}
+        }
 
         return {
             success: passedVerification && finalState === 'completed',
             state: finalState,
-            summary: agenticRes.summary || agenticRes.response || (passedVerification ? 'Task completed successfully' : 'Task incomplete'),
+            summary,
             evidence,
             toolsUsed,
             toolResults,
@@ -1790,7 +1837,10 @@ Actions:
                         const preCheck = await this.cognitive.process(response, { userMessage });
                         if (preCheck.confidence < 0.5) {
                             console.log(`[CognitiveFilter] 🛑 Low confidence tool call detected (${preCheck.confidence.toFixed(2)}). Gating inline execution.`);
-                            response = preCheck.filteredText;
+                            const clean = response.replace(/TOOL:[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+:(\{[^\n]*\}|[^\n]*)/g, '').replace(/\s{2,}/g, ' ').trim();
+                            response = clean
+                                ? `${clean}\n\n*(Note: Proposed automated action was held by cognitive filter due to low confidence: ${preCheck.confidence.toFixed(2)})*`
+                                : `I held off on executing those actions until I can verify the parameters with higher confidence.`;
                         }
                     } catch (err) {
                         console.warn('[MAX] CognitiveFilter pre-check warning:', err.message);

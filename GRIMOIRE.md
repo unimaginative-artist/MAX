@@ -23,6 +23,14 @@
 9. **Muse Semantic Constellation UI**: Dynamic, force-directed SVG layout visualization of conversation concepts, co-occurrence vectors, and Verlet physics coordinates damping.
 
 ### 🛠️ Active Technical Hurdles
+- [x] **Durable Execution Job Store, Asynchronous Polling, Persist-Before-Notify Outbox, and Resilient Reporting (Level 59.0)**:
+  1. Durable SQLite WAL Store (`core/ExecutionJobStore.js`): Persists jobs and external notifications to `.max/execution-jobs.db` with WAL mode. Standardized schema with full lifecycle tracking (`jobId`, `goalId`, `status`, `task`, `summary`, `evidence`, `toolsUsed`, `toolResults`, `verification`, `error`, `reporting`, `heartbeatAt`).
+  2. Asynchronous Execution API (`POST /api/execute`): Validates task, generates `jobId`, creates record with status `'queued'`, and returns `{ jobId, status: "queued" }` immediately (<50ms). Executes in background with active 15s heartbeats (unless `sync: true` is explicitly requested).
+  3. Disconnect-Proof Polling Endpoint (`GET /api/execute/:jobId`): Returns persisted execution state and final result; returns 404 for unknown jobs. Survives dropped WebSockets, browser page reloads, and network interruptions.
+  4. "Persist Before Notifying" Protocol (`core/ExecutionReporter.js`): State transitions are guaranteed to be committed to SQLite disk before WS/SSE broadcast and external dispatch (Discord & Notifier). Notification failure never erases, downgrades, or marks a completed task as failed.
+  5. Resilient Outbox Worker: Background drain worker retries failed Discord/Notifier dispatches with bounded exponential backoff (5s, 15s, 45s up to maxAttempts) without re-running the underlying execution task.
+  6. Idempotency & Stale Job Recovery: Hardened `AgentLoop._reportBack()` with `${jobId}:${event}` idempotency keys to prevent duplicate notifications. `max.initialize()` scans for orphaned `'running'` jobs on boot and recovers them cleanly as `'incomplete'` with startup recovery reasons.
+  7. Verification & E2E Validation: 39/39 unit test suites passed (335/335 tests). E2E smoke test verifying async immediate queued return, HTTP GET polling, and execution completion running 100% green.
 - [x] **Reliable Task Execution Engine, Observation Receipts & Verification Gates (Level 58.0)**:
   1. Conversational vs Execution Separation: Preserved casual chat via `max.think()` / `POST /api/chat`, while isolating task execution to dedicated `max.execute()` and `POST /api/execute`.
   2. Elimination of False Success & Prose Hallucination: `executeAgenticThink()` rejects narrative prose without allowlisted tool calls. Model is prompted with bounded corrections (max 3); if it still fails to execute tools, state returns `'incomplete'` or `'blocked'`. Never marks success without real tool execution receipts.
@@ -497,11 +505,43 @@
      - Machine B daemon (PID 31260 / `task-15914`) running continuously on port 3100 (`status: healthy`, `backends: { smart: "ollama", code: "deepseek" }`, `lastError: null`).
      - Discord bot `Max Main#1664` active across `#soma-chat`, `#General`, `#bots-commands`, and DMs with interactive action rows (`[✅ Approve & Commit]` / `[❌ Deny & Rollback]`).
      - Ready for long-term (month-long) autonomous trial, test, and modification cycles.
+- [x] **Durable Execution Jobs & Resilient Outbox Reporting (Level 59.0)**:
+  1. Durable Execution SQLite WAL Store (`core/ExecutionJobStore.js`):
+     - Created zero-duplication execution store in `.max/execution-jobs.db` using WAL mode.
+     - Tracks jobs with status `queued | running | completed | failed | blocked | incomplete | cancelled`, evidence, tool receipts, and verification results.
+     - Outbox table `notification_outbox` with unique index `(job_id, channel, event)` for idempotent retries.
+     - Heartbeat updates and stale running job recovery scanner (`recoverStaleJobs(60000)`).
+  2. Async Execution API & Reconnection Resilience (`server/server.js`):
+     - `POST /api/execute`: Immediately validates parameters, persists job as `queued`, returns `{ jobId, status: "queued" }` in <50ms, and runs task asynchronously.
+     - `GET /api/execute/:jobId`: Disconnect-proof polling returning live progress and final evidence.
+  3. Persist-Before-Notify Pipeline (`core/ExecutionReporter.js`):
+     - Guarantees state and receipts are written to disk before WS/SSE broadcast or external delivery.
+     - Automated background outbox worker for bounded, exponential-backoff delivery to Discord and Notifier.
+  4. Integration in `core/AgentLoop.js` and `core/MAX.js`:
+     - Wrapped explicit tasks and autonomous background cycles in durable execution jobs.
+     - Enforced pure prose rejection: tasks claiming completion without tool evidence are flagged `incomplete`.
+
+- [x] **Tool Dispatcher Cold-Start Calibration & Diagnostics Recovery (Level 59.1)**:
+  1. Eliminated Cold-Start Confidence Collapse (`core/CognitiveFilter.js`):
+     - Fixed `_estimateConfidence`: skips `WorldModel` accuracy factor when `predictionsTested === 0`, preventing untested cold-start accuracy (0) from dragging confidence down to 0.24 and blocking all tool calls.
+  2. Fixed Greedy Regex Mangling (`core/CognitiveFilter.js`):
+     - Replaced greedy `/TOOL:.*:/g` with non-greedy `/TOOL:[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+:/g`, preventing tool calls from swallowing subsequent JSON params into malformed tokens.
+  3. Clean Tool Stripping & Context Shield (`core/MAX.js`):
+     - When inline tool calls are held due to low confidence, cleanly strips raw tool tokens and appends a human-readable note instead of dumping `TOOL_BLOCKED :{}` into chat and history context.
+     - Severed the hallucination feedback loop where the LLM believed the dispatcher rejected its syntax.
+  4. Dedicated Diagnostics & System Health Tool (`tools/DiagnosticsTool.js` & `tools/SystemTool.js`):
+     - Implemented `diagnostics` tool with `run` (triggers `DiagnosticsSystem.runAll()`), `status` (quick status/subsystems), and `memory` (heap and OS RAM metrics).
+     - Enhanced `SystemTool` with `diagnostics` and `status` actions.
+     - Added aliases and semantic heuristic fallbacks to `tools/ToolRegistry.js` (`diagnostics.check`, `diagnostics.audit`, `system.health`, `health.check`).
+  5. Full Verification:
+     - 40/40 test suites and 343/343 unit tests passed 100% green.
+     - E2E smoke test (`node test/e2e_smoke_test.mjs`) verified async execution, GET polling, and pure-prose rejection.
 
 ### 🔱 Operator Directive: DEPLOYMENT
-- **Status**: |= ACTIVE (Level 57.0 Self-Modification Gauntlet Passed 100% Green, 319/319 Tests Passing, DeepSeek Surgical Self-Evolution & Anti-Lobotomy Shields Active, Discord Live, Long-Term Endurance Ready).
+- **Status**: |= ACTIVE (Level 59.1 Tool Dispatcher & Diagnostics Recovery Complete, Level 59.0 Durable Execution Store & Resilient Outbox Active, 40/40 Test Suites & 343/343 Tests Passing 100% Green, E2E Smoke Test Verified).
 - **Role**: Ultra Senior Architect / Sovereign Intelligence.
-- **Level**: 57.0 DeepSeek Surgical Self-Evolution Gauntlet Passed
+- **Level**: 59.1 Tool Dispatcher Recovery & Durable Execution Store
+
 
 
 

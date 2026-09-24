@@ -88,13 +88,32 @@ async function runE2ETest() {
     console.log('HTTP Execution Response Body:', JSON.stringify(httpBody, null, 2));
 
     if (httpRes.status !== 200) throw new Error(`HTTP status ${httpRes.status} !== 200`);
-    if (!httpBody.success) throw new Error('Expected httpBody.success === true');
-    if (httpBody.state !== 'completed') throw new Error(`Expected httpBody.state === 'completed', got ${httpBody.state}`);
-    if (!httpBody.verification?.passed) throw new Error('Expected httpBody.verification.passed === true');
-    if (!httpBody.toolsUsed.includes('file.grep') || !httpBody.toolsUsed.includes('observation.record')) {
+    if (httpBody.status !== 'queued' || !httpBody.jobId) {
+        throw new Error(`Expected immediate { jobId, status: 'queued' }, got ${JSON.stringify(httpBody)}`);
+    }
+    console.log(`✓ Immediate async queued return verified (Job ID: ${httpBody.jobId})`);
+
+    // Poll GET /api/execute/:jobId
+    console.log(`Polling GET /api/execute/${httpBody.jobId} for completion...`);
+    let finalJob = null;
+    for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 100));
+        const pollRes = await fetch(`http://127.0.0.1:${testPort}/api/execute/${httpBody.jobId}`, {
+            headers: { 'Authorization': `Bearer ${apiKey}` }
+        });
+        const pollData = await pollRes.json();
+        if (pollData.status === 'completed') {
+            finalJob = pollData;
+            break;
+        }
+    }
+
+    if (!finalJob) throw new Error('Polling timed out waiting for job completion');
+    if (!finalJob.verification?.passed) throw new Error('Expected finalJob.verification.passed === true');
+    if (!finalJob.toolsUsed.includes('file.grep') || !finalJob.toolsUsed.includes('observation.record')) {
         throw new Error('Expected toolsUsed to include file.grep and observation.record');
     }
-    console.log('✓ HTTP POST /api/execute contract fully verified.\n');
+    console.log('✓ HTTP async execution & GET polling contract fully verified.\n');
 
     // 3. Testing Pure Prose Rejection (Negative Test)
     console.log('3. Testing Pure Prose Rejection (Model claims done without executing tools)...');

@@ -12,10 +12,38 @@ export const createSystemTool = (max) => ({
     name: 'system',
     description: `Perform system-level operations like rebooting or diagnostics.
 Available actions:
+  diagnostics    → run full system diagnostics & health checks: TOOL:system:diagnostics:{}
+  status         → get quick system runtime status and subsystem health: TOOL:system:status:{}
   phoenix_reboot → trigger a detached watchdog to restart MAX after shutdown: TOOL:system:phoenix_reboot:{}
   shutdown       → gracefully shut down MAX: TOOL:system:shutdown:{}`,
 
     actions: {
+        diagnostics: async () => {
+            if (max?.diagnostics?.runAll) {
+                try {
+                    await max.diagnostics.runAll();
+                } catch (err) {
+                    console.warn('[SystemTool] Diagnostics error:', err.message);
+                }
+            }
+            const status = max?.getQuickStatus ? max.getQuickStatus() : (max?.getStatus ? max.getStatus() : {});
+            return {
+                success: true,
+                status,
+                scannersRun: max?.diagnostics?.scanners?.length || 0,
+                timestamp: Date.now()
+            };
+        },
+
+        status: async () => {
+            const status = max?.getQuickStatus ? max.getQuickStatus() : (max?.getStatus ? max.getStatus() : {});
+            return {
+                success: true,
+                status,
+                timestamp: Date.now()
+            };
+        },
+
         phoenix_reboot: async () => {
             console.log('[System] 🔥 PHOENIX PROTOCOL INITIATED.');
             

@@ -64,8 +64,13 @@ export const GitTool = {
             return git(['push', remote, branch], cwd);
         },
 
-        async clone({ url, dest }) {
-            return git(['clone', url, dest], process.cwd());
+        async clone({ url, dest, repo, destination } = {}) {
+            const targetUrl = url || repo;
+            if (!targetUrl) return { success: false, error: 'url or repo parameter is required for git clone' };
+            const targetDest = dest || destination;
+            const args = ['clone', targetUrl];
+            if (targetDest) args.push(targetDest);
+            return git(args, process.cwd());
         }
     }
 };

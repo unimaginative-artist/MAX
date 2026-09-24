@@ -54,7 +54,7 @@ export class CognitiveFilter {
 
         return {
             originalText: text,
-            filteredText: blockTools ? text.replace(/TOOL:.*:/g, 'TOOL_BLOCKED (Low Confidence):') : `${prefix} ${text}`,
+            filteredText: blockTools ? text.replace(/TOOL:[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+:/g, 'TOOL_BLOCKED (Low Confidence):') : `${prefix} ${text}`,
             state,
             confidence,
             needsVerification,
@@ -84,8 +84,8 @@ export class CognitiveFilter {
     _estimateConfidence(text, context) {
         let score = 0.6; // Baseline
 
-        // Grounding with WorldModel if available
-        if (this.max.world) {
+        // Grounding with WorldModel if available and predictions have been tested
+        if (this.max.world && (this.max.world.stats?.predictionsTested || 0) > 0) {
             const accuracy = this.max.world.getCurrentAccuracy() / 100;
             score = (score * 0.4) + (accuracy * 0.6);
         }

@@ -6,6 +6,13 @@
 const ACTION_ALIASES = new Map([
     ['shell.runstateful', 'run'],
     ['shell.run_stateful', 'run'],
+    ['diagnostics.check', 'status'],
+    ['diagnostics.inspect', 'status'],
+    ['diagnostics.health', 'status'],
+    ['diagnostics.audit', 'run'],
+    ['system.health', 'diagnostics'],
+    ['system.check', 'diagnostics'],
+    ['system.audit', 'diagnostics'],
 ]);
 
 export class ToolRegistry {
@@ -43,9 +50,23 @@ export class ToolRegistry {
      */
     resolveCall(toolName, action) {
         const requestedTool = String(toolName || '');
-        const canonicalTool = [...this._tools.keys()].find(
+        let canonicalTool = [...this._tools.keys()].find(
             name => name.toLowerCase() === requestedTool.toLowerCase()
         );
+        if (!canonicalTool) {
+            const TOOL_ALIASES = {
+                'health': 'diagnostics',
+                'system_diagnostics': 'diagnostics',
+                'system_status': 'system',
+                'sys': 'system'
+            };
+            const mapped = TOOL_ALIASES[requestedTool.toLowerCase()];
+            if (mapped) {
+                canonicalTool = [...this._tools.keys()].find(
+                    name => name.toLowerCase() === mapped
+                );
+            }
+        }
         if (!canonicalTool) {
             return {
                 success: false,
@@ -72,6 +93,13 @@ export class ToolRegistry {
             } else if (canonicalTool.toLowerCase() === 'web') {
                 if (['search_web', 'google', 'query', 'find'].includes(reqLower)) alias = 'search';
                 else if (['get', 'url', 'download', 'read'].includes(reqLower)) alias = 'fetch';
+            } else if (canonicalTool.toLowerCase() === 'diagnostics') {
+                if (['check', 'inspect', 'health', 'info', 'quick', 'state'].includes(reqLower)) alias = 'status';
+                else if (['scan', 'audit', 'test', 'all'].includes(reqLower)) alias = 'run';
+                else if (['mem', 'ram'].includes(reqLower)) alias = 'memory';
+            } else if (canonicalTool.toLowerCase() === 'system') {
+                if (['diagnostics', 'health', 'audit', 'scan'].includes(reqLower)) alias = 'diagnostics';
+                else if (['status', 'info', 'quick', 'state'].includes(reqLower)) alias = 'status';
             }
         }
         const candidate = alias || requestedAction;

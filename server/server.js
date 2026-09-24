@@ -17,6 +17,8 @@ import { VirtualShell } from '../core/VirtualShell.js';
 import { getRunningProcesses, getProcessLog, setProcessLogBroadcast, setErrorExplainHandler, shutdownShellTool } from '../tools/ShellTool.js';
 import { createClusterRoutes } from './clusterRoutes.js';
 import { SatelliteGateway } from './satelliteGateway.js';
+import { ExecutionJobStore } from '../core/ExecutionJobStore.js';
+import { ExecutionReporter } from '../core/ExecutionReporter.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = resolve(process.cwd());
@@ -141,6 +143,16 @@ export async function createServer(max, portOrOptions = 3100) {
             ...event
         });
     }
+
+    if (!max.jobStore) {
+        max.jobStore = new ExecutionJobStore();
+    }
+    if (!max.executionReporter) {
+        max.executionReporter = new ExecutionReporter(max, max.jobStore, broadcast);
+    } else {
+        max.executionReporter.setBroadcast(broadcast);
+    }
+    max.executionReporter.startOutboxWorker();
 
     const satelliteGateway = new SatelliteGateway(max);
     satelliteGateway.mountRestRoutes(app);
@@ -1262,11 +1274,11 @@ Reply ONLY with JSON: {"verdict":"approve"|"deny"|"escalate","confidence":0.0-1.
         res.end();
     });
 
-    // ── Dedicated Execution Endpoint ──────────────────────────────────────
+    // ── Dedicated Execution Endpoints ─────────────────────────────────────
     // Executes a task using real allowlisted tools, receipt evidence, and verification.
-    // Never claims success based only on narrative prose.
+    // Durable asynchronous job lifecycle: returns immediate { jobId, status: "queued" }
     app.post('/api/execute', async (req, res) => {
-        const { task, mode = 'general', sessionId, ...options } = req.body || {};
+        const { task, mode = 'general', sessionId, sync = false, ...options } = req.body || {};
         if (!task || typeof task !== 'string' || !task.trim()) {
             return res.status(400).json({ 
                 success: false, 
@@ -1283,42 +1295,135 @@ Reply ONLY with JSON: {"verdict":"approve"|"deny"|"escalate","confidence":0.0-1.
             });
         }
 
-        try {
-            emitActivity({
-                action: 'task_started',
-                task: task.trim(),
-                mode
-            });
+        const cleanTask = task.trim();
+        const jobId = `job_${Date.now()}_${randomBytes(4).toString('hex')}`;
 
-            const result = await max.execute(task.trim(), { mode, ...options });
+        // 1. Create durable record in store with status: 'queued'
+        max.jobStore.createJob({
+            jobId,
+            task: cleanTask,
+            status: 'queued',
+            mode
+        });
 
-            emitActivity({
-                action: 'task_completed',
-                task: task.trim(),
-                state: result.state,
-                success: result.success
-            });
+        // 2. Broadcast execution_started event
+        await max.executionReporter?.reportExecution(jobId, 'execution_started', {
+            task: cleanTask,
+            mode
+        });
 
-            trackRequest(sessionId);
-            res.json(result);
-        } catch (err) {
-            emitActivity({
-                action: 'task_failed',
-                task: task.trim(),
-                error: err.message
-            });
-            res.status(500).json({
+        emitActivity({
+            action: 'task_started',
+            task: cleanTask,
+            jobId,
+            mode
+        });
+
+        // Background worker logic for running the job
+        const runExecutionJob = async () => {
+            max.jobStore.updateJob(jobId, { status: 'running', startedAt: Date.now() });
+            
+            // Heartbeat timer updating store while job is active
+            const heartbeatTimer = setInterval(() => {
+                try { max.jobStore.updateHeartbeat(jobId); } catch {}
+            }, 15000);
+            if (heartbeatTimer.unref) heartbeatTimer.unref();
+
+            try {
+                const result = await max.execute(cleanTask, { mode, jobId, ...options });
+
+                const finalState = result.state || (result.success ? 'completed' : 'failed');
+                let terminalEvent = 'execution_complete';
+                if (finalState === 'blocked') terminalEvent = 'execution_blocked';
+                else if (finalState === 'incomplete') terminalEvent = 'execution_incomplete';
+                else if (finalState === 'cancelled') terminalEvent = 'execution_cancelled';
+                else if (!result.success && finalState === 'failed') terminalEvent = 'execution_failed';
+
+                // Persist terminal state to store BEFORE notifying
+                const finalized = max.jobStore.updateJob(jobId, {
+                    status: finalState,
+                    summary: result.summary,
+                    evidence: result.evidence || [],
+                    toolsUsed: result.toolsUsed || [],
+                    toolResults: result.toolResults || [],
+                    verification: result.verification || {},
+                    error: (result.errors || []).join('; ') || null,
+                    nextStep: result.nextStep || null,
+                    completedAt: Date.now()
+                });
+
+                // Report back through reporter
+                await max.executionReporter?.reportExecution(jobId, terminalEvent, {
+                    summary: result.summary,
+                    state: finalState,
+                    success: result.success
+                });
+
+                emitActivity({
+                    action: 'task_completed',
+                    task: cleanTask,
+                    jobId,
+                    state: finalState,
+                    success: result.success
+                });
+
+                return finalized;
+            } catch (err) {
+                // Persist failed state to store BEFORE notifying
+                const finalized = max.jobStore.updateJob(jobId, {
+                    status: 'failed',
+                    error: err.message,
+                    summary: 'Execution failed due to server error',
+                    completedAt: Date.now()
+                });
+
+                await max.executionReporter?.reportExecution(jobId, 'execution_failed', {
+                    error: err.message
+                });
+
+                emitActivity({
+                    action: 'task_failed',
+                    task: cleanTask,
+                    jobId,
+                    error: err.message
+                });
+
+                return finalized;
+            } finally {
+                clearInterval(heartbeatTimer);
+            }
+        };
+
+        trackRequest(sessionId);
+
+        // If explicitly requested synchronous: await completion and return final record
+        if (sync === true) {
+            const finalRecord = await runExecutionJob();
+            return res.json(finalRecord);
+        }
+
+        // Asynchronous default: return immediate queued confirmation and run in background
+        setImmediate(runExecutionJob);
+        return res.json({ jobId, status: 'queued' });
+    });
+
+    // ── Execution Status & Polling Endpoint ───────────────────────────────
+    // Retrieves persisted execution record by jobId. Survives restarts and disconnects.
+    app.get('/api/execute/:jobId', (req, res) => {
+        const { jobId } = req.params;
+        if (!jobId) {
+            return res.status(400).json({ error: 'jobId is required' });
+        }
+
+        const job = max.jobStore?.getJob(jobId);
+        if (!job) {
+            return res.status(404).json({
                 success: false,
-                state: 'failed',
-                summary: 'Execution failed due to server error',
-                evidence: [],
-                toolsUsed: [],
-                toolResults: [],
-                verification: { passed: false, error: err.message },
-                errors: [err.message],
-                nextStep: null
+                error: `Job not found: ${jobId}`
             });
         }
+
+        return res.json(job);
     });
 
     // ── SOMA-compatible chat endpoint (for other MAX/SOMA instances on the LAN) ──
@@ -1857,6 +1962,7 @@ ${basePersona ? 'BASE PERSONALITY:\n' + basePersona.replace(/\{\{USER_NAME\}\}/g
             clearInterval(_somaInterval);
             clearTimeout(somaStatusTimeout);
             clearInterval(somaStatusInterval);
+            max.executionReporter?.stopOutboxWorker?.();
             wss.close();
             shutdownShellTool();
             return new Promise((resolve, reject) =>

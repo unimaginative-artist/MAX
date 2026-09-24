@@ -89,6 +89,7 @@ export class AgentLoop extends EventEmitter {
             approvalsGranted: 0,
             approvalsDenied: 0
         };
+        this._reportedGoals = new Set();
     }
 
     // â”€â”€â”€ Run one agent cycle (called by Heartbeat) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -150,6 +151,22 @@ export class AgentLoop extends EventEmitter {
             // Nothing to do — let drive build tension
             drive?.onIdleTick();
             return null;
+        }
+
+        // ── 1.2 Ensure durable execution job exists for goal ──────────────
+        if (this.max?.jobStore) {
+            let existing = (goal.jobId ? this.max.jobStore.getJob(goal.jobId) : null) || (goal.id ? this.max.jobStore.getJobByGoalId(goal.id) : null);
+            if (!existing) {
+                existing = this.max.jobStore.createJob({
+                    jobId: goal.jobId || `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                    goalId: goal.id || null,
+                    task: goal.title || goal.description || 'Autonomous task',
+                    status: 'running'
+                });
+            } else {
+                this.max.jobStore.updateJob(existing.jobId, { status: 'running' });
+            }
+            goal.jobId = existing.jobId;
         }
 
         // ── 1.5 Route to specialized loop if applicable ───────────────────
@@ -276,21 +293,28 @@ export class AgentLoop extends EventEmitter {
             const waves    = this._buildExecutionWaves(allSteps);
 
             for (const wave of waves) {
-                // â”€â”€ Interrupt check â€” pause at wave boundary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                // ── Interrupt check — pause at wave boundary ────────────────
                 if (this._interrupted) {
                     this._interrupted = false;
                     await this._saveInterruptState(goal, stepResultMap);
+                    if (this.max?.jobStore && goal.jobId) {
+                        this.max.jobStore.updateJob(goal.jobId, {
+                            status: 'incomplete',
+                            summary: 'Paused — use /resume',
+                            completedAt: Date.now()
+                        });
+                    }
                     this.emit('insight', {
                         source: 'agent',
-                        label:  'â¸ï¸ Task paused',
-                        result: `Saved progress on "${goal.title}" â€” /resume to continue`
+                        label:  '⏸️  Task paused',
+                        result: `Saved progress on "${goal.title}" — /resume to continue`
                     });
-                    return { goal: goal.title, success: false, summary: 'Paused â€” use /resume', interrupted: true };
+                    return { goal: goal.title, success: false, summary: 'Paused — use /resume', interrupted: true };
                 }
 
                 let waveResults;
                 if (wave.length > 1) {
-                    console.log(`  [AgentLoop] âš¡ Parallel: steps ${wave.map(s => s.step).join(', ')}`);
+                    console.log(`  [AgentLoop] ⚡ Parallel: steps ${wave.map(s => s.step).join(', ')}`);
                     waveResults = await Promise.all(wave.map(s => this._executeStep(s, goal, stepResultMap)));
                 } else {
                     waveResults = [await this._executeStep(wave[0], goal, stepResultMap)];
@@ -563,8 +587,24 @@ export class AgentLoop extends EventEmitter {
 
         goalSuccess ? drive?.onGoalComplete?.(goal.title) : null;
 
+        // ── 6.5 Persist terminal execution record to durable store ───────
+        if (this.max?.jobStore) {
+            const jobId = goal.jobId || (goal.id ? `job_${goal.id}` : null);
+            if (jobId) {
+                const toolsUsed = [...new Set((stepResults || []).map(s => s.tool ? `${s.tool}.${s.action_name || 'run'}` : s.step).filter(Boolean))];
+                this.max.jobStore.updateJob(jobId, {
+                    status: goalSuccess ? 'completed' : 'failed',
+                    summary: goalSummary,
+                    toolsUsed,
+                    toolResults: stepResults || [],
+                    verification: { passed: goalSuccess },
+                    completedAt: Date.now()
+                });
+            }
+        }
+
         // ─── REPORT BACK REFLEX ──────────────────────────────────────────
-        await this._reportBack(goal, goalSuccess, goalSummary);
+        await this._reportBack(goal, goalSuccess, goalSummary, goal.jobId);
 
         // Crystallize successful runs into reusable skills (fire-and-forget)
         if (goalSuccess && stepResults.length > 0) {
@@ -622,12 +662,34 @@ export class AgentLoop extends EventEmitter {
      * connected. Barry's #1 complaint (Jul 2026): "MAX never seems to get back to
      * me when he's done with a task" — silence is no longer an option here.
      */
-    async _reportBack(goal, goalSuccess, goalSummary) {
-        // Every completion path funnels through here — stop the progress ping.
+    async _reportBack(goal, goalSuccess, goalSummary, jobId = null) {
+        // Every completion path funnels through here — stop the progress ping and heartbeat.
         if (this._progressTimer) { clearInterval(this._progressTimer); this._progressTimer = null; }
+        if (this._heartbeatTimer) { clearInterval(this._heartbeatTimer); this._heartbeatTimer = null; }
+
+        const finalJobId = jobId || goal?.jobId || (goal?.id ? `job_${goal.id}` : null);
+        const event = goalSuccess ? 'execution_complete' : 'execution_failed';
+
+        // Idempotency guard: prevent duplicate notifications for same outcome
+        const idempotencyKey = `${finalJobId || goal?.id || 'goal'}:${event}`;
+        if (this._reportedGoals?.has(idempotencyKey)) {
+            return { success: true, duplicate: true, idempotencyKey };
+        }
+        this._reportedGoals?.add(idempotencyKey);
+
         const summaryLine = (goalSummary || 'Check my logs for details.').slice(0, 600);
+
+        // Prefer durable ExecutionReporter if available
+        if (this.max?.executionReporter && finalJobId) {
+            try {
+                return await this.max.executionReporter.reportExecution(finalJobId, event, { summary: summaryLine });
+            } catch (err) {
+                console.warn(`  [AgentLoop] ExecutionReporter failed for ${finalJobId}: ${err.message}`);
+            }
+        }
+
         try {
-            const discord = this.max.tools?.get('discord');
+            const discord = this.max?.tools?.get?.('discord');
             if (discord && discord.connected) {
                 if (goal.source === 'discord' && goal.channelId) {
                     const message = goalSuccess ? `✅ I just finished: **${goal.title}**.\n*${summaryLine}*`
@@ -642,16 +704,18 @@ export class AgentLoop extends EventEmitter {
                                                 : `⚠️ **Autonomous Task Failed**:\n**${goal.title}**\n*${summaryLine}*`;
                     await this.max.tools.execute('discord', 'send', { message, __approvedExternal: true, __source: 'discord' }).catch(() => {});
                 }
-                return;
+                return { success: true, channel: 'discord' };
             }
             // Discord tool not connected — use the Notifier so the report still lands
-            await this.max.notifier?.notify(
+            await this.max?.notifier?.notify?.(
                 goalSuccess ? `✅ **MAX** finished: **${goal.title}**\n> ${summaryLine}`
                             : `❌ **MAX** could not complete: **${goal.title}**\n> ${summaryLine}`,
                 { force: true }
             );
+            return { success: true, channel: 'notifier' };
         } catch (err) {
             console.log(`  [AgentLoop] Failed to report back: ${err.message}`);
+            return { success: false, error: err.message };
         }
     }
 
@@ -662,10 +726,20 @@ export class AgentLoop extends EventEmitter {
      */
     _startProgressPing(goal, loopName = 'default') {
         if (this._progressTimer) clearInterval(this._progressTimer);
+        if (this._heartbeatTimer) clearInterval(this._heartbeatTimer);
+
+        // Heartbeat touch every 15s
+        this._heartbeatTimer = setInterval(() => {
+            if (this.max?.jobStore && goal?.jobId) {
+                this.max.jobStore.updateHeartbeat(goal.jobId);
+            }
+        }, 15000);
+        if (this._heartbeatTimer.unref) this._heartbeatTimer.unref();
+
         const startedAt = Date.now();
         this._progressTimer = setInterval(() => {
             const mins = Math.round((Date.now() - startedAt) / 60000);
-            this.max.notifier?.notify(
+            this.max?.notifier?.notify?.(
                 `⏳ **MAX** still working on **${goal.title}** (${loopName} loop, ${mins} min in). I'll report when it lands.`,
                 { force: true }
             ).catch(() => {});
